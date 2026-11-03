@@ -64,7 +64,9 @@ python -m src.trader.main
 - Max simulated buy: €5
 - Max daily simulated equity loss: €2
 - Max open positions: 2
-- Market monitoring: all online Kraken Spot pairs (auto-discovered hourly)\n- Indicator/OHLC analysis: top 10 eligible EUR-quoted pairs per scan\n- PAPER entries: EUR-quoted pairs only, because the simulated wallet is denominated in EUR
+- Market monitoring: all online Kraken Spot pairs (auto-discovered hourly)
+- Indicator/OHLC analysis: top 10 eligible EUR-quoted pairs per scan
+- PAPER entries: EUR-quoted pairs only, because the simulated wallet is denominated in EUR
 - Scan interval: 60 seconds
 - Simulated fee estimate: 0.26%
 - Stop loss: 2%; take profit: 4%
