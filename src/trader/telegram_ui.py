@@ -144,10 +144,29 @@ def build_app(s, engine, exchange):
         try:
             actions = await context.application.bot_data["run_blocking"].run(engine.cycle)
             if actions:
-                message = "PAPER cycle:\\n" + "\\n".join(actions)
-                await send_topic(context, s.topic_trades_id, message)
-                if any(token in " ".join(actions) for token in ("SELL", "STOP_LOSS", "TAKE_PROFIT", "DAILY LOSS")):
-                    await send_topic(context, s.topic_profit_id, message)
+                error_actions = [item for item in actions if "SCAN_FAILED" in item or "ERROR" in item]
+                trade_actions = [item for item in actions if " BUY " in item or " SELL " in item]
+                profit_actions = [item for item in actions if any(token in item for token in (" SELL ", "STOP_LOSS", "TAKE_PROFIT", "DAILY LOSS"))]
+
+                if error_actions:
+                    await send_topic(context, s.topic_errors_id, "⚠️ Ошибка рыночного сканирования:\\n" + "\\n".join(error_actions))
+                    await send_topic(context, s.topic_general_id, "⏸ PAPER автоматически приостановлен из-за ошибки рыночных данных.")
+
+                if trade_actions:
+                    trade_message = "📈 PAPER — сделки:\\n" + "\\n".join(trade_actions)
+                    await send_topic(context, s.topic_trades_id, trade_message)
+                    positions = len(engine.paper.positions)
+                    portfolio_message = (
+                        "💼 PAPER — обновление портфеля\\n"
+                        f"Доступно: {engine.paper.cash:.2f} EUR\\n"
+                        f"Открытых позиций: {positions}/{s.max_positions}\\n"
+                        f"P/L сегодня: {engine.daily_pnl():.2f} EUR"
+                    )
+                    await send_topic(context, s.topic_portfolio_id, portfolio_message)
+
+                if profit_actions:
+                    await send_topic(context, s.topic_profit_id, "💰 PAPER — результат/риск:\\n" + "\\n".join(profit_actions))
+
                 if any("DAILY LOSS" in item for item in actions):
                     await send_topic(context, s.topic_general_id, "⏸ Достигнут дневной лимит убытка. PAPER остановлен.")
         except Exception as exc:
