@@ -90,6 +90,24 @@ def build_app(s, engine, exchange):
             f"chat_id: {chat.id}\nmessage_thread_id: {thread_id if thread_id is not None else 'нет (личный чат или General)'}"
         )
 
+    async def testtopics(update, context):
+        if not await authorized(update): return await deny(update)
+        topics = [
+            ("Общая информация", s.topic_general_id),
+            ("Сделки", s.topic_trades_id),
+            ("Баланс и портфель", s.topic_portfolio_id),
+            ("Прибыль", s.topic_profit_id),
+            ("Ошибки", s.topic_errors_id),
+        ]
+        if not s.telegram_group_chat_id:
+            return await update.effective_message.reply_text("Не задан TELEGRAM_GROUP_CHAT_ID в Render.")
+        for title, thread_id in topics:
+            if not thread_id:
+                await update.effective_message.reply_text(f"Не задан ID темы: {title}")
+                continue
+            await send_topic(context, thread_id, f"✅ Проверка связи: тема «{title}» настроена.")
+        await update.effective_message.reply_text("Проверочные сообщения отправлены в настроенные темы.")
+
     async def help_cmd(update, context):
         if not await authorized(update): return await deny(update)
         await update.effective_message.reply_text("/start — меню\n/status — состояние и P/L\n/scan — сканирование\n/account — баланс Kraken (только чтение)\n/portfolio — PAPER-позиции\n/interval 1m|5m|15m|30m|1h|4h|24h — интервал\n/run — запуск PAPER\n/pause — пауза\n/stop — аварийная остановка\n/topicid — ID группы и темы")
@@ -133,7 +151,7 @@ def build_app(s, engine, exchange):
         @staticmethod
         async def run(fn): return await asyncio.to_thread(fn)
     app.bot_data["run_blocking"] = Runner
-    for name, fn in [("start", start), ("status", status), ("scan", scan), ("account", account), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid),
+    for name, fn in [("start", start), ("status", status), ("scan", scan), ("account", account), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
                      ("run", run), ("pause", pause), ("stop", stop), ("help", help_cmd)]:
         app.add_handler(CommandHandler(name, fn))
     app.add_handler(CallbackQueryHandler(callback))
