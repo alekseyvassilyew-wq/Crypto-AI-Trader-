@@ -68,7 +68,7 @@ def load_settings():
     if not s.bot_token or s.admin_id <= 0:
         raise ValueError("Set BOT_TOKEN and numeric ADMIN_ID.")
     if s.paper_start <= 0 or s.max_trade <= 0 or s.max_trade > s.paper_start:
-        raise ValueError("Invalid paper balance, trade size, or watchlist configuration.")
+        raise ValueError("Invalid paper balance or trade size configuration.")
     numeric_values = (s.paper_start, s.max_trade, s.max_daily_loss, s.max_spread_bps,
                       s.min_turnover, s.fee_rate, s.stop_loss_pct, s.take_profit_pct)
     if not all(math.isfinite(value) for value in numeric_values):
