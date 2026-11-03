@@ -24,6 +24,12 @@ class Settings:
     take_profit_pct: float
     kraken_api_key: str
     kraken_api_secret: str
+    telegram_group_chat_id: int
+    topic_general_id: int
+    topic_trades_id: int
+    topic_portfolio_id: int
+    topic_profit_id: int
+    topic_errors_id: int
 
 
 def load_settings():
@@ -48,6 +54,12 @@ def load_settings():
         take_profit_pct=float(os.getenv("TAKE_PROFIT_PERCENT", "4")),
         kraken_api_key=os.getenv("KRAKEN_API_KEY", "").strip(),
         kraken_api_secret=os.getenv("KRAKEN_API_SECRET", "").strip(),
+        telegram_group_chat_id=int(os.getenv("TELEGRAM_GROUP_CHAT_ID", "0")),
+        topic_general_id=int(os.getenv("TOPIC_GENERAL_ID", "0")),
+        topic_trades_id=int(os.getenv("TOPIC_TRADES_ID", "0")),
+        topic_portfolio_id=int(os.getenv("TOPIC_PORTFOLIO_ID", "0")),
+        topic_profit_id=int(os.getenv("TOPIC_PROFIT_ID", "0")),
+        topic_errors_id=int(os.getenv("TOPIC_ERRORS_ID", "0")),
     )
     if not s.bot_token or s.admin_id <= 0:
         raise ValueError("Set BOT_TOKEN and numeric ADMIN_ID.")
