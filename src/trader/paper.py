@@ -56,6 +56,11 @@ class PaperBroker:
         if self.db is not None:
             set_state(self.db, "paper_broker", {"cash": self.cash, "positions": self.positions})
 
+    def balance(self, currency="EUR"):
+        """Return free PAPER cash in the requested quote currency."""
+        currency = str(currency).upper()
+        return self.cash if currency == "EUR" else self.cash_by_currency.get(currency, 0.0)
+
     def buy(self, symbol, quote, price):
         symbol = self._validate_symbol(symbol)
         quote = _finite_number(quote, "quote", minimum=0, strict_minimum=True)
