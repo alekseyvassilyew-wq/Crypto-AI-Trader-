@@ -55,9 +55,14 @@ def build_app(s, engine, exchange):
             lines.extend(f"{x['symbol']}: {x['signal']} ({x.get('score', 0)}/5), цена {x.get('price', 0):,.8g}" for x in ranked)
             lines.append("Все рынки получают мониторинг котировок; анализ свечей ограничен бюджетом запросов.")
             await update.effective_message.reply_text("\n".join(lines)[:3900])
-        except Exception:
+        except Exception as exc:
+            # Keep the full traceback in Render logs and expose the actionable
+            # exception type/message in the private owner Telegram response.
             log.exception("Market scan failed")
-            await update.effective_message.reply_text("Ошибка сканирования. Подробности в логах Render.")
+            detail = f"{type(exc).__name__}: {exc}"
+            await update.effective_message.reply_text(
+                "Ошибка сканирования. Причина:\\n" + detail[:1200]
+            )
 
     async def account(update, context):
         if not await authorized(update): return await deny(update)
