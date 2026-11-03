@@ -143,6 +143,32 @@ def build_app(s, engine, exchange):
         context.application.bot_data["last_cycle_at"] = now
         try:
             actions = await context.application.bot_data["run_blocking"].run(engine.cycle)
+
+            # Send a compact heartbeat to General every 15 minutes, but only
+            # after a successful automatic market scan while PAPER is running.
+            last_report = context.application.bot_data.get("last_general_report_at", 0.0)
+            if engine.last_scan_at and not engine.paused and now - last_report >= 900:
+                scan_time = engine.last_scan_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+                signal_lines = [
+                    f"{item['symbol']}: {item.get('signal', 'N/A')} ({item.get('score', 0)}/5) — {float(item.get('price') or 0):,.2f}"
+                    for item in engine.last_signals
+                ]
+                position_lines = [
+                    f"{symbol}: {position['qty']:.8f} @ {position['avg_price']:.2f}"
+                    for symbol, position in engine.paper.positions.items()
+                ]
+                report = (
+                    "🟢 PAPER — автоматический отчёт\n"
+                    f"Последнее успешное сканирование: {scan_time}\n"
+                    f"Виртуальный баланс: {engine.paper.cash:.2f} EUR\n"
+                    f"Открытые позиции: {len(engine.paper.positions)}/{s.max_positions}\n"
+                    f"P/L сегодня: {engine.daily_pnl(engine.last_prices):.2f} EUR\n"
+                    "Рыночные сигналы:\n" + ("\n".join(signal_lines) or "Нет данных") +
+                    "\nПозиции:\n" + ("\n".join(position_lines) or "Нет открытых позиций")
+                )
+                await send_topic(context, s.topic_general_id, report)
+                context.application.bot_data["last_general_report_at"] = now
+
             if actions:
                 error_actions = [item for item in actions if "SCAN_FAILED" in item or "ERROR" in item]
                 trade_actions = [item for item in actions if " BUY " in item or " SELL " in item]
