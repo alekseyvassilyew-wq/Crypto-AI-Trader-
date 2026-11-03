@@ -8,6 +8,9 @@ class Engine:
         self.s, self.db, self.exchange, self.paper = settings, db, exchange, paper
         self.paused = True
         self.scan_interval_seconds = settings.scan_interval
+        self.last_scan_at = None
+        self.last_prices = {}
+        self.last_signals = []
         self.limits = Limits(settings.max_trade, settings.max_daily_loss, settings.max_positions,
                              settings.max_spread_bps, settings.min_turnover)
         self._ensure_day()
@@ -56,6 +59,9 @@ class Engine:
         self._ensure_day()
         try:
             results = self.scan()
+            self.last_scan_at = datetime.now(timezone.utc)
+            self.last_prices = {x["symbol"]: float(x.get("price") or 0) for x in results if float(x.get("price") or 0) > 0}
+            self.last_signals = results
         except Exception as exc:
             # Never trade on partial or stale market data after an exchange failure.
             audit(self.db, "SCAN_FAILED", f"{type(exc).__name__}: {exc}")
