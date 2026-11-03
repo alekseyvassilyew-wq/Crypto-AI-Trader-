@@ -30,3 +30,7 @@ services:
         value: "2"
       - key: SCAN_INTERVAL_SECONDS
         value: "60"
+      - key: TRADE_QUOTE_CURRENCY
+        value: EUR
+      - key: MAX_CANDLE_PAIRS
+        value: "10"
