@@ -186,3 +186,79 @@ def test_pair_lookup_rejects_unknown_symbol():
 
     with pytest.raises(RuntimeError, match="does not recognize pair"):
         client._pair_info("INVALID")
+
+
+
+def test_ticker_rejects_non_finite_prices():
+    client = KrakenSpot()
+    client._pair_cache["XBTEUR"] = ("XXBTZEUR", {})
+    client._request = lambda *args, **kwargs: {
+        "XXBTZEUR": {
+            "b": ["nan"], "a": ["60010"], "c": ["60005"],
+            "v": ["10", "20"],
+        }
+    }
+    with pytest.raises(ValueError, match="finite"):
+        client.tickers(["XBTEUR"])
+
+
+def test_ticker_rejects_crossed_market():
+    client = KrakenSpot()
+    client._pair_cache["XBTEUR"] = ("XXBTZEUR", {})
+    client._request = lambda *args, **kwargs: {
+        "XXBTZEUR": {
+            "b": ["60100"], "a": ["60000"], "c": ["60050"],
+            "v": ["10", "20"],
+        }
+    }
+    with pytest.raises(RuntimeError, match="crossed bid/ask"):
+        client.tickers(["XBTEUR"])
+
+
+def test_ticker_rejects_missing_or_malformed_payload():
+    client = KrakenSpot()
+    client._pair_cache["XBTEUR"] = ("XXBTZEUR", {})
+    client._request = lambda *args, **kwargs: {}
+    with pytest.raises(RuntimeError, match="no ticker data"):
+        client.tickers(["XBTEUR"])
+
+
+def test_candles_skip_non_finite_and_impossible_rows():
+    client = KrakenSpot()
+    client._pair_cache["XBTEUR"] = ("XXBTZEUR", {})
+    client._request = lambda *args, **kwargs: {
+        "XXBTZEUR": [
+            [1000, "10", "12", "9", "11", "10.5", "100", 5],
+            [1060, "nan", "13", "10", "12", "11.5", "200", 6],
+            [1120, "12", "11", "10", "13", "12.5", "300", 7],
+            [1180, "12", "14", "11", "13", "12.5", "300", 7],
+        ],
+        "last": 123456,
+    }
+    rows = client.candles("XBTEUR", interval="1", limit=10)
+    assert rows == [
+        [1000.0, 10.0, 12.0, 9.0, 11.0, 100.0],
+    ]
+
+
+def test_candles_require_positive_limit():
+    client = KrakenSpot()
+    with pytest.raises(ValueError, match="positive integer"):
+        client.candles("XBTEUR", limit=0)
+
+
+def test_network_timeouts_fail_with_clear_error():
+    client = KrakenSpot()
+    client.session = FakeSession(FakeResponse({}))
+    def timeout(*args, **kwargs):
+        raise requests.Timeout("connection timed out")
+    client.session.get = timeout
+    with pytest.raises(RuntimeError, match="network request failed"):
+        client._request("/0/public/SystemStatus")
+
+
+def test_invalid_result_payload_is_rejected():
+    client = KrakenSpot()
+    client.session = FakeSession(FakeResponse({"error": [], "result": []}))
+    with pytest.raises(RuntimeError, match="invalid result payload"):
+        client._request("/0/public/SystemStatus")
