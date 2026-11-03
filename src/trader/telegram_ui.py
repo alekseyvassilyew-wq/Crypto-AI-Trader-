@@ -91,7 +91,15 @@ def build_app(s, engine, exchange):
         )
 
     async def testtopics(update, context):
-        if not await authorized(update): return await deny(update)
+        if not await authorized(update):
+            return await deny(update)
+
+        message = update.effective_message
+        await message.reply_text("Проверяю отправку сообщений во все 5 тем…")
+
+        if not s.telegram_group_chat_id:
+            return await message.reply_text("Ошибка настройки: TELEGRAM_GROUP_CHAT_ID не задан в Render.")
+
         topics = [
             ("Общая информация", s.topic_general_id),
             ("Сделки", s.topic_trades_id),
@@ -99,14 +107,19 @@ def build_app(s, engine, exchange):
             ("Прибыль", s.topic_profit_id),
             ("Ошибки", s.topic_errors_id),
         ]
-        if not s.telegram_group_chat_id:
-            return await update.effective_message.reply_text("Не задан TELEGRAM_GROUP_CHAT_ID в Render.")
+        results = []
         for title, thread_id in topics:
             if not thread_id:
-                await update.effective_message.reply_text(f"Не задан ID темы: {title}")
+                results.append(f"❌ {title}: ID темы не задан")
                 continue
-            await send_topic(context, thread_id, f"✅ Проверка связи: тема «{title}» настроена.")
-        await update.effective_message.reply_text("Проверочные сообщения отправлены в настроенные темы.")
+            try:
+                await send_topic(context, thread_id, f"✅ Проверка связи: тема «{title}» настроена.")
+                results.append(f"✅ {title}: сообщение отправлено")
+            except Exception as exc:
+                log.exception("Telegram topic test failed: %s", title)
+                results.append(f"❌ {title}: {type(exc).__name__}: {str(exc)[:180]}")
+
+        await message.reply_text("Результат проверки:\\n" + "\\n".join(results))
 
     async def help_cmd(update, context):
         if not await authorized(update): return await deny(update)
@@ -151,7 +164,7 @@ def build_app(s, engine, exchange):
         @staticmethod
         async def run(fn): return await asyncio.to_thread(fn)
     app.bot_data["run_blocking"] = Runner
-    for name, fn in [("start", start), ("status", status), ("scan", scan), ("account", account), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics), ("test_topics", testtopics),
+    for name, fn in [("start", start), ("status", status), ("scan", scan), ("account", account), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
                      ("run", run), ("pause", pause), ("stop", stop), ("help", help_cmd)]:
         app.add_handler(CommandHandler(name, fn))
     app.add_handler(CallbackQueryHandler(callback))
