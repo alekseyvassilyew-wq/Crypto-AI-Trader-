@@ -54,7 +54,13 @@ class Engine:
     def cycle(self):
         if self.paused: return []
         self._ensure_day()
-        results = self.scan()
+        try:
+            results = self.scan()
+        except Exception as exc:
+            # Never trade on partial or stale market data after an exchange failure.
+            audit(self.db, "SCAN_FAILED", f"{type(exc).__name__}: {exc}")
+            self.stop("Market data scan failed")
+            return ["SCAN_FAILED — paper trading paused"]
         prices = {x["symbol"]: x.get("price", 0) for x in results if x.get("price", 0) > 0}
         actions = []
         # Risk exits are checked before new entries.
