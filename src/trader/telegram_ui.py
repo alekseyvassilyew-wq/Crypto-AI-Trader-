@@ -73,9 +73,18 @@ def build_app(s, engine, exchange):
         engine.stop("Emergency stop via Telegram")
         await update.effective_message.reply_text("⛔ STOP: автоматические сделки остановлены.")
 
+    async def topicid(update, context):
+        if not await authorized(update): return await deny(update)
+        chat = update.effective_chat
+        message = update.effective_message
+        thread_id = getattr(message, "message_thread_id", None)
+        await message.reply_text(
+            f"chat_id: {chat.id}\nmessage_thread_id: {thread_id if thread_id is not None else 'нет (личный чат или General)'}"
+        )
+
     async def help_cmd(update, context):
         if not await authorized(update): return await deny(update)
-        await update.effective_message.reply_text("/start — меню\n/status — состояние и P/L\n/scan — сканирование\n/account — баланс Kraken (только чтение)\n/portfolio — PAPER-позиции\n/interval 1m|5m|15m|30m|1h|4h|24h — интервал\n/run — запуск PAPER\n/pause — пауза\n/stop — аварийная остановка")
+        await update.effective_message.reply_text("/start — меню\n/status — состояние и P/L\n/scan — сканирование\n/account — баланс Kraken (только чтение)\n/portfolio — PAPER-позиции\n/interval 1m|5m|15m|30m|1h|4h|24h — интервал\n/run — запуск PAPER\n/pause — пауза\n/stop — аварийная остановка\n/topicid — ID группы и темы")
 
     async def callback(update, context):
         q = update.callback_query
@@ -107,7 +116,7 @@ def build_app(s, engine, exchange):
         @staticmethod
         async def run(fn): return await asyncio.to_thread(fn)
     app.bot_data["run_blocking"] = Runner
-    for name, fn in [("start", start), ("status", status), ("scan", scan), ("account", account), ("interval", interval), ("portfolio", portfolio),
+    for name, fn in [("start", start), ("status", status), ("scan", scan), ("account", account), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid),
                      ("run", run), ("pause", pause), ("stop", stop), ("help", help_cmd)]:
         app.add_handler(CommandHandler(name, fn))
     app.add_handler(CallbackQueryHandler(callback))
