@@ -30,10 +30,10 @@ def build_app(s, engine, exchange):
         if not await authorized(update): return await deny(update)
         state = "PAUSED" if engine.paused else "RUNNING"
         await update.effective_message.reply_text(
-            f"Режим: PAPER\\nСостояние: {state}\\nPAPER cash: {engine.paper.cash:.2f} EUR\\n"
-            f"Позиции: {len(engine.paper.positions)}/{s.max_positions}\\nP/L сегодня: {engine.daily_pnl():.2f} EUR\\n"
-            f"Рынок Kraken: {len(engine.market_pairs)} пар; котировок получено: {engine.market_ticker_count}\\n"
-            f"Полный мониторинг; анализ свечей: до {s.max_candle_pairs} самых ликвидных пар за цикл\\n"
+            f"Режим: PAPER\nСостояние: {state}\nPAPER cash: {engine.paper.cash:.2f} EUR\n"
+            f"Позиции: {len(engine.paper.positions)}/{s.max_positions}\nP/L сегодня: {engine.daily_pnl():.2f} EUR\n"
+            f"Рынок Kraken: {len(engine.market_pairs)} пар; котировок получено: {engine.market_ticker_count}\n"
+            f"Полный мониторинг; анализ свечей: до {s.max_candle_pairs} самых ликвидных пар за цикл\n"
             f"Новые PAPER-сделки: только пары с котировкой {s.trade_quote_currency}."
         )
 
@@ -42,8 +42,19 @@ def build_app(s, engine, exchange):
         await update.effective_message.reply_text("Сканирование рынка…")
         try:
             rows = await context.application.bot_data["run_blocking"].run(engine.scan)
-            lines = [f"{x['symbol']}: {x['signal']} ({x.get('score', 0)}/5), цена {x.get('price', 0)}" for x in rows]
-            await update.effective_message.reply_text("\n".join(lines)[:3900])
+            buy_rows = [x for x in rows if x.get("signal") == "BUY"]
+            analyzed = [x for x in rows if "Ticker monitored; OHLC analysis deferred by scan budget" not in x.get("reasons", []) and x.get("quote") == s.trade_quote_currency]
+            ranked = sorted(analyzed, key=lambda x: (x.get("score", 0), x.get("turnover", 0)), reverse=True)[:12]
+            lines = [
+                f"Всего рынков Kraken: {len(engine.market_pairs)}",
+                f"Тикеров получено: {engine.market_ticker_count}",
+                f"Пар {s.trade_quote_currency} с индикаторным анализом: {len(analyzed)}",
+                f"Сигналов BUY: {len(buy_rows)}",
+                "",
+            ]
+            lines.extend(f"{x['symbol']}: {x['signal']} ({x.get('score', 0)}/5), цена {x.get('price', 0):,.8g}" for x in ranked)
+            lines.append("Все рынки получают мониторинг котировок; анализ свечей ограничен бюджетом запросов.")
+            await update.effective_message.reply_text("\\n".join(lines)[:3900])
         except Exception:
             log.exception("Market scan failed")
             await update.effective_message.reply_text("Ошибка сканирования. Подробности в логах Render.")
@@ -125,11 +136,11 @@ def build_app(s, engine, exchange):
                 log.exception("Telegram topic test failed: %s", title)
                 results.append(f"❌ {title}: {type(exc).__name__}: {str(exc)[:180]}")
 
-        await message.reply_text("Результат проверки:\\n" + "\\n".join(results))
+        await message.reply_text("Результат проверки:\n" + "\n".join(results))
 
     async def help_cmd(update, context):
         if not await authorized(update): return await deny(update)
-        await update.effective_message.reply_text("/start — меню\n/status — состояние и P/L\n/scan — сканирование\n/account — баланс Kraken (только чтение)\n/portfolio — PAPER-позиции\n/interval 1m|5m|15m|30m|1h|4h|24h — интервал\n/run — запуск PAPER\n/pause — пауза\n/stop — аварийная остановка\n/topicid — ID группы и темы\\n/testtopics или /test_topics — проверка тем")
+        await update.effective_message.reply_text("/start — меню\n/status — состояние и P/L\n/scan — сканирование\n/account — баланс Kraken (только чтение)\n/portfolio — PAPER-позиции\n/interval 1m|5m|15m|30m|1h|4h|24h — интервал\n/run — запуск PAPER\n/pause — пауза\n/stop — аварийная остановка\n/topicid — ID группы и темы\n/testtopics или /test_topics — проверка тем")
 
     async def callback(update, context):
         q = update.callback_query
@@ -181,23 +192,23 @@ def build_app(s, engine, exchange):
                 profit_actions = [item for item in actions if any(token in item for token in (" SELL ", "STOP_LOSS", "TAKE_PROFIT", "DAILY LOSS"))]
 
                 if error_actions:
-                    await send_topic(context, s.topic_errors_id, "⚠️ Ошибка рыночного сканирования:\\n" + "\\n".join(error_actions))
+                    await send_topic(context, s.topic_errors_id, "⚠️ Ошибка рыночного сканирования:\n" + "\n".join(error_actions))
                     await send_topic(context, s.topic_general_id, "⏸ PAPER автоматически приостановлен из-за ошибки рыночных данных.")
 
                 if trade_actions:
-                    trade_message = "📈 PAPER — сделки:\\n" + "\\n".join(trade_actions)
+                    trade_message = "📈 PAPER — сделки:\n" + "\n".join(trade_actions)
                     await send_topic(context, s.topic_trades_id, trade_message)
                     positions = len(engine.paper.positions)
                     portfolio_message = (
-                        "💼 PAPER — обновление портфеля\\n"
-                        f"Доступно: {engine.paper.cash:.2f} EUR\\n"
-                        f"Открытых позиций: {positions}/{s.max_positions}\\n"
+                        "💼 PAPER — обновление портфеля\n"
+                        f"Доступно: {engine.paper.cash:.2f} EUR\n"
+                        f"Открытых позиций: {positions}/{s.max_positions}\n"
                         f"P/L сегодня: {engine.daily_pnl():.2f} EUR"
                     )
                     await send_topic(context, s.topic_portfolio_id, portfolio_message)
 
                 if profit_actions:
-                    await send_topic(context, s.topic_profit_id, "💰 PAPER — результат/риск:\\n" + "\\n".join(profit_actions))
+                    await send_topic(context, s.topic_profit_id, "💰 PAPER — результат/риск:\n" + "\n".join(profit_actions))
 
                 if any("DAILY LOSS" in item for item in actions):
                     await send_topic(context, s.topic_general_id, "⏸ Достигнут дневной лимит убытка. PAPER остановлен.")
