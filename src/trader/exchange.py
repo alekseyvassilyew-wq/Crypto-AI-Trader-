@@ -98,10 +98,87 @@ class KrakenSpot:
             self._pair_cache[pair] = (key, info)
         return self._pair_cache[pair]
 
-    def tickers(self, symbols):
+    def discover_pairs(self, force=False):
+        """Return every online spot crypto/crypto or crypto/fiat market on Kraken."""
+        now = time.monotonic()
+        cached_at = getattr(self, "_universe_cached_at", 0)
+        cached = getattr(self, "_market_universe", None)
+        if cached is not None and not force and now - cached_at < 3600:
+            return list(cached)
+
+        result = self._request("/0/public/AssetPairs")
+        pairs = []
+        pair_cache = {}
+        for pair_key, info in result.items():
+            if not isinstance(info, dict):
+                continue
+            if info.get("aclass_base") != "currency" or info.get("aclass_quote") != "currency":
+                continue
+            wsname = str(info.get("wsname") or "")
+            altname = str(info.get("altname") or "")
+            status = str(info.get("status") or "online").lower()
+            if status != "online" or not wsname or "/" not in wsname:
+                continue
+            # Dark-pool markets are not part of the normal public spot universe.
+            if wsname.lower().endswith(".d") or altname.lower().endswith(".d"):
+                continue
+            base, quote = wsname.split("/", 1)
+            symbol = altname.upper().replace("/", "") or (base + quote).upper()
+            if not symbol or not base or not quote:
+                continue
+            meta = {
+                "symbol": symbol,
+                "pair_key": pair_key,
+                "base": base.upper(),
+                "quote": quote.upper(),
+                "status": status,
+            }
+            pairs.append(meta)
+            pair_cache[symbol] = (pair_key, info)
+            pair_cache[pair_key] = (pair_key, info)
+
+        if not pairs:
+            raise RuntimeError("Kraken returned no online spot markets")
+        self._pair_cache.update(pair_cache)
+        self._market_universe = sorted(pairs, key=lambda item: item["symbol"])
+        self._universe_cached_at = now
+        return list(self._market_universe)
+
+    def tickers(self, symbols=None):
+        """Fetch tickers for selected symbols, or all Kraken markets when omitted."""
+        if symbols is None:
+            pairs = self.discover_pairs()
+            result = self._request("/0/public/Ticker")
+            by_key = {item["pair_key"]: item for item in pairs}
+            out = []
+            for pair_key, item in by_key.items():
+                ticker = result.get(pair_key)
+                if not isinstance(ticker, dict):
+                    continue
+                try:
+                    bid = _finite_number(ticker["b"][0], "bid", positive=True)
+                    ask = _finite_number(ticker["a"][0], "ask", positive=True)
+                    last = _finite_number(ticker["c"][0], "last price", positive=True)
+                    base_volume_24h = _finite_number(ticker["v"][1], "24h volume", non_negative=True)
+                except (KeyError, IndexError, TypeError) as exc:
+                    continue
+                if ask < bid:
+                    continue
+                turnover = _finite_number(base_volume_24h * last, "24h turnover", non_negative=True)
+                out.append({
+                    "symbol": item["symbol"],
+                    "base": item["base"],
+                    "quote": item["quote"],
+                    "bid1Price": bid,
+                    "ask1Price": ask,
+                    "lastPrice": last,
+                    "turnover24h": turnover,
+                })
+            return out
+
         out = []
         for symbol in symbols:
-            key, _ = self._pair_info(symbol)
+            key, info = self._pair_info(symbol)
             result = self._request("/0/public/Ticker", {"pair": key})
             ticker = result.get(key) or (next(iter(result.values())) if result else None)
             if not isinstance(ticker, dict):
