@@ -19,6 +19,8 @@ class Settings:
     min_turnover: float
     fee_rate: float
     watchlist: tuple[str, ...]
+    trade_quote_currency: str
+    max_candle_pairs: int
     scan_interval: int
     stop_loss_pct: float
     take_profit_pct: float
@@ -48,7 +50,9 @@ def load_settings():
         max_spread_bps=float(os.getenv("MAX_SPREAD_BPS", "25")),
         min_turnover=float(os.getenv("MIN_24H_TURNOVER_EUR", "10000")),
         fee_rate=float(os.getenv("PAPER_FEE_RATE", "0.0026")),
-        watchlist=tuple(x.strip().upper().replace("/", "") for x in os.getenv("WATCHLIST", "XBTEUR,ETHEUR,SOLEUR,XRPEUR,ADAEUR,DOGEEUR,LTCEUR,DOTEUR,LINKEUR,AVAXEUR,BCHEUR").split(",") if x.strip()),
+        watchlist=tuple(x.strip().upper().replace("/", "") for x in os.getenv("WATCHLIST", "").split(",") if x.strip()),
+        trade_quote_currency=os.getenv("TRADE_QUOTE_CURRENCY", "EUR").strip().upper(),
+        max_candle_pairs=int(os.getenv("MAX_CANDLE_PAIRS", "10")),
         scan_interval=int(os.getenv("SCAN_INTERVAL_SECONDS", "60")),
         stop_loss_pct=float(os.getenv("STOP_LOSS_PERCENT", "2")),
         take_profit_pct=float(os.getenv("TAKE_PROFIT_PERCENT", "4")),
@@ -63,14 +67,16 @@ def load_settings():
     )
     if not s.bot_token or s.admin_id <= 0:
         raise ValueError("Set BOT_TOKEN and numeric ADMIN_ID.")
-    if not s.watchlist or s.paper_start <= 0 or s.max_trade <= 0 or s.max_trade > s.paper_start:
+    if s.paper_start <= 0 or s.max_trade <= 0 or s.max_trade > s.paper_start:
         raise ValueError("Invalid paper balance, trade size, or watchlist configuration.")
     numeric_values = (s.paper_start, s.max_trade, s.max_daily_loss, s.max_spread_bps,
                       s.min_turnover, s.fee_rate, s.stop_loss_pct, s.take_profit_pct)
     if not all(math.isfinite(value) for value in numeric_values):
         raise ValueError("All numeric settings must be finite numbers.")
-    if min(s.max_daily_loss, s.max_positions, s.scan_interval, s.stop_loss_pct, s.take_profit_pct) <= 0:
+    if min(s.max_daily_loss, s.max_positions, s.max_candle_pairs, s.scan_interval, s.stop_loss_pct, s.take_profit_pct) <= 0:
         raise ValueError("Risk limits and scan interval must be positive.")
+    if not s.trade_quote_currency or not s.trade_quote_currency.isalnum():
+        raise ValueError("TRADE_QUOTE_CURRENCY must be a valid asset code.")
     if s.max_spread_bps <= 0 or s.min_turnover < 0:
         raise ValueError("Spread limit must be positive and minimum turnover cannot be negative.")
     if not 0 <= s.fee_rate < 0.1:
