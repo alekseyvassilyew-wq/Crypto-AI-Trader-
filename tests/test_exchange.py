@@ -299,3 +299,20 @@ def test_tickers_without_symbols_fetches_all_discovered_markets():
     assert by_symbol["XBTEUR"]["quote"] == "EUR"
     assert by_symbol["ETHUSD"]["quote"] == "USD"
     assert by_symbol["XBTEUR"]["turnover24h"] == 1200100.0
+
+def test_tickers_without_symbols_skip_zero_last_price_and_keep_valid_markets():
+    client = KrakenSpot()
+    client._request = lambda path, data=None, private=False: (
+        {
+            "XXBTZEUR": {"altname": "XBTEUR", "wsname": "XBT/EUR", "aclass_base": "currency", "aclass_quote": "currency", "status": "online"},
+            "XETHZUSD": {"altname": "ETHUSD", "wsname": "ETH/USD", "aclass_base": "currency", "aclass_quote": "currency", "status": "online"},
+        } if path.endswith("AssetPairs") else {
+            "XXBTZEUR": {"b": ["60000"], "a": ["60010"], "c": ["0"], "v": ["10", "20"]},
+            "XETHZUSD": {"b": ["3000"], "a": ["3001"], "c": ["3000.5"], "v": ["100", "200"]},
+        }
+    )
+
+    tickers = client.tickers()
+
+    assert [item["symbol"] for item in tickers] == ["ETHUSD"]
+
