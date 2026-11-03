@@ -5,6 +5,23 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 log = logging.getLogger(__name__)
 
 def build_app(s, engine, exchange):
+    def format_error(exc, action, user=None):
+        import traceback
+        if user:
+            username = f"@{user.username}" if user.username else "без username"
+            who = f"{user.id} ({username})"
+        else:
+            who = "— (—)"
+        trace = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        return (
+            "🚨 ОШИБКА CRYPTO AI TRADER\n"
+            f"👤 Кто: {who}\n"
+            f"💬 Действие: {action}\n"
+            f"⚠️ Тип: {type(exc).__name__}\n"
+            f"📝 Описание: {str(exc) or 'Без дополнительного описания'}\n"
+            "📋 Трейс:\n"
+            + '```python\n' + trace[-2200:] + '\n```'
+        )[:3900]
     async def send_topic(context, topic_id, text):
         if not s.telegram_group_chat_id:
             return
@@ -61,7 +78,7 @@ def build_app(s, engine, exchange):
             log.exception("Market scan failed")
             detail = f"{type(exc).__name__}: {exc}"
             await update.effective_message.reply_text(
-                "Ошибка сканирования. Причина:\n" + detail[:1200]
+                format_error(exc, "/scan", update.effective_user)
             )
 
     async def account(update, context):
@@ -72,7 +89,9 @@ def build_app(s, engine, exchange):
             await update.effective_message.reply_text("Kraken account balances (read-only):\n" + ("\n".join(nonzero[:30]) or "Нулевые остатки."))
         except Exception as exc:
             log.exception("Kraken account query failed")
-            await update.effective_message.reply_text(f"Не удалось прочитать баланс Kraken: {str(exc)[:500]}")
+            await update.effective_message.reply_text(
+                format_error(exc, "/account", update.effective_user)
+            )
 
     async def interval(update, context):
         if not await authorized(update): return await deny(update)
@@ -139,7 +158,7 @@ def build_app(s, engine, exchange):
                 results.append(f"✅ {title}: сообщение отправлено")
             except Exception as exc:
                 log.exception("Telegram topic test failed: %s", title)
-                results.append(f"❌ {title}: {type(exc).__name__}: {str(exc)[:180]}")
+                results.append(format_error(exc, f"/testtopics — {title}", update.effective_user))
 
         await message.reply_text("Результат проверки:\n" + "\n".join(results))
 
@@ -220,7 +239,7 @@ def build_app(s, engine, exchange):
         except Exception as exc:
             log.exception("Trading cycle failed")
             try:
-                await send_topic(context, s.topic_errors_id, f"Ошибка торгового цикла: {type(exc).__name__}: {str(exc)[:700]}")
+                await send_topic(context, s.topic_errors_id, format_error(exc, "автоматический торговый цикл"))
             except Exception:
                 log.exception("Could not send error notification to Telegram topic")
 
