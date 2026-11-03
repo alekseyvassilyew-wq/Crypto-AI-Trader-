@@ -75,7 +75,6 @@ class Engine:
             self.market_pairs = pairs
             self.market_ticker_count = len(tickers)
             ticker_by_symbol = {item["symbol"]: item for item in tickers}
-            quote_currency = getattr(self.s, "trade_quote_currency", "EUR").upper()
             analysis_limit = max(1, int(getattr(self.s, "max_candle_pairs", 10)))
 
             eligible = []
@@ -95,12 +94,12 @@ class Engine:
                 bid, ask = float(ticker.get("bid1Price") or 0), float(ticker.get("ask1Price") or 0)
                 spread = (ask - bid) / ((ask + bid) / 2) * 10000 if bid > 0 and ask > 0 else 999999
                 turnover = float(ticker.get("turnover24h") or 0)
-                if quote != quote_currency:
+                if self.paper.balance(quote) <= 0:
                     results_by_symbol[symbol] = {
                         "symbol": symbol, "signal": "HOLD", "score": 0,
                         "price": float(ticker.get("lastPrice") or 0),
                         "spread_bps": spread, "turnover": turnover, "quote": quote,
-                        "reasons": [f"Monitored only; PAPER cash is {quote_currency}"],
+                        "reasons": [f"Monitored only; no free PAPER {quote} balance"],
                     }
                 elif spread > self.s.max_spread_bps:
                     results_by_symbol[symbol] = {
@@ -123,7 +122,12 @@ class Engine:
             # limits, OHLC/indicator analysis is budgeted to the most liquid
             # EUR pairs each cycle; the complete universe is re-ranked each scan.
             eligible.sort(reverse=True)
-            selected = {symbol for _, symbol in eligible[:analysis_limit]}
+            # Rotate OHLC coverage so lower-ranked funded markets are not starved.
+            cursor = int(get_state(self.db, "analysis_cursor", 0) or 0) % max(1, len(eligible))
+            ordered = eligible[cursor:] + eligible[:cursor]
+            selected = {symbol for _, symbol in ordered[:analysis_limit]}
+            if eligible:
+                set_state(self.db, "analysis_cursor", (cursor + analysis_limit) % len(eligible))
             for _, symbol in eligible:
                 if symbol in selected:
                     result = self.scan_one(symbol, [ticker_by_symbol[symbol]])
@@ -137,8 +141,8 @@ class Engine:
                         "spread_bps": (float(ticker["ask1Price"]) - float(ticker["bid1Price"])) /
                                       ((float(ticker["ask1Price"]) + float(ticker["bid1Price"])) / 2) * 10000,
                         "turnover": float(ticker.get("turnover24h") or 0),
-                        "quote": quote_currency,
-                        "reasons": ["Ticker monitored; OHLC analysis deferred by scan budget"],
+                        "quote": str(next((p.get("quote") for p in pairs if p["symbol"] == symbol), "EUR")).upper(),
+                        "reasons": ["Ticker monitored; OHLC analysis deferred by rotating scan budget"],
                     }
             return [results_by_symbol[pair["symbol"]] for pair in pairs if pair["symbol"] in results_by_symbol]
 
@@ -182,8 +186,9 @@ class Engine:
             self.stop("Daily loss limit reached")
             return actions + ["DAILY LOSS LIMIT — paused"]
         for signal in results:
-            # Only EUR-quoted pairs can be bought with the EUR-denominated PAPER wallet.
-            if signal.get("quote", "EUR") != getattr(self.s, "trade_quote_currency", "EUR").upper():
+            # Only trade pairs funded by free cash in their quote currency.
+            quote_currency = str(signal.get("quote", "EUR")).upper()
+            if self.paper.balance(quote_currency) <= 0:
                 continue
             if signal.get("signal") != "BUY" or signal["symbol"] in self.paper.positions:
                 continue
@@ -192,7 +197,10 @@ class Engine:
             try:
                 check_order(self.s.max_trade, signal["spread_bps"], signal["turnover"], len(self.paper.positions),
                             self.daily_pnl(prices), self.limits)
-                fill = self.paper.buy(signal["symbol"], self.s.max_trade, signal["price"])
+                allocation = min(float(self.s.max_trade), self.paper.balance(quote_currency) / 2.0)
+                if allocation <= 0:
+                    continue
+                fill = self.paper.buy(signal["symbol"], allocation, signal["price"], currency=quote_currency)
                 save_trade(self.db, "PAPER", signal["symbol"], "Buy", fill["qty"], fill["quote"], fill["fee"], fill["price"], "FILLED")
                 actions.append(f"{signal['symbol']} BUY {fill['qty']:.8f} @ {fill['price']}")
             except (ValueError, PermissionError) as exc:
