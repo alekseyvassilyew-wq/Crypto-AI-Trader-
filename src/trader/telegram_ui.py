@@ -5,6 +5,14 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 log = logging.getLogger(__name__)
 
 def build_app(s, engine, exchange):
+    async def send_topic(context, topic_id, text):
+        if not s.telegram_group_chat_id:
+            return
+        kwargs = {"chat_id": s.telegram_group_chat_id, "text": text[:3900]}
+        if topic_id:
+            kwargs["message_thread_id"] = topic_id
+        await context.bot.send_message(**kwargs)
+
     async def authorized(update):
         return bool(update.effective_user and update.effective_user.id == s.admin_id)
 
