@@ -78,3 +78,50 @@ def test_daily_loss_limit_pauses_engine(tmp_path):
     row = db.execute("SELECT event FROM audit WHERE event='PAPER_STOPPED' ORDER BY id DESC LIMIT 1").fetchone()
     assert row["event"] == "PAPER_STOPPED"
     db.close()
+
+
+def test_engine_starts_paused_after_restart(tmp_path):
+    engine, db = make_engine(tmp_path)
+    assert engine.paused is True
+    assert engine.cycle() == []
+    db.close()
+
+
+def test_full_market_scan_monitors_all_pairs_but_analyzes_only_eur_budget(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.s.trade_quote_currency = "EUR"
+    engine.s.max_candle_pairs = 1
+
+    class FullMarketExchange:
+        def discover_pairs(self):
+            return [
+                {"symbol": "XBTEUR", "quote": "EUR", "status": "online"},
+                {"symbol": "ETHEUR", "quote": "EUR", "status": "online"},
+                {"symbol": "ETHUSD", "quote": "USD", "status": "online"},
+            ]
+
+        def tickers(self):
+            return [
+                {"symbol": "XBTEUR", "quote": "EUR", "bid1Price": 99, "ask1Price": 100, "lastPrice": 99.5, "turnover24h": 50000},
+                {"symbol": "ETHEUR", "quote": "EUR", "bid1Price": 49, "ask1Price": 50, "lastPrice": 49.5, "turnover24h": 20000},
+                {"symbol": "ETHUSD", "quote": "USD", "bid1Price": 2999, "ask1Price": 3001, "lastPrice": 3000, "turnover24h": 500000},
+            ]
+
+    engine.exchange = FullMarketExchange()
+    analyzed = []
+
+    def fake_scan_one(symbol, tickers=None):
+        analyzed.append(symbol)
+        return {"symbol": symbol, "signal": "HOLD", "score": 1, "price": 99, "spread_bps": 10, "turnover": 50000, "reasons": []}
+
+    engine.scan_one = fake_scan_one
+    rows = engine.scan()
+
+    assert engine.market_ticker_count == 3
+    assert len(rows) == 3
+    assert analyzed == ["XBTEUR"]
+    by_symbol = {row["symbol"]: row for row in rows}
+    assert by_symbol["ETHUSD"]["signal"] == "HOLD"
+    assert "Monitored only" in by_symbol["ETHUSD"]["reasons"][0]
+    assert "deferred" in by_symbol["ETHEUR"]["reasons"][0]
+    db.close()
