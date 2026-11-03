@@ -48,7 +48,7 @@ def load_settings():
         max_spread_bps=float(os.getenv("MAX_SPREAD_BPS", "25")),
         min_turnover=float(os.getenv("MIN_24H_TURNOVER_EUR", "10000")),
         fee_rate=float(os.getenv("PAPER_FEE_RATE", "0.0026")),
-        watchlist=tuple(x.strip().upper().replace("/", "") for x in os.getenv("WATCHLIST", "XBTEUR,ETHEUR,SOLEUR").split(",") if x.strip()),
+        watchlist=tuple(x.strip().upper().replace("/", "") for x in os.getenv("WATCHLIST", "XBTEUR,ETHEUR,SOLEUR,XRPEUR,ADAEUR,DOGEEUR,LTCEUR,DOTEUR,LINKEUR,AVAXEUR,BCHEUR").split(",") if x.strip()),
         scan_interval=int(os.getenv("SCAN_INTERVAL_SECONDS", "60")),
         stop_loss_pct=float(os.getenv("STOP_LOSS_PERCENT", "2")),
         take_profit_pct=float(os.getenv("TAKE_PROFIT_PERCENT", "4")),
