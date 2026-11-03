@@ -6,7 +6,7 @@ from .db import audit, save_trade, get_state, set_state
 class Engine:
     def __init__(self, settings, db, exchange, paper):
         self.s, self.db, self.exchange, self.paper = settings, db, exchange, paper
-        self.paused = True
+        self.paused = False  # Start PAPER automation automatically after service restart.
         self.scan_interval_seconds = settings.scan_interval
         self.last_scan_at = None
         self.last_prices = {}
