@@ -1,0 +1,32 @@
+services:
+  - type: worker
+    name: crypto-ai-trader-kraken
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m src.trader.main
+    disk:
+      name: crypto-ai-trader-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: ADMIN_ID
+        sync: false
+      - key: KRAKEN_API_KEY
+        sync: false
+      - key: KRAKEN_API_SECRET
+        sync: false
+      - key: TRADING_MODE
+        value: PAPER
+      - key: DATABASE_PATH
+        value: /var/data/crypto_ai_trader.sqlite3
+      - key: PAPER_START_EUR
+        value: "20"
+      - key: MAX_TRADE_EUR
+        value: "5"
+      - key: MAX_DAILY_LOSS_EUR
+        value: "2"
+      - key: SCAN_INTERVAL_SECONDS
+        value: "60"
