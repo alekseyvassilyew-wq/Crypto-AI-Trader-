@@ -29,7 +29,13 @@ def build_app(s, engine, exchange):
     async def status(update, context):
         if not await authorized(update): return await deny(update)
         state = "PAUSED" if engine.paused else "RUNNING"
-        await update.effective_message.reply_text(f"Режим: PAPER\nСостояние: {state}\nPAPER cash: {engine.paper.cash:.2f} EUR\nПозиции: {len(engine.paper.positions)}/{s.max_positions}\nP/L сегодня: {engine.daily_pnl():.2f} EUR\nПары: {', '.join(s.watchlist)}")
+        await update.effective_message.reply_text(
+            f"Режим: PAPER\\nСостояние: {state}\\nPAPER cash: {engine.paper.cash:.2f} EUR\\n"
+            f"Позиции: {len(engine.paper.positions)}/{s.max_positions}\\nP/L сегодня: {engine.daily_pnl():.2f} EUR\\n"
+            f"Рынок Kraken: {len(engine.market_pairs)} пар; котировок получено: {engine.market_ticker_count}\\n"
+            f"Полный мониторинг; анализ свечей: до {s.max_candle_pairs} самых ликвидных пар за цикл\\n"
+            f"Новые PAPER-сделки: только пары с котировкой {s.trade_quote_currency}."
+        )
 
     async def scan(update, context):
         if not await authorized(update): return await deny(update)
@@ -150,8 +156,8 @@ def build_app(s, engine, exchange):
             if engine.last_scan_at and not engine.paused and now - last_report >= 900:
                 scan_time = engine.last_scan_at.strftime("%Y-%m-%d %H:%M:%S UTC")
                 signal_lines = [
-                    f"{item['symbol']}: {item.get('signal', 'N/A')} ({item.get('score', 0)}/5) — {float(item.get('price') or 0):,.2f}"
-                    for item in engine.last_signals
+                    f"{item['symbol']}: {item.get('signal', 'N/A')} ({item.get('score', 0)}/5) — {float(item.get('price') or 0):,.6g}"
+                    for item in sorted(engine.last_signals, key=lambda item: item.get("score", 0), reverse=True)[:15]
                 ]
                 position_lines = [
                     f"{symbol}: {position['qty']:.8f} @ {position['avg_price']:.2f}"
