@@ -31,6 +31,7 @@ class PaperBroker:
             if not isinstance(saved, dict) or "cash" not in saved:
                 raise ValueError("Invalid saved paper broker state")
             self.cash = _finite_number(saved["cash"], "saved cash", minimum=0)
+            self.cash_by_currency = {"EUR": self.cash}
             raw_positions = saved.get("positions", {})
             if not isinstance(raw_positions, dict):
                 raise ValueError("Invalid saved paper positions")
@@ -44,6 +45,7 @@ class PaperBroker:
                 self.positions[symbol] = {"qty": qty, "avg_price": avg_price}
         else:
             self.cash, self.positions = initial_balance, {}
+            self.cash_by_currency = {"EUR": initial_balance}
             self._persist()
 
     @staticmethod
