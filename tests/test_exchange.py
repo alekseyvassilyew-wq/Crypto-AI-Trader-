@@ -19,6 +19,8 @@ class FakeResponse:
             raise self.status_error
 
     def json(self):
+        if isinstance(self.payload, Exception):
+            raise self.payload
         return self.payload
 
 
