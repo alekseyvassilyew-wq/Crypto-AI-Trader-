@@ -94,7 +94,8 @@ def test_private_request_requires_credentials():
 
 
 def test_api_errors_are_raised():
-    client = KrakenSpot()
+    secret = base64.b64encode(b"test-secret-key").decode()
+    client = KrakenSpot(api_key="public-key", api_secret=secret)
     client.session = FakeSession(FakeResponse({
         "error": ["EAPI:Invalid key"],
         "result": {},
