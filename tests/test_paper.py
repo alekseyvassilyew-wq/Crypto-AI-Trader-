@@ -19,3 +19,65 @@ def test_equity_marks_positions():
     b = PaperBroker(100)
     b.buy("BTCUSDT", 20, 10)
     assert b.equity({"BTCUSDT": 12}) == pytest.approx(103.98)
+
+
+def test_buy_and_sell_preserve_cash_and_position():
+    broker = PaperBroker(balance=20, fee_rate=0.01)
+    bought = broker.buy("XBTEUR", 10, 2)
+    assert bought["qty"] == 5
+    assert broker.cash == pytest.approx(9.9)
+    sold = broker.sell("XBTEUR", 2, 3)
+    assert sold["quote"] == 6
+    assert broker.cash == pytest.approx(15.84)
+    assert broker.positions["XBTEUR"]["qty"] == pytest.approx(3)
+
+
+@pytest.mark.parametrize("balance,fee_rate", [
+    (float("nan"), 0.001), (float("inf"), 0.001), (-1, 0.001),
+    (10, float("nan")), (10, -0.1), (10, 0.1),
+])
+def test_constructor_rejects_invalid_account_settings(balance, fee_rate):
+    with pytest.raises(ValueError):
+        PaperBroker(balance=balance, fee_rate=fee_rate)
+
+
+@pytest.mark.parametrize("quote,price", [
+    (float("nan"), 1), (1, float("inf")), (-1, 1), (1, 0),
+])
+def test_buy_rejects_invalid_amounts_without_mutating_account(quote, price):
+    broker = PaperBroker(balance=20)
+    before_cash = broker.cash
+    with pytest.raises(ValueError):
+        broker.buy("XBTEUR", quote, price)
+    assert broker.cash == before_cash
+    assert broker.positions == {}
+
+
+def test_sell_rejects_more_than_held_without_mutating_account():
+    broker = PaperBroker(balance=20)
+    broker.buy("XBTEUR", 5, 10)
+    before_cash = broker.cash
+    before_position = dict(broker.positions["XBTEUR"])
+    with pytest.raises(ValueError):
+        broker.sell("XBTEUR", 1, 10)
+    assert broker.cash == before_cash
+    assert broker.positions["XBTEUR"] == before_position
+
+
+def test_equity_rejects_non_finite_mark_price():
+    broker = PaperBroker(balance=20)
+    broker.buy("XBTEUR", 5, 10)
+    with pytest.raises(ValueError):
+        broker.equity({"XBTEUR": float("nan")})
+
+
+def test_load_rejects_corrupted_persisted_position(tmp_path):
+    from src.trader.db import connect, set_state
+    db = connect(tmp_path / "corrupt.sqlite3")
+    set_state(db, "paper_broker", {
+        "cash": 10,
+        "positions": {"XBTEUR": {"qty": float("nan"), "avg_price": 10}},
+    })
+    with pytest.raises(ValueError):
+        PaperBroker(db=db)
+    db.close()
