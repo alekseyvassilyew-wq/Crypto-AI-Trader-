@@ -61,7 +61,7 @@ def build_app(s, engine, exchange):
             log.exception("Market scan failed")
             detail = f"{type(exc).__name__}: {exc}"
             await update.effective_message.reply_text(
-                "Ошибка сканирования. Причина:\\n" + detail[:1200]
+                "Ошибка сканирования. Причина:\n" + detail[:1200]
             )
 
     async def account(update, context):
