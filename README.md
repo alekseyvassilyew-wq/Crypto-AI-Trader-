@@ -16,7 +16,7 @@ This archive is a **PAPER-only release**. It is not a live trading bot and must 
 
 - Kraken Spot public ticker and OHLC data (REST API).
 - Optional private account-balance verification using HMAC-SHA512 signing.
-- Watchlist scanner using EMA trend, RSI, relative volume, ATR, spread and 24h turnover filters.
+- Dynamic full-market scanner: discovers all online Kraken Spot crypto markets and retrieves their tickers in one request; indicator analysis is budgeted to the 10 most liquid EUR-quoted pairs each cycle.
 - Simulated EUR cash and positions persisted in SQLite.
 - PAPER stop-loss/take-profit exits, per-trade cap, max-position cap, daily equity-loss pause.
 - Strictly increasing private API nonces within the running process; malformed API responses are rejected.
@@ -43,7 +43,7 @@ IP restriction can remain disabled for this first connection test. This means th
 4. Set `BOT_TOKEN` and numeric `ADMIN_ID`.
 5. Set `KRAKEN_API_KEY` and `KRAKEN_API_SECRET` as secret environment variables.
 6. Keep `TRADING_MODE=PAPER`. Deploy, then message the Telegram bot with `/start`, `/status`, `/account`, and `/scan`.
-7. The bot starts paused. Use `/run` only when you want the local paper simulator to run; `/pause` or `/stop` halts new simulated actions.
+7. The bot starts paused after every restart. Use `/run` only when you want the local paper simulator to run; `/pause` or `/stop` halts new simulated actions. All online Kraken Spot pairs are monitored by ticker, including USD, USDT, BTC and other quote currencies. Only EUR-quoted pairs are eligible for PAPER entries; non-EUR pairs are monitored but not traded because the simulated wallet holds EUR.
 
 The declared Render worker plan and Persistent Disk may incur charges. Review Render's current pricing before applying the Blueprint.
 
@@ -64,7 +64,7 @@ python -m src.trader.main
 - Max simulated buy: €5
 - Max daily simulated equity loss: €2
 - Max open positions: 2
-- Watchlist: XBT/EUR, ETH/EUR, SOL/EUR
+- Market monitoring: all online Kraken Spot pairs (auto-discovered hourly)\n- Indicator/OHLC analysis: top 10 eligible EUR-quoted pairs per scan\n- PAPER entries: EUR-quoted pairs only, because the simulated wallet is denominated in EUR
 - Scan interval: 60 seconds
 - Simulated fee estimate: 0.26%
 - Stop loss: 2%; take profit: 4%
@@ -75,6 +75,6 @@ These are configurable simulation assumptions, not recommendations. Verify Krake
 
 - No LIVE mode, order placement, or demo-order execution is implemented in this ZIP. Do not change the mode variable expecting real trades.
 - Strategy is a simple indicator rule and has not been demonstrated profitable.
-- Kraken public ticker/OHLC responses and pair aliases can differ by market; test `/scan` and review Render logs before enabling PAPER. A passing unit test suite does not verify connectivity or permissions on your Kraken account.
+- Kraken market tickers are fetched for the complete online Spot universe. To keep REST usage controlled, OHLC indicators are calculated for at most `MAX_CANDLE_PAIRS` (default 10) of the most liquid eligible EUR pairs per cycle. Non-EUR pairs are monitored but not eligible for EUR-denominated PAPER entries. Test `/scan` and review Render logs. A passing unit test suite does not verify live connectivity or permissions on your Kraken account.
 - `/interval` changes the in-memory scan interval until service restart; it does not reconfigure Render scheduling.
 - A single SQLite-backed worker is intended. Do not scale to multiple instances.
