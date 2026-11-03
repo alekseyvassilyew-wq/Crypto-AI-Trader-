@@ -262,3 +262,40 @@ def test_invalid_result_payload_is_rejected():
     client.session = FakeSession(FakeResponse({"error": [], "result": []}))
     with pytest.raises(RuntimeError, match="invalid result payload"):
         client._request("/0/public/SystemStatus")
+
+
+def test_discover_pairs_returns_all_online_spot_markets_and_excludes_dark_pool():
+    client = KrakenSpot()
+    client._request = lambda *args, **kwargs: {
+        "XXBTZEUR": {"altname": "XBTEUR", "wsname": "XBT/EUR", "aclass_base": "currency", "aclass_quote": "currency", "status": "online"},
+        "XETHZUSD": {"altname": "ETHUSD", "wsname": "ETH/USD", "aclass_base": "currency", "aclass_quote": "currency", "status": "online"},
+        "XXBTZEUR.d": {"altname": "XBTEUR.d", "wsname": "XBT/EUR.d", "aclass_base": "currency", "aclass_quote": "currency", "status": "online"},
+        "XBADZUSD": {"altname": "BADUSD", "wsname": "BAD/USD", "aclass_base": "currency", "aclass_quote": "currency", "status": "maintenance"},
+        "XBTZUSD": {"altname": "XBTUSD", "wsname": "XBT/USD", "aclass_base": "equity", "aclass_quote": "currency", "status": "online"},
+    }
+
+    pairs = client.discover_pairs()
+
+    assert {pair["symbol"] for pair in pairs} == {"XBTEUR", "ETHUSD"}
+    assert client._pair_cache["XBTEUR"][0] == "XXBTZEUR"
+
+
+def test_tickers_without_symbols_fetches_all_discovered_markets():
+    client = KrakenSpot()
+    client._request = lambda path, data=None, private=False: (
+        {
+            "XXBTZEUR": {"altname": "XBTEUR", "wsname": "XBT/EUR", "aclass_base": "currency", "aclass_quote": "currency", "status": "online"},
+            "XETHZUSD": {"altname": "ETHUSD", "wsname": "ETH/USD", "aclass_base": "currency", "aclass_quote": "currency", "status": "online"},
+        } if path.endswith("AssetPairs") else {
+            "XXBTZEUR": {"b": ["60000"], "a": ["60010"], "c": ["60005"], "v": ["10", "20"]},
+            "XETHZUSD": {"b": ["3000"], "a": ["3001"], "c": ["3000.5"], "v": ["100", "200"]},
+        }
+    )
+
+    tickers = client.tickers()
+
+    assert {item["symbol"] for item in tickers} == {"XBTEUR", "ETHUSD"}
+    by_symbol = {item["symbol"]: item for item in tickers}
+    assert by_symbol["XBTEUR"]["quote"] == "EUR"
+    assert by_symbol["ETHUSD"]["quote"] == "USD"
+    assert by_symbol["XBTEUR"]["turnover24h"] == 1200100.0
