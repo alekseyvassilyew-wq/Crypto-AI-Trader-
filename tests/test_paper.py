@@ -72,12 +72,16 @@ def test_equity_rejects_non_finite_mark_price():
 
 
 def test_load_rejects_corrupted_persisted_position(tmp_path):
-    from src.trader.db import connect, set_state
+    import json
+    from src.trader.db import connect
     db = connect(tmp_path / "corrupt.sqlite3")
-    set_state(db, "paper_broker", {
+    # Simulate legacy/corrupt data written outside the validated state helper.
+    payload = json.dumps({
         "cash": 10,
         "positions": {"XBTEUR": {"qty": float("nan"), "avg_price": 10}},
     })
+    db.execute("INSERT INTO app_state(key, value) VALUES(?, ?)", ("paper_broker", payload))
+    db.commit()
     with pytest.raises(ValueError):
         PaperBroker(db=db)
     db.close()
