@@ -66,7 +66,7 @@ class KrakenSpot:
             else:
                 response = self.session.get(url, params=data, timeout=self.timeout)
             response.raise_for_status()
-        except requests.RequestException as exc:
+        except (requests.Timeout, requests.ConnectionError) as exc:
             raise RuntimeError(f"Kraken network request failed: {exc}") from exc
         try:
             result = response.json()
