@@ -113,9 +113,18 @@ def build_app(s, engine, exchange):
         try:
             actions = await context.application.bot_data["run_blocking"].run(engine.cycle)
             if actions:
-                await context.bot.send_message(chat_id=s.admin_id, text="PAPER cycle:\n" + "\n".join(actions)[:3500])
-        except Exception:
+                message = "PAPER cycle:\\n" + "\\n".join(actions)
+                await send_topic(context, s.topic_trades_id, message)
+                if any(token in " ".join(actions) for token in ("SELL", "STOP_LOSS", "TAKE_PROFIT", "DAILY LOSS")):
+                    await send_topic(context, s.topic_profit_id, message)
+                if any("DAILY LOSS" in item for item in actions):
+                    await send_topic(context, s.topic_general_id, "⏸ Достигнут дневной лимит убытка. PAPER остановлен.")
+        except Exception as exc:
             log.exception("Trading cycle failed")
+            try:
+                await send_topic(context, s.topic_errors_id, f"Ошибка торгового цикла: {type(exc).__name__}: {str(exc)[:700]}")
+            except Exception:
+                log.exception("Could not send error notification to Telegram topic")
 
     app = Application.builder().token(s.bot_token).build()
     # Run synchronous exchange/SQLite work in a worker thread to keep Telegram responsive.
