@@ -160,7 +160,9 @@ class KrakenSpot:
                     ask = _finite_number(ticker["a"][0], "ask", positive=True)
                     last = _finite_number(ticker["c"][0], "last price", positive=True)
                     base_volume_24h = _finite_number(ticker["v"][1], "24h volume", non_negative=True)
-                except (KeyError, IndexError, TypeError) as exc:
+                except (KeyError, IndexError, TypeError, ValueError, OverflowError):
+                    # One inactive/illiquid market may expose a zero or malformed
+                    # last price. Skip that ticker without aborting the full scan.
                     continue
                 if ask < bid:
                     continue
