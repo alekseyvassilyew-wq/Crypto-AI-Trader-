@@ -54,7 +54,7 @@ def build_app(s, engine, exchange):
             ]
             lines.extend(f"{x['symbol']}: {x['signal']} ({x.get('score', 0)}/5), цена {x.get('price', 0):,.8g}" for x in ranked)
             lines.append("Все рынки получают мониторинг котировок; анализ свечей ограничен бюджетом запросов.")
-            await update.effective_message.reply_text("\\n".join(lines)[:3900])
+            await update.effective_message.reply_text("\n".join(lines)[:3900])
         except Exception:
             log.exception("Market scan failed")
             await update.effective_message.reply_text("Ошибка сканирования. Подробности в логах Render.")
