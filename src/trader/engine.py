@@ -330,11 +330,11 @@ class Engine:
         return [self.scan_one(symbol, tickers) for symbol in symbols]
 
     def cycle(self):
-        if self.paused:
-            return []
         self._ensure_day()
         try:
-            results = self.scan(seed_wallet=True)
+            # Continue read-only market monitoring while paused, but never
+            # seed or mutate the virtual wallet until PAPER is explicitly run.
+            results = self.scan(seed_wallet=not self.paused)
             self.last_scan_at = datetime.now(timezone.utc)
             # Every open position must have a fresh, executable two-sided quote.
             # Never silently skip a stop/exit or mark missing prices at cost basis.
@@ -359,6 +359,8 @@ class Engine:
             }
             self.last_signals = results
             set_state(self.db, "paper_fx_rates", self._fx_rates(self.last_prices))
+            if self.paused:
+                return []
         except Exception as exc:
             # Never trade on partial or stale market data after an exchange failure.
             audit(self.db, "SCAN_FAILED", f"{type(exc).__name__}: {exc}")
