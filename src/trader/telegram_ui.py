@@ -489,6 +489,76 @@ def build_app(s, engine, exchange):
         fn = handlers.get(q.data)
         if fn: await fn(update, context)
 
+    async def ml_research_job(context):
+        """Daily, bounded model refresh on the most liquid eligible markets."""
+        try:
+            def research_top_markets():
+                from datetime import datetime, timezone
+                from .db import get_state, set_state
+                from .learning import research_candidate
+                today = datetime.now(timezone.utc).date().isoformat()
+                previous = get_state(engine.db, "ml_auto_research_date", {})
+                if isinstance(previous, dict) and previous.get("date") == today:
+                    return []
+                pairs = exchange.discover_pairs()
+                tickers = exchange.tickers()
+                engine.market_pairs = pairs
+                prices = {
+                    item["symbol"]: float(item.get("lastPrice") or 0)
+                    for item in tickers if float(item.get("lastPrice") or 0) > 0
+                }
+                rates = engine._fx_rates(prices)
+                by_symbol = {item["symbol"]: item for item in tickers}
+                eligible = []
+                for pair in pairs:
+                    ticker = by_symbol.get(pair["symbol"])
+                    quote = str(pair.get("quote") or "").upper()
+                    rate = rates.get(quote, 0.0)
+                    if not ticker or rate <= 0:
+                        continue
+                    bid, ask = float(ticker.get("bid1Price") or 0), float(ticker.get("ask1Price") or 0)
+                    spread = (ask - bid) / ((ask + bid) / 2) * 10000 if bid > 0 and ask > 0 else 999999
+                    turnover_eur = float(ticker.get("turnover24h") or 0) * rate
+                    if spread <= s.max_spread_bps and turnover_eur >= s.min_turnover:
+                        eligible.append((turnover_eur, pair["symbol"]))
+                eligible.sort(reverse=True)
+                trained = []
+                for _, symbol in eligible[:s.ml_auto_research_markets]:
+                    try:
+                        candles = exchange.candles(symbol, interval="60", limit=720)
+                        candidate = research_candidate(candles, fee_rate=s.fee_rate, slippage_bps=5.0)
+                        version_time = datetime.now(timezone.utc)
+                        candidate["symbol"] = symbol
+                        candidate["model_version"] = version_time.strftime("%Y%m%dT%H%M%S")
+                        candidate["trained_at_utc"] = version_time.isoformat()
+                        set_state(engine.db, "ml_candidate_" + symbol, candidate)
+                        trained.append({
+                            "symbol": symbol,
+                            "pass": bool(candidate["research_pass"]),
+                            "samples": candidate["samples"],
+                            "version": candidate["model_version"],
+                        })
+                    except Exception as market_exc:
+                        log.warning("Automatic model research skipped %s: %s", symbol, market_exc)
+                if trained:
+                    set_state(engine.db, "ml_auto_research_date", {"date": today, "markets": trained})
+                return trained
+
+            trained = await context.application.bot_data["run_blocking"].run(research_top_markets)
+            if trained:
+                summary = "\n".join(
+                    f"{item['symbol']}: {'research PASS' if item['pass'] else 'not passed'} "
+                    f"({item['samples']} samples; shadow only)"
+                    for item in trained
+                )
+                await send_topic(context, s.topic_general_id, "🧠 Ежедневное исследование моделей завершено.\n" + summary)
+        except Exception as exc:
+            log.exception("Automatic daily ML research failed")
+            try:
+                await send_topic(context, s.topic_errors_id, f"Ошибка ежедневного ML-исследования: {type(exc).__name__}: {exc}")
+            except Exception:
+                log.exception("Could not send ML research error to Telegram")
+
     async def cycle_job(context):
         import time
         now = time.monotonic()
@@ -567,4 +637,5 @@ def build_app(s, engine, exchange):
         app.add_handler(CommandHandler(name, fn))
     app.add_handler(CallbackQueryHandler(callback))
     app.job_queue.run_repeating(cycle_job, interval=1, first=10, name="paper-cycle")
+    app.job_queue.run_repeating(ml_research_job, interval=3600, first=60, name="daily-ml-research")
     return app
