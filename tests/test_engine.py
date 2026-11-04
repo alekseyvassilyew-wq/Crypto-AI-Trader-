@@ -263,7 +263,7 @@ def test_manual_market_scan_does_not_rebalance_paper_wallet(tmp_path):
 
         def tickers(self):
             return [
-                {"symbol": "USDZEUR", "bid1Price": 0.89, "ask1Price": 0.90, "lastPrice": 0.895, "turnover24h": 50000},
+                {"symbol": "USDZEUR", "bid1Price": 0.8999, "ask1Price": 0.9001, "lastPrice": 0.9, "turnover24h": 50000},
                 {"symbol": "USDTZEUR", "bid1Price": 0.89, "ask1Price": 0.90, "lastPrice": 0.895, "turnover24h": 50000},
             ]
 
