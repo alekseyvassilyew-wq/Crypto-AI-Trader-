@@ -1,4 +1,6 @@
 import logging
+import html
+from datetime import datetime, timezone
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
@@ -43,7 +45,7 @@ def build_app(s, engine, exchange):
             message = message.replace(s.bot_token, "[REDACTED]")
         return f"{type(exc).__name__}: {message[:500]}"
 
-    def format_error(exc, action, user=None):
+    def format_error(exc, action, user=None, source="Crypto AI Trader"):
         import traceback
         if user:
             username = f"@{user.username}" if user.username else "без username"
@@ -51,24 +53,28 @@ def build_app(s, engine, exchange):
         else:
             who = "— (—)"
         trace = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-        # Telegram Bot API request URLs contain the bot token; redact defensively
-        # before sending exception details to chats or persistent logs.
         if s.bot_token:
             trace = trace.replace(s.bot_token, "[REDACTED]")
         description = safe_error_message(exc)
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         return (
-            "🚨 ОШИБКА CRYPTO AI TRADER\n"
-            f"👤 Кто: {who}\n"
-            f"💬 Действие: {action}\n"
-            f"⚠️ Тип: {type(exc).__name__}\n"
-            f"📝 Описание: {description}\n"
-            "📋 Трейс:\n"
-            + '```python\n' + trace[-2200:] + '\n```'
+            "🚨 <b>ОШИБКА БОТА</b>\\n"
+            f"🕒 Время: <code>{timestamp}</code>\\n"
+            f"🧩 Источник: <b>{html.escape(source)}</b>\\n"
+            f"👤 Кто: {html.escape(who)}\\n"
+            f"💬 Действие: {html.escape(str(action))}\\n"
+            f"⚠️ Тип: <code>{html.escape(type(exc).__name__)}</code>\\n"
+            f"📝 Описание: {html.escape(description)}\\n"
+            "📋 <b>Трейс:</b>\\n"
+            f"<pre>{html.escape(trace[-2600:])}</pre>"
         )[:3900]
-    async def send_topic(context, topic_id, text):
+
+    async def send_topic(context, topic_id, text, parse_mode=None):
         if not s.telegram_group_chat_id:
             return
         kwargs = {"chat_id": s.telegram_group_chat_id, "text": text[:3900]}
+        if parse_mode:
+            kwargs["parse_mode"] = parse_mode
         if topic_id:
             kwargs["message_thread_id"] = topic_id
         await context.bot.send_message(**kwargs)
@@ -156,7 +162,7 @@ def build_app(s, engine, exchange):
             # exception type/message in the private owner Telegram response.
             log.error("Market scan failed: %s", type(exc).__name__)
             await update.effective_message.reply_text(
-                format_error(exc, "/scan", update.effective_user)
+                format_error(exc, "/scan", update.effective_user), parse_mode="HTML"
             )
 
     async def backtest(update, context):
@@ -803,7 +809,7 @@ def build_app(s, engine, exchange):
                 log.error("Could not pause after cycle failure: %s", type(stop_exc).__name__)
             log.error("Trading cycle failed: %s", type(exc).__name__)
             try:
-                await send_topic(context, s.topic_errors_id, format_error(exc, "автоматический торговый цикл"))
+                await send_topic(context, s.topic_errors_id, format_error(exc, "автоматический торговый цикл"), parse_mode="HTML")
             except Exception:
                 log.error("Could not send error notification to Telegram topic")
             return
@@ -935,7 +941,8 @@ def build_app(s, engine, exchange):
         try:
             await send_topic(
                 context, s.topic_errors_id,
-                f"🚨 Ошибка Telegram: {error_name}"
+                format_error(error, "обработчик Telegram", getattr(update, "effective_user", None), source="Telegram"),
+                parse_mode="HTML",
             )
         except Exception:
             log.error("Could not notify Telegram error topic")
