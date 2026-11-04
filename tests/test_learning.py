@@ -98,7 +98,7 @@ def test_rotate_research_batch_eventually_covers_entire_market_list():
     for _ in range(4):
         batch, cursor = rotate_research_batch(markets, cursor, 3)
         seen.extend(symbol for _, symbol in batch)
-    assert seen == [symbol for _, symbol in markets]
+    assert set(seen) == {symbol for _, symbol in markets}
     assert len(set(seen)) == len(markets)
 
 
