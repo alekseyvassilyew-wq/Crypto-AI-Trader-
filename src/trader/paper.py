@@ -52,6 +52,7 @@ class PaperBroker:
                     "qty": _finite_number(position.get("qty"), f"{symbol} quantity", minimum=0, strict_minimum=True),
                     "avg_price": _finite_number(position.get("avg_price"), f"{symbol} average price", minimum=0, strict_minimum=True),
                     "quote_currency": str(position.get("quote_currency", "EUR")).upper(),
+                    "peak_price": _finite_number(position.get("peak_price", position.get("avg_price")), f"{symbol} peak price", minimum=0, strict_minimum=True),
                 }
         else:
             self.cash_by_currency = {"EUR": initial}
@@ -128,10 +129,27 @@ class PaperBroker:
             raise ValueError("Paper buy would create an invalid account state")
         self.cash_by_currency[currency] = max(0.0, new_cash)
         self._sync_cash()
-        self.positions[symbol] = {"qty": total_qty, "avg_price": average, "quote_currency": currency}
+        peak_price = max(float(old.get("peak_price", old_avg) or old_avg), price)
+        self.positions[symbol] = {
+            "qty": total_qty, "avg_price": average, "quote_currency": currency,
+            "peak_price": peak_price,
+        }
         self._persist()
         return {"symbol": symbol, "side": "Buy", "qty": qty, "quote": quote,
                 "currency": currency, "fee": fee, "price": price, "status": "FILLED"}
+
+    def update_peak(self, symbol, price):
+        """Persist the highest observed mark for a position's trailing stop."""
+        symbol = self._validate_symbol(symbol)
+        if symbol not in self.positions:
+            return None
+        price = _finite_number(price, "mark price", minimum=0, strict_minimum=True)
+        position = self.positions[symbol]
+        peak = max(float(position.get("peak_price", position["avg_price"])), price)
+        if peak != position.get("peak_price"):
+            position["peak_price"] = peak
+            self._persist()
+        return peak
 
     def sell(self, symbol, qty, price):
         symbol = self._validate_symbol(symbol)
