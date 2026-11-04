@@ -87,3 +87,24 @@ def test_research_candidate_declares_executable_fill_assumptions():
     assert result["assumptions"]["signal"] == "after signal candle close"
     assert result["assumptions"]["entry"] == "next candle open with adverse slippage"
     assert result["assumptions"]["exit"] == "close of horizon candle with adverse slippage"
+
+
+def test_rotate_research_batch_eventually_covers_entire_market_list():
+    from src.trader.learning import rotate_research_batch
+
+    markets = [(1000 - i, f"COIN{i}EUR") for i in range(11)]
+    cursor = 0
+    seen = []
+    for _ in range(4):
+        batch, cursor = rotate_research_batch(markets, cursor, 3)
+        seen.extend(symbol for _, symbol in batch)
+    assert seen == [symbol for _, symbol in markets]
+    assert len(set(seen)) == len(markets)
+
+
+def test_rotate_research_batch_handles_empty_list_and_invalid_size():
+    from src.trader.learning import rotate_research_batch
+
+    assert rotate_research_batch([], 0, 3) == ([], 0)
+    with pytest.raises(ValueError, match="batch_size"):
+        rotate_research_batch([("COIN", 1)], 0, 0)
