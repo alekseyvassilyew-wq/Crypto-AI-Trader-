@@ -185,9 +185,9 @@ def test_non_eur_trade_spends_existing_quote_currency_without_converting_eur(tmp
     engine.last_prices = {"USDZEUR": 0.9, "ETHUSD": 3000}
     engine.scan = lambda **kwargs: [
         {"symbol": "USDZEUR", "quote": "EUR", "signal": "HOLD", "score": 0,
-         "price": 0.9, "spread_bps": 10, "turnover": 50000, "turnover_eur": 45000, "reasons": []},
+         "price": 0.9, "bid": 0.899, "ask": 0.901, "spread_bps": 10, "turnover": 50000, "turnover_eur": 45000, "reasons": []},
         {"symbol": "ETHUSD", "quote": "USD", "signal": "BUY", "score": 10,
-         "price": 3000, "spread_bps": 10, "turnover": 50000, "turnover_eur": 45000, "reasons": []},
+         "price": 3000, "bid": 2999, "ask": 3001, "spread_bps": 10, "turnover": 50000, "turnover_eur": 45000, "reasons": []},
     ]
     engine.start()
     actions = engine.cycle()
@@ -209,9 +209,9 @@ def test_non_eur_signal_can_convert_eur_to_fund_quote_wallet(tmp_path):
     engine.last_prices = {"USDZEUR": 0.9, "ETHUSD": 3000}
     engine.scan = lambda **kwargs: [
         {"symbol": "USDZEUR", "quote": "EUR", "signal": "HOLD", "score": 0,
-         "price": 0.9, "spread_bps": 10, "turnover": 50000, "turnover_eur": 45000, "reasons": []},
+         "price": 0.9, "bid": 0.899, "ask": 0.901, "spread_bps": 10, "turnover": 50000, "turnover_eur": 45000, "reasons": []},
         {"symbol": "ETHUSD", "quote": "USD", "signal": "BUY", "score": 10,
-         "price": 3000, "spread_bps": 10, "turnover": 50000, "turnover_eur": 45000, "reasons": []},
+         "price": 3000, "bid": 2999, "ask": 3001, "spread_bps": 10, "turnover": 50000, "turnover_eur": 45000, "reasons": []},
     ]
     engine.start()
     actions = engine.cycle()
@@ -287,7 +287,7 @@ def test_engine_trailing_stop_closes_position_after_retracement(tmp_path):
     engine.s.trailing_stop_pct = 1.5
     engine.paper.buy('XBTEUR', 5, 10)
     engine.paper.update_peak('XBTEUR', 10.5)
-    engine.scan = lambda **kwargs: [{'symbol': 'XBTEUR', 'quote': 'EUR', 'signal': 'HOLD', 'score': 0, 'price': 10.3, 'spread_bps': 10, 'turnover': 50000, 'turnover_eur': 50000, 'reasons': []}]
+    engine.scan = lambda **kwargs: [{'symbol': 'XBTEUR', 'quote': 'EUR', 'signal': 'HOLD', 'score': 0, 'price': 10.3, 'bid': 10.29, 'ask': 10.31, 'spread_bps': 10, 'turnover': 50000, 'turnover_eur': 50000, 'reasons': []}]
     engine.start()
     actions = engine.cycle()
     assert any('XBTEUR SELL TRAILING_STOP' in action for action in actions)
@@ -302,8 +302,8 @@ def test_buy_candidates_are_ranked_by_score(tmp_path):
     engine.s.max_positions = 1
     engine.s.max_trade = 5
     engine.scan = lambda **kwargs: [
-        {'symbol': 'LOWEUR', 'quote': 'EUR', 'signal': 'BUY', 'score': 2, 'price': 10, 'spread_bps': 10, 'turnover': 50000, 'turnover_eur': 50000, 'reasons': []},
-        {'symbol': 'HIGHEUR', 'quote': 'EUR', 'signal': 'BUY', 'score': 5, 'price': 10, 'spread_bps': 10, 'turnover': 50000, 'turnover_eur': 50000, 'reasons': []},
+        {'symbol': 'LOWEUR', 'quote': 'EUR', 'signal': 'BUY', 'score': 2, 'price': 10, 'bid': 9.99, 'ask': 10.01, 'spread_bps': 10, 'turnover': 50000, 'turnover_eur': 50000, 'reasons': []},
+        {'symbol': 'HIGHEUR', 'quote': 'EUR', 'signal': 'BUY', 'score': 5, 'price': 10, 'bid': 9.99, 'ask': 10.01, 'spread_bps': 10, 'turnover': 50000, 'turnover_eur': 50000, 'reasons': []},
     ]
     engine.start()
     actions = engine.cycle()
