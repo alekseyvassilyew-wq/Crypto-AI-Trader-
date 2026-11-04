@@ -160,7 +160,7 @@ def settle_shadow_predictions(db, *, symbol, candles, fee_rate, slippage_bps):
                 continue
             exit_price = float(exit_row[4])
             entry_price = float(prediction["entry_price"])
-            net_return = exit_price * (1.0 - fee - slip) / (entry_price * (1.0 + fee + slip)) - 1.0
+            net_return = (exit_price * (1.0 - slip) * (1.0 - fee)) / (entry_price * (1.0 + slip) * (1.0 + fee)) - 1.0
             db.execute(
                 "UPDATE ml_shadow_predictions SET exit_price=?,realized_return=? WHERE id=? AND realized_return IS NULL",
                 (exit_price, net_return, prediction["id"]),
