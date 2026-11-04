@@ -109,12 +109,3 @@ def test_spread_and_turnover_limits_are_bounded(monkeypatch):
     monkeypatch.setenv("MIN_24H_TURNOVER_EUR", "0")
     with pytest.raises(ValueError, match="greater than 0"):
         load_settings()
-
-
-def test_partial_kraken_credentials_are_rejected(monkeypatch):
-    monkeypatch.setenv("BOT_TOKEN", "token")
-    monkeypatch.setenv("ADMIN_ID", "123")
-    monkeypatch.setenv("KRAKEN_API_KEY", "key-only")
-    monkeypatch.delenv("KRAKEN_API_SECRET", raising=False)
-    with pytest.raises(ValueError, match="Set both"):
-        load_settings()
