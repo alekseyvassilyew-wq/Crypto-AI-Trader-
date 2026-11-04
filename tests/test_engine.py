@@ -306,7 +306,7 @@ def test_manual_market_scan_does_not_rebalance_paper_wallet(tmp_path):
 def test_engine_trailing_stop_closes_position_after_retracement(tmp_path):
     engine, db = make_engine(tmp_path)
     engine.s.trailing_stop_pct = 1.5
-    engine.paper.buy('XBTEUR', 5, 10)
+    engine.paper.buy('XBTEUR', 5, 10, quote_to_eur_rate=1.0)
     engine.paper.update_peak('XBTEUR', 10.5)
     engine.scan = lambda **kwargs: [{'symbol': 'XBTEUR', 'quote': 'EUR', 'signal': 'HOLD', 'score': 0, 'price': 10.3, 'bid': 10.29, 'ask': 10.31, 'spread_bps': 10, 'turnover': 50000, 'turnover_eur': 50000, 'reasons': []}]
     engine.start()
