@@ -359,7 +359,7 @@ def run_portfolio_backtest(
             entry_fee = spend * fee
             qty = spend / fill
             cash[quote] -= spend + entry_fee
-            fees_paid += entry_fee
+            fees_paid += entry_fee * quote_rate
             positions[symbol] = {
                 "quote": quote, "qty": qty, "entry_price": fill,
                 "entry_quote": spend, "entry_fee": entry_fee,
