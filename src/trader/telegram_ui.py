@@ -563,7 +563,7 @@ def build_app(s, engine, exchange):
                     f"({item['samples']} samples; shadow only)"
                     for item in trained
                 )
-                await send_topic(context, s.topic_general_id, "🧠 Ежедневное исследование моделей завершено.\n" + summary)
+                await send_topic(context, s.topic_general_id, "🧠 Плановое исследование моделей завершено.\n" + summary)
         except Exception as exc:
             log.exception("Automatic periodic ML research failed")
             try:
