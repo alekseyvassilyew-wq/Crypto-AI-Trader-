@@ -107,7 +107,7 @@ def poll_external_events(settings, state: dict) -> list[dict[str, str]]:
                 conclusion = str(run.get("conclusion") or "").lower()
                 created_at = str(run.get("created_at") or "")
                 old_status = previous.get(run_id) if isinstance(previous, dict) else None
-                is_new_after_baseline = bool(baseline and created_at and created_at > baseline)
+                is_new_after_baseline = bool(baseline and created_at and created_at >= baseline)
                 completed_now = status == "completed" and (
                     old_status not in (None, "completed") or
                     (old_status is None and is_new_after_baseline)
