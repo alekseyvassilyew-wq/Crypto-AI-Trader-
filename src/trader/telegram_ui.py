@@ -988,7 +988,6 @@ def build_app(s, engine, exchange):
 
             # Commit only after all sends succeeded. Empty event batches still
             # commit polling cursors so the initial baseline is persisted.
-            from datetime import datetime, timezone
             state["last_poll_at"] = datetime.now(timezone.utc).isoformat()
             state["last_events_count"] = len(events)
             if events:
