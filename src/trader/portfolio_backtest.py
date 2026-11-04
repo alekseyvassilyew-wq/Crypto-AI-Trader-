@@ -279,20 +279,24 @@ def run_portfolio_backtest(
             required_quote = budget_eur * quote_buy_rate
             quote_balance = cash.get(quote, 0.0)
             conversion_fee_for_trade = 0.0
-            if quote_balance + 1e-12 < required_quote * (1 + fee):
-                # Convert only the shortfall using executable buy-side FX rates.
+            if quote != "EUR" and quote_balance + 1e-12 < required_quote * (1 + fee):
+                # Spend available EUR first, then route only the residual shortfall.
                 shortfall_quote = required_quote * (1 + fee) - quote_balance
                 source_eur_needed = shortfall_quote / (quote_buy_rate * (1 - fee))
-                if cash.get("EUR", 0.0) + 1e-12 >= source_eur_needed:
-                    cash["EUR"] -= source_eur_needed
-                    received = source_eur_needed * quote_buy_rate * (1 - fee)
-                    cash[quote] = quote_balance + received
-                    conversion_fee = source_eur_needed * fee
+                eur_used = min(cash.get("EUR", 0.0), source_eur_needed)
+                if eur_used > 1e-12:
+                    cash["EUR"] -= eur_used
+                    received = eur_used * quote_buy_rate * (1 - fee)
+                    cash[quote] = cash.get(quote, 0.0) + received
+                    conversion_fee = eur_used * fee
                     fees_paid += conversion_fee
                     conversion_fee_for_trade += conversion_fee
-                else:
-                    # Cross-currency funding routes through EUR and pays a fee
-                    # on each exchange leg, not one synthetic fee.
+                quote_balance = cash.get(quote, 0.0)
+                shortfall_quote = max(0.0, required_quote * (1 + fee) - quote_balance)
+                source_eur_needed = shortfall_quote / (quote_buy_rate * (1 - fee)) if shortfall_quote > 1e-12 else 0.0
+                # Cross-currency funding routes through EUR and pays a fee
+                # on each exchange leg, not one synthetic fee.
+                if source_eur_needed > 1e-12:
                     for source in sorted(c for c, amount in cash.items()
                                          if c not in (quote, "EUR") and amount > 1e-12):
                         source_rate = execution_rates.get(source)
@@ -305,14 +309,10 @@ def run_portfolio_backtest(
                         if source_amount <= 1e-12:
                             continue
                         eur_received = source_amount * source_rate * (1 - fee)
-                        if quote == "EUR":
-                            received = eur_received
-                            conversion_fee = source_amount * source_rate * fee
-                        else:
-                            received = eur_received * quote_buy_rate * (1 - fee)
-                            first_fee_eur = source_amount * source_rate * fee
-                            second_fee_eur = eur_received * quote_buy_rate * fee * quote_rate
-                            conversion_fee = first_fee_eur + second_fee_eur
+                        received = eur_received * quote_buy_rate * (1 - fee)
+                        first_fee_eur = source_amount * source_rate * fee
+                        second_fee_eur = eur_received * quote_buy_rate * fee * quote_rate
+                        conversion_fee = first_fee_eur + second_fee_eur
                         cash[source] -= source_amount
                         cash[quote] = cash.get(quote, 0.0) + received
                         fees_paid += conversion_fee
