@@ -693,23 +693,26 @@ def build_app(s, engine, exchange):
                     f"За последние {hours} ч. нет сохранённых PAPER-измерений. "
                     "Запусти /run и оставь PAPER работать для сбора статистики."
                 )
+            by_symbol_text = ", ".join(
+                "{} {:+.4f} EUR".format(item["symbol"], item["realized_pnl_eur"])
+                for item in metrics["by_symbol"][:5]
+            ) or "пока нет закрытых сделок"
             await update.effective_message.reply_text(
-                f"📈 PAPER FORWARD-TEST — {hours} ч.\n"
-                f"Измерений: {metrics['samples']}\n"
-                f"Капитал: {metrics['start_equity_eur']:.4f} → {metrics['end_equity_eur']:.4f} EUR\n"
-                f"Изменение: {metrics['change_eur']:+.4f} EUR ({metrics['change_pct']:+.2f}%)\n"
-                f"Макс. наблюдаемая просадка: {metrics['max_observed_drawdown_pct']:.2f}%\n"
-                f"Среднее число позиций: {metrics['avg_open_positions']:.2f}\n"
-                f"Сигналов BUY: {metrics['buy_signals']}\n"
-                f"Среднее число анализируемых рынков за цикл: {metrics['avg_analyzed_markets']:.1f}\n"
-                f"Закрытых сделок: {metrics['closed_trades']} | без EUR-оценки: {metrics['closed_trades_without_eur_valuation']}\n"
-                f"Прибыльных: {metrics['winning_trades']} | убыточных: {metrics['losing_trades']}\n"
-                f"Win rate: {metrics['win_rate_pct']:.1f}% | Profit factor: {metrics['profit_factor']}\n"
-                f"Реализованный P/L: {metrics['realized_pnl_eur']:+.4f} EUR\n"
-                f"Комиссии по исполнениям: {metrics['total_fees_eur']:.4f} EUR | без EUR-оценки: {metrics['fills_without_eur_fee_valuation']}\n"
-                by_symbol_text = ", ".join("{} {:+.4f} EUR".format(item["symbol"], item["realized_pnl_eur"]) for item in metrics["by_symbol"][:5]) or "пока нет закрытых сделок"
-                f"По монетам: {by_symbol_text}\n"
-                f"Период: {metrics['first_ts']} — {metrics['last_ts']} UTC\n"
+                f"📈 PAPER FORWARD-TEST — {hours} ч.\\n"
+                f"Измерений: {metrics['samples']}\\n"
+                f"Капитал: {metrics['start_equity_eur']:.4f} → {metrics['end_equity_eur']:.4f} EUR\\n"
+                f"Изменение: {metrics['change_eur']:+.4f} EUR ({metrics['change_pct']:+.2f}%)\\n"
+                f"Макс. наблюдаемая просадка: {metrics['max_observed_drawdown_pct']:.2f}%\\n"
+                f"Среднее число позиций: {metrics['avg_open_positions']:.2f}\\n"
+                f"Сигналов BUY: {metrics['buy_signals']}\\n"
+                f"Среднее число анализируемых рынков за цикл: {metrics['avg_analyzed_markets']:.1f}\\n"
+                f"Закрытых сделок: {metrics['closed_trades']} | без EUR-оценки: {metrics['closed_trades_without_eur_valuation']}\\n"
+                f"Прибыльных: {metrics['winning_trades']} | убыточных: {metrics['losing_trades']}\\n"
+                f"Win rate: {metrics['win_rate_pct']:.1f}% | Profit factor: {metrics['profit_factor']}\\n"
+                f"Реализованный P/L: {metrics['realized_pnl_eur']:+.4f} EUR\\n"
+                f"Комиссии по исполнениям: {metrics['total_fees_eur']:.4f} EUR | без EUR-оценки: {metrics['fills_without_eur_fee_valuation']}\\n"
+                f"По монетам: {by_symbol_text}\\n"
+                f"Период: {metrics['first_ts']} — {metrics['last_ts']} UTC\\n"
                 "Это изменение стоимости PAPER-портфеля, а не доказательство будущей доходности."
             )
         except Exception as exc:
