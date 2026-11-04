@@ -3,6 +3,7 @@ import html
 from datetime import datetime, timezone
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.request import HTTPXRequest
 
 log = logging.getLogger(__name__)
 
@@ -934,7 +935,12 @@ def build_app(s, engine, exchange):
                 name="paper-cycle",
             )
 
-    app = Application.builder().token(s.bot_token).build()
+    # External event alerts must tolerate transient Telegram API latency.
+    telegram_request = HTTPXRequest(
+        connect_timeout=10, read_timeout=30, write_timeout=30, pool_timeout=10,
+        connection_pool_size=16,
+    )
+    app = Application.builder().token(s.bot_token).request(telegram_request).build()
     # Serialize all exchange/SQLite work: cycle jobs, scans and backtests share
     # one requests.Session, engine state and SQLite connection.
     from .worker import SerializedRunner
@@ -948,6 +954,7 @@ def build_app(s, engine, exchange):
         """Poll optional Render/GitHub APIs and route status changes to Telegram."""
         if not (s.render_api_key and s.render_service_id or s.github_repository):
             return
+        stage = "polling external APIs"
         try:
             from .monitoring import poll_external_events
             def poll_without_committing():
@@ -966,7 +973,9 @@ def build_app(s, engine, exchange):
                 return
 
             state, events = await context.application.bot_data["run_blocking"].run(poll_without_committing)
+            log.info("External monitoring APIs polled; pending_notifications=%d", len(events))
             for event in events:
+                stage = f"sending {event.get('source', 'external')} notification"
                 source = html.escape(event["source"])
                 status = html.escape(event["status"])
                 title = html.escape(event["title"])
@@ -988,6 +997,7 @@ def build_app(s, engine, exchange):
 
             # Commit only after all sends succeeded. Empty event batches still
             # commit polling cursors so the initial baseline is persisted.
+            stage = "persisting monitoring state"
             state["last_poll_at"] = datetime.now(timezone.utc).isoformat()
             state["last_events_count"] = len(events)
             if events:
@@ -998,7 +1008,7 @@ def build_app(s, engine, exchange):
                 set_state(engine.db, "external_monitor_state", state)
             await context.application.bot_data["run_blocking"].run(persist_monitor_state)
         except Exception as exc:
-            log.warning("External monitoring job failed: %s", type(exc).__name__)
+            log.warning("External monitoring job failed during %s: %s", stage, type(exc).__name__)
 
     async def application_error_handler(update, context):
         error = context.error
