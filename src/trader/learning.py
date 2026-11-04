@@ -166,6 +166,33 @@ def _performance(trades, threshold, horizon=1):
     }
 
 
+def _probability_diagnostics(predictions, horizon=3, thresholds=(0.50, 0.52, 0.55, 0.58, 0.60)):
+    """Describe model confidence and threshold sensitivity without selecting a threshold."""
+    probabilities = [float(item[1]) for item in predictions]
+    if not probabilities:
+        return {
+            "prediction_count": 0, "min": None, "mean": None, "median": None,
+            "p90": None, "max": None, "thresholds": {},
+            "interpretation": "NO_OUT_OF_SAMPLE_PREDICTIONS",
+        }
+    ordered = sorted(probabilities)
+
+    def percentile(fraction):
+        index = min(len(ordered) - 1, max(0, math.ceil(fraction * len(ordered)) - 1))
+        return ordered[index]
+
+    sweep = {}
+    for threshold in thresholds:
+        sweep[f"{threshold:.2f}"] = _performance(predictions, float(threshold), int(horizon))
+    return {
+        "prediction_count": len(probabilities), "min": ordered[0],
+        "mean": sum(probabilities) / len(probabilities),
+        "median": percentile(0.50), "p90": percentile(0.90), "max": ordered[-1],
+        "thresholds": sweep,
+        "interpretation": "DIAGNOSTIC_ONLY_NOT_FOR_THRESHOLD_SELECTION",
+    }
+
+
 def research_candidate(rows, *, horizon=3, fee_rate=0.0026, slippage_bps=5.0,
                        probability_threshold=0.58, min_train=120, min_validation=20):
     """Run expanding-window walk-forward evaluation on closed OHLCV candles."""
@@ -249,6 +276,12 @@ def research_candidate(rows, *, horizon=3, fee_rate=0.0026, slippage_bps=5.0,
     ]
     aggregate = _performance(all_oos, threshold, int(horizon))
     independent_holdout = _performance(holdout_predictions, threshold, int(horizon))
+    probability_diagnostics = {
+        "walk_forward_oos": _probability_diagnostics(all_oos, horizon),
+        "independent_holdout": _probability_diagnostics(holdout_predictions, horizon),
+        "configured_threshold": threshold,
+        "warning": "Threshold sweep is descriptive only; do not choose a production threshold from the same OOS/holdout data.",
+    }
 
     def regime_for(features):
         momentum_24 = float(features[2])
@@ -342,6 +375,7 @@ def research_candidate(rows, *, horizon=3, fee_rate=0.0026, slippage_bps=5.0,
         "independent_holdout": independent_holdout,
         "regime_metrics": regime_metrics,
         "independent_holdout_by_regime": holdout_regime_metrics,
+        "probability_diagnostics": probability_diagnostics,
         "diagnostics": {
             "reason_codes": reason_codes,
             "rejection_reasons": rejection_reasons,
