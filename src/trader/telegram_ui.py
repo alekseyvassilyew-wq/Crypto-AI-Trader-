@@ -1,9 +1,11 @@
 import logging
 import html
 from datetime import datetime, timezone
+from pathlib import Path
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from telegram.request import HTTPXRequest
+from .db import backup_database
 
 log = logging.getLogger(__name__)
 
@@ -1047,6 +1049,26 @@ def build_app(s, engine, exchange):
         except Exception as exc:
             log.warning("External monitoring job failed during %s: %s", stage, type(exc).__name__)
 
+
+    async def database_backup_job(context):
+        """Back up the persistent SQLite database without blocking the bot loop."""
+        runner = context.application.bot_data["run_blocking"]
+        backup_dir = Path(s.db_path).expanduser().parent / "backups"
+        try:
+            backup_path = await runner.run(
+                lambda: backup_database(engine.db, backup_dir, keep=7)
+            )
+            log.info("SQLite backup completed and verified: %s", backup_path)
+        except Exception as exc:
+            log.error("SQLite backup failed: %s", type(exc).__name__)
+            try:
+                await send_topic(
+                    context, s.topic_errors_id,
+                    f"🚨 Резервное копирование SQLite не выполнено. Тип ошибки: {type(exc).__name__}",
+                )
+            except Exception:
+                log.error("Could not send SQLite backup failure notification")
+
     async def application_error_handler(update, context):
         error = context.error
         # Do not log exception strings: HTTP request exceptions can contain
@@ -1065,6 +1087,8 @@ def build_app(s, engine, exchange):
     app.add_error_handler(application_error_handler)
     # Optional API polling is enabled only when both credentials and resource IDs are configured.
     app.job_queue.run_repeating(external_monitor_job, interval=90, first=25, name="external-platform-monitor")
+    # Daily verified SQLite backup on the persistent Render disk; retain seven copies.
+    app.job_queue.run_repeating(database_backup_job, interval=86400, first=300, name="sqlite-daily-backup")
     # Start once, then cycle_job schedules the next scan after completion.
     # This fixed-delay cadence avoids overlapping jobs and skipped scans.
     app.job_queue.run_once(cycle_job, when=10, name="paper-cycle")
