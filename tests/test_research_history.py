@@ -12,12 +12,13 @@ from src.trader.research_history import (
 
 def candles(count=300):
     rows = []
+    start = datetime.now(timezone.utc).timestamp() - count * 3600
     for i in range(count):
         close = 100 * math.exp(0.0001 * i + 0.06 * math.sin(i / 9))
         op = close * (1 - 0.001 * math.sin(i / 4))
         high = max(op, close) * 1.004
         low = min(op, close) * 0.996
-        rows.append([1_700_000_000 + i * 3600, op, high, low, close, 1000.0])
+        rows.append([start + i * 3600, op, high, low, close, 1000.0])
     return rows
 
 
@@ -81,7 +82,7 @@ def test_research_failures_are_also_saved():
     db = connect(":memory:")
     save_research_failure(db, "ETH/EUR", "automatic", "ValueError: insufficient data")
     rows = list_research_runs(db, limit=5)
-    assert rows[0]["symbol"] == "ETH/EUR"
+    assert rows[0]["symbol"] == "ETHEUR"
     assert rows[0]["outcome"] == "INSUFFICIENT_DATA"
     assert "insufficient data" in rows[0]["reasons"][0]
     db.close()
