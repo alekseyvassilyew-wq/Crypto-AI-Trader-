@@ -955,8 +955,9 @@ def build_app(s, engine, exchange):
         if not (s.render_api_key and s.render_service_id or s.github_repository):
             return
         stage = "polling external APIs"
+        state = None
         try:
-            from .monitoring import poll_external_events
+            from .monitoring import poll_external_events, merge_monitor_health_state
             def poll_without_committing():
                 from .db import get_state
                 state = get_state(engine.db, "external_monitor_state", {})
@@ -973,6 +974,20 @@ def build_app(s, engine, exchange):
                 return
 
             state, events = await context.application.bot_data["run_blocking"].run(poll_without_committing)
+
+            # Save API health immediately, but never advance event cursors until
+            # Telegram has accepted every pending notification. This keeps
+            # /monitorstatus truthful even during a Telegram delivery outage.
+            stage = "persisting API health"
+            def persist_monitor_health():
+                from .db import get_state, set_state
+                persisted = get_state(engine.db, "external_monitor_state", {})
+                set_state(
+                    engine.db,
+                    "external_monitor_state",
+                    merge_monitor_health_state(persisted, state),
+                )
+            await context.application.bot_data["run_blocking"].run(persist_monitor_health)
             log.info("External monitoring APIs polled; pending_notifications=%d", len(events))
             for event in events:
                 stage = f"sending {event.get('source', 'external')} notification"
@@ -1002,11 +1017,11 @@ def build_app(s, engine, exchange):
             state["last_events_count"] = len(events)
             if events:
                 state["last_alert_delivery_at"] = state["last_poll_at"]
-            log.info("External monitoring cycle succeeded: new_events=%d", len(events))
             def persist_monitor_state():
                 from .db import set_state
                 set_state(engine.db, "external_monitor_state", state)
             await context.application.bot_data["run_blocking"].run(persist_monitor_state)
+            log.info("External monitoring cycle succeeded: new_events=%d", len(events))
         except Exception as exc:
             log.warning("External monitoring job failed during %s: %s", stage, type(exc).__name__)
 
