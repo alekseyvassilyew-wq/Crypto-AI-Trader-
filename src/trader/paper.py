@@ -59,6 +59,8 @@ class PaperBroker:
                     "avg_price": _finite_number(position.get("avg_price"), f"{symbol} average price", minimum=0, strict_minimum=True),
                     "quote_currency": self._validate_currency(position.get("quote_currency", "EUR")),
                     "peak_price": _finite_number(position.get("peak_price", position.get("avg_price")), f"{symbol} peak price", minimum=0, strict_minimum=True),
+                    "cost_basis_eur": None if position.get("cost_basis_eur") is None else _finite_number(position["cost_basis_eur"], f"{symbol} EUR cost basis", minimum=0),
+                    "entry_fees_eur": None if position.get("entry_fees_eur") is None else _finite_number(position["entry_fees_eur"], f"{symbol} EUR entry fees", minimum=0),
                 }
         else:
             self.cash_by_currency = {"EUR": initial}
