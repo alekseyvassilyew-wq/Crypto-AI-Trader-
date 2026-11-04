@@ -94,11 +94,7 @@ class Engine:
         try:
             deferred = "Ticker monitored; OHLC analysis deferred by rotating scan budget"
             unavailable = "Ticker unavailable"
-            analyzed = sum(
-                1 for item in results
-                if not any(deferred in str(reason) or unavailable in str(reason)
-                           for reason in item.get("reasons", []))
-            )
+            analyzed = sum(1 for item in results if item.get("ohlc_analyzed") is True)
             save_paper_snapshot(
                 self.db,
                 ts=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
@@ -152,7 +148,7 @@ class Engine:
         tickers = tickers if tickers is not None else self.exchange.tickers([symbol])
         t = next((x for x in tickers if x["symbol"] == symbol), None)
         if not t:
-            return {"symbol": symbol, "signal": "HOLD", "reasons": ["Ticker unavailable"]}
+            return {"symbol": symbol, "signal": "HOLD", "ohlc_analyzed": False, "reasons": ["Ticker unavailable"]}
         bid, ask = float(t.get("bid1Price") or 0), float(t.get("ask1Price") or 0)
         last = float(t.get("lastPrice") or 0)
         spread = (ask - bid) / ((ask + bid) / 2) * 10000 if bid > 0 and ask > 0 else 999999
@@ -182,6 +178,7 @@ class Engine:
             return {
                 "symbol": symbol, "signal": "HOLD", "score": 0,
                 "price": last, "bid": bid, "ask": ask, "spread_bps": spread, "turnover": turnover, "turnover_eur": turnover_eur,
+                "ohlc_analyzed": False,
                 "reasons": [f"Candle data unavailable: {type(exc).__name__}"],
             }
         # Research candidates run in shadow only: their forecasts and later
@@ -217,7 +214,7 @@ class Engine:
                     result["ml_shadow_candidate"] = probability >= threshold
         except Exception as shadow_exc:
             audit(self.db, "ML_SHADOW_ERROR", f"{symbol}: {type(shadow_exc).__name__}: {shadow_exc}")
-        result.update(symbol=symbol, price=last or result.get("price", 0), bid=bid, ask=ask, spread_bps=spread, turnover=turnover, turnover_eur=turnover_eur, quote=quote_currency)
+        result.update(ohlc_analyzed=True, symbol=symbol, price=last or result.get("price", 0), bid=bid, ask=ask, spread_bps=spread, turnover=turnover, turnover_eur=turnover_eur, quote=quote_currency)
         if spread > self.s.max_spread_bps:
             result["signal"] = "HOLD"
             result["reasons"].append("Spread too wide")
@@ -256,6 +253,7 @@ class Engine:
                         "symbol": symbol, "signal": "HOLD", "score": 0,
                         "price": 0, "spread_bps": 999999, "turnover": 0,
                         "quote": pair.get("quote"),
+                        "ohlc_analyzed": False,
                         "reasons": ["Ticker unavailable"],
                     }
                     continue
@@ -273,7 +271,7 @@ class Engine:
                         "price": float(ticker.get("lastPrice") or 0),
                         "bid": bid, "ask": ask,
                         "spread_bps": spread, "turnover": turnover, "turnover_eur": 0.0, "quote": quote,
-                        "reasons": [f"Monitored only; no EUR conversion route for {quote}"],
+                        "ohlc_analyzed": False, "reasons": [f"Monitored only; no EUR conversion route for {quote}"],
                     }
                 elif spread > self.s.max_spread_bps:
                     results_by_symbol[symbol] = {
@@ -281,7 +279,7 @@ class Engine:
                         "price": float(ticker.get("lastPrice") or 0),
                         "bid": bid, "ask": ask,
                         "spread_bps": spread, "turnover": turnover, "quote": quote,
-                        "reasons": ["Spread too wide"],
+                        "ohlc_analyzed": False, "reasons": ["Spread too wide"],
                     }
                 elif turnover_eur < self.s.min_turnover:
                     results_by_symbol[symbol] = {
@@ -289,7 +287,7 @@ class Engine:
                         "price": float(ticker.get("lastPrice") or 0),
                         "bid": bid, "ask": ask,
                         "spread_bps": spread, "turnover": turnover, "quote": quote,
-                        "reasons": ["Turnover too low or no EUR conversion rate"],
+                        "ohlc_analyzed": False, "reasons": ["Turnover too low or no EUR conversion rate"],
                     }
                 else:
                     eligible.append((turnover_eur, symbol, quote))
@@ -322,7 +320,7 @@ class Engine:
                         "turnover": float(ticker.get("turnover24h") or 0),
                         "turnover_eur": float(ticker.get("turnover24h") or 0) * fx_rates.get(quote, 0.0),
                         "quote": quote,
-                        "reasons": ["Ticker monitored; OHLC analysis deferred by rotating scan budget"],
+                        "ohlc_analyzed": False, "reasons": ["Ticker monitored; OHLC analysis deferred by rotating scan budget"],
                     }
             return [results_by_symbol[pair["symbol"]] for pair in pairs if pair["symbol"] in results_by_symbol]
 
