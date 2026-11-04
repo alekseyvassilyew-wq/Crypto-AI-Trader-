@@ -82,7 +82,11 @@ def poll_external_events(settings, state: dict) -> list[dict[str, str]]:
             # First poll establishes a baseline and avoids replaying old history.
             # Persist a bounded window so restarts do not duplicate notifications.
             state["render_event_ids"] = list(dict.fromkeys(current + (seen or [])))[:300]
+            from datetime import datetime, timezone
+            state["render_last_success_at"] = datetime.now(timezone.utc).isoformat()
+            state.pop("render_last_error", None)
         except Exception as exc:
+            state["render_last_error"] = type(exc).__name__
             log.warning("Render event polling failed: %s", type(exc).__name__)
 
     if settings.github_repository:
@@ -126,6 +130,10 @@ def poll_external_events(settings, state: dict) -> list[dict[str, str]]:
                     latest_created_at = created_at
             state["github_baseline_created_at"] = latest_created_at
             state["github_status"] = current
+            from datetime import datetime, timezone
+            state["github_last_success_at"] = datetime.now(timezone.utc).isoformat()
+            state.pop("github_last_error", None)
         except Exception as exc:
+            state["github_last_error"] = type(exc).__name__
             log.warning("GitHub event polling failed: %s", type(exc).__name__)
     return events
