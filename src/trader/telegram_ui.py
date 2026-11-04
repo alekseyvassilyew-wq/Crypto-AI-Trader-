@@ -97,10 +97,15 @@ def build_app(s, engine, exchange):
                 for position in engine.paper.positions.values()
             )
             missing = sorted(currency for currency in required if currency not in fresh_rates)
-            daily_text = (
-                f"{engine.daily_pnl():.2f} EUR"
-                if not missing else "недоступен — нет свежего FX: " + ", ".join(missing)
-            )
+            quotes_fresh, bid_marks = fresh_position_marks()
+            valuation_prices = dict(engine.last_prices)
+            valuation_prices.update(bid_marks)
+            if missing:
+                daily_text = "недоступен — нет свежего FX: " + ", ".join(missing)
+            elif not quotes_fresh:
+                daily_text = "недоступен — нет свежих котировок открытых позиций"
+            else:
+                daily_text = f"{engine.daily_pnl(valuation_prices):.2f} EUR"
             return (
                 f"Режим: PAPER\nСостояние: {state}\nВиртуальные средства: {balances}\n"
                 f"Позиции: {len(engine.paper.positions)}/{s.max_positions}\nP/L сегодня: {daily_text}\n"
