@@ -71,7 +71,7 @@ class Engine:
         prices = prices or self.last_prices or {}
         return self.paper.equity(prices, self._fx_rates(prices)) - float(state.get("start_equity", self.paper.cash))
 
-    def scan_one(self, symbol, tickers=None):
+    def scan_one(self, symbol, tickers=None, fx_rates=None, quote_currency=None):
         tickers = tickers if tickers is not None else self.exchange.tickers([symbol])
         t = next((x for x in tickers if x["symbol"] == symbol), None)
         if not t:
@@ -80,19 +80,21 @@ class Engine:
         last = float(t.get("lastPrice") or 0)
         spread = (ask - bid) / ((ask + bid) / 2) * 10000 if bid > 0 and ask > 0 else 999999
         turnover = float(t.get("turnover24h") or 0)
+        quote_currency = str(quote_currency or t.get("quote") or "EUR").upper()
+        turnover_eur = turnover * (fx_rates or {"EUR": 1.0}).get(quote_currency, 0.0)
         try:
             result = analyze(self.exchange.candles(symbol))
         except Exception as exc:
             return {
                 "symbol": symbol, "signal": "HOLD", "score": 0,
-                "price": last, "spread_bps": spread, "turnover": turnover,
+                "price": last, "spread_bps": spread, "turnover": turnover, "turnover_eur": turnover_eur,
                 "reasons": [f"Candle data unavailable: {type(exc).__name__}"],
             }
-        result.update(symbol=symbol, price=last or result.get("price", 0), spread_bps=spread, turnover=turnover)
+        result.update(symbol=symbol, price=last or result.get("price", 0), spread_bps=spread, turnover=turnover, turnover_eur=turnover_eur, quote=quote_currency)
         if spread > self.s.max_spread_bps:
             result["signal"] = "HOLD"
             result["reasons"].append("Spread too wide")
-        if turnover < self.s.min_turnover:
+        if turnover_eur < self.s.min_turnover:
             result["signal"] = "HOLD"
             result["reasons"].append("Turnover too low")
         return result
@@ -165,7 +167,7 @@ class Engine:
                 set_state(self.db, "analysis_cursor", (cursor + analysis_limit) % len(eligible))
             for _, symbol, quote in eligible:
                 if (symbol, quote) in selected:
-                    result = self.scan_one(symbol, [ticker_by_symbol[symbol]])
+                    result = self.scan_one(symbol, [ticker_by_symbol[symbol]], fx_rates=fx_rates, quote_currency=quote)
                     result["quote"] = quote
                     result["turnover_eur"] = float(result.get("turnover") or 0) * fx_rates.get(quote, 0.0)
                     results_by_symbol[symbol] = result
