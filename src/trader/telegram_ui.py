@@ -50,6 +50,7 @@ def build_app(s, engine, exchange):
         await update.effective_message.reply_text(
             f"Режим: PAPER\nСостояние: {state}\nВиртуальные средства: {balances}\n"
             f"Позиции: {len(engine.paper.positions)}/{s.max_positions}\nP/L сегодня: {engine.daily_pnl():.2f} EUR*\n"
+            f"Риск: SL {s.stop_loss_pct:.2f}% | TP {s.take_profit_pct:.2f}% | trailing {getattr(s, 'trailing_stop_pct', 1.5):.2f}%\n"
             f"Рынок Kraken: {len(engine.market_pairs)} пар; котировок получено: {engine.market_ticker_count}\n"
             f"Мониторинг всех котировок; анализ свечей: до {s.max_candle_pairs} пар за цикл.\n"
             "* P/L рассчитан в EUR с учётом доступных валютных курсов Kraken."
@@ -216,7 +217,7 @@ def build_app(s, engine, exchange):
                     for item in sorted(engine.last_signals, key=lambda item: item.get("score", 0), reverse=True)[:15]
                 ]
                 position_lines = [
-                    f"{symbol}: {position['qty']:.8f} @ {position['avg_price']:.8g} {position.get('quote_currency', 'EUR')}"
+                    f"{symbol}: {position['qty']:.8f} @ {position['avg_price']:.8g} {position.get('quote_currency', 'EUR')} | peak {position.get('peak_price', position['avg_price']):.8g}"
                     for symbol, position in engine.paper.positions.items()
                 ]
                 report = (
