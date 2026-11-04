@@ -103,6 +103,14 @@ def run_backtest(
         next_ts, next_open = next_candle[0], next_candle[1]
 
         if qty:
+            # Record the full candle range before a protective exit closes the
+            # position; otherwise stopped trades disappear from drawdown stats.
+            intrabar_high_equity = cash + qty * high
+            intrabar_low_equity = cash + qty * low
+            max_equity = max(max_equity, intrabar_high_equity)
+            if max_equity > 0:
+                max_drawdown = max(max_drawdown, (max_equity - intrabar_low_equity) / max_equity)
+
             stop_price = entry * (1.0 - stop_pct)
             prior_trail = peak * (1.0 - trail_pct) if peak > entry else 0.0
             prior_stop = max(stop_price, prior_trail)
@@ -125,16 +133,6 @@ def run_backtest(
                     exit_reason, exit_at = "TAKE_PROFIT", target_price
             if exit_reason:
                 close_position(exit_at, ts, exit_reason)
-
-        # Measure worst-case intrabar equity only for positions that survived
-        # this candle; stop-first handling above avoids assuming a later high
-        # after an ambiguous stop/target collision.
-        if qty:
-            intrabar_high_equity = cash + qty * high
-            intrabar_low_equity = cash + qty * low
-            max_equity = max(max_equity, intrabar_high_equity)
-            if max_equity > 0:
-                max_drawdown = max(max_drawdown, (max_equity - intrabar_low_equity) / max_equity)
 
         if not qty and cash > 0:
             signal = signal_fn([list(x) for x in rows[:i + 1]])
@@ -168,6 +166,13 @@ def run_backtest(
         prior_trail = peak * (1.0 - trail_pct) if peak > entry else 0.0
         prior_stop = max(stop_price, prior_trail)
         target_price = entry * (1.0 + target_pct)
+        # Include the final candle's full range even when its protective
+        # stop/target closes the position before the forced end-of-data exit.
+        intrabar_high_equity = cash + qty * last_high
+        intrabar_low_equity = cash + qty * last_low
+        max_equity = max(max_equity, intrabar_high_equity)
+        if max_equity > 0:
+            max_drawdown = max(max_drawdown, (max_equity - intrabar_low_equity) / max_equity)
         if last_open <= prior_stop:
             reason, exit_price = ("STOP_LOSS" if prior_stop == stop_price else "TRAILING_STOP"), last_open
         elif last_open >= target_price:
@@ -181,14 +186,7 @@ def run_backtest(
             elif last_high >= target_price:
                 reason, exit_price = "TAKE_PROFIT", target_price
             else:
-            # No protective exit was touched, but include the final candle's
-            # high/low in worst-case drawdown before the forced close.
-            intrabar_high_equity = cash + qty * last_high
-            intrabar_low_equity = cash + qty * last_low
-            max_equity = max(max_equity, intrabar_high_equity)
-            if max_equity > 0:
-                max_drawdown = max(max_drawdown, (max_equity - intrabar_low_equity) / max_equity)
-            reason, exit_price = "END_OF_DATA", last_close
+                reason, exit_price = "END_OF_DATA", last_close
         close_position(exit_price, last_ts, reason)
         equity_curve.append(cash)
         max_equity = max(max_equity, cash)
