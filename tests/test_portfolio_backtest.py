@@ -274,6 +274,9 @@ def test_portfolio_uses_executable_fx_buy_rate_and_cross_currency_funding_for_eu
     assert usd_trade["entry_quote"] == pytest.approx(55.0)
     assert eur_trade["conversion_fee_eur"] > 0
     assert all(amount >= -1e-10 for amount in result["cash_by_currency"].values())
+    assert result["fees_paid_eur"] == pytest.approx(
+        sum(trade["fees_eur"] for trade in result["trades_detail"])
+    )
 
 
 def test_portfolio_backtest_uses_executable_fx_buy_rate_for_quote_allocation():
