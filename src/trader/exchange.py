@@ -144,6 +144,13 @@ class KrakenSpot:
                 "base": base.upper(),
                 "quote": quote.upper(),
                 "status": status,
+                # Exchange-reported constraints; missing values stay unknown.
+                "ordermin": info.get("ordermin"),
+                "costmin": info.get("costmin"),
+                "lot_decimals": info.get("lot_decimals"),
+                "pair_decimals": info.get("pair_decimals"),
+                "fees": info.get("fees"),
+                "fees_maker": info.get("fees_maker"),
             }
             pairs.append(meta)
             pair_cache[symbol] = (pair_key, info)
