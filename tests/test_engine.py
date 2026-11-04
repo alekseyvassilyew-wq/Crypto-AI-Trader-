@@ -28,7 +28,10 @@ def test_paper_trade_eur_accounting_includes_both_sides_fees_and_fresh_fx(tmp_pa
 
     fee_eur, realized_pnl_eur = engine._paper_trade_eur_values(
         "USD", 0.24, {"ETHUSD": 12.0},
-        position={"avg_price": 10.0}, qty=2.0, exit_price=12.0,
+        position={
+            "qty": 2.0, "avg_price": 10.0,
+            "cost_basis_eur": 18.0, "entry_fees_eur": 0.18,
+        }, qty=2.0, exit_price=12.0,
     )
 
     assert fee_eur == pytest.approx(0.216)
