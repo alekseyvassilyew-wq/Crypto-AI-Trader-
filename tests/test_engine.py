@@ -101,6 +101,7 @@ def test_engine_starts_paused_but_keeps_monitoring_without_seed_or_trading(tmp_p
 
 def test_full_market_scan_monitors_all_pairs_and_can_analyze_non_eur_markets(tmp_path):
     engine, db = make_engine(tmp_path)
+    engine.s.watchlist = ()
     engine.s.trade_quote_currency = "EUR"
     engine.s.max_candle_pairs = 1
 
@@ -144,6 +145,7 @@ def test_full_market_scan_monitors_all_pairs_and_can_analyze_non_eur_markets(tmp
 
 def test_rotating_scan_covers_multiple_funded_quote_currencies(tmp_path):
     engine, db = make_engine(tmp_path)
+    engine.s.watchlist = ()
     engine.paper.cash_by_currency["USD"] = 20
     engine.s.max_candle_pairs = 1
     class MultiQuoteExchange:
@@ -747,3 +749,34 @@ def test_scan_logs_stage_timing(caplog, tmp_path):
     assert "OHLC=" in timing
     assert "total=" in timing
     db.close()
+
+
+def test_priority_market_selection_keeps_ton_and_open_positions_fresh():
+    from src.trader.engine import select_ohlc_markets
+
+    eligible = [
+        (100000 - index, f"COIN{index}EUR", "EUR")
+        for index in range(30)
+    ] + [(6000, "OPENPOSITIONEUR", "EUR"), (5000, "TONEUR", "EUR"), (4000, "TONUSD", "USD")]
+    selected, next_cursor, priority_count = select_ohlc_markets(
+        eligible, 5, 0, ["OPENPOSITIONEUR", "TONEUR", "TONUSD"]
+    )
+    assert ("OPENPOSITIONEUR", "EUR") in selected
+    assert ("TONEUR", "EUR") in selected
+    assert ("TONUSD", "USD") in selected
+    assert len(selected) == 5
+    assert next_cursor == 5
+    assert priority_count == 3
+
+
+def test_priority_market_selection_rotates_remaining_markets_without_duplicates():
+    from src.trader.engine import select_ohlc_markets
+
+    eligible = [(1000 - index, f"COIN{index}EUR", "EUR") for index in range(12)]
+    first, cursor, _ = select_ohlc_markets(eligible, 4, 0, ["COIN0EUR"])
+    second, next_cursor, _ = select_ohlc_markets(eligible, 4, cursor, ["COIN0EUR"])
+    assert len(first) == len(second) == 4
+    assert ("COIN0EUR", "EUR") in first
+    assert ("COIN0EUR", "EUR") in second
+    assert len((first - {("COIN0EUR", "EUR")}) | (second - {("COIN0EUR", "EUR")})) >= 5
+    assert next_cursor == 8
