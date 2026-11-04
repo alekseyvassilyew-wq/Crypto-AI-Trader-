@@ -678,7 +678,7 @@ def build_app(s, engine, exchange):
     async def help_cmd(update, context):
         if not await authorized(update): return await deny(update)
         await update.effective_message.reply_text(
-            "/start — меню\n/status — состояние и P/L\n/scan — сканирование\n"
+            "/start — меню\n/status — состояние и P/L\n/monitorstatus — диагностика Render/GitHub/Telegram\n/scan — сканирование\n"
             "/account — виртуальные остатки PAPER\n/realbalance — реальные остатки Kraken (только чтение)\n"
             "/portfolio — PAPER-позиции\n/paperreport [часы] — статистика автономного PAPER-теста\n"
             "/learn XBTEUR — обучение/проверка ML-кандидата без торговли\n/learning — текущие кандидаты и shadow-тест\n"
