@@ -23,6 +23,7 @@ class Settings:
     trade_quote_currency: str
     max_candle_pairs: int
     enable_multi_timeframe: bool
+    ml_auto_research_markets: int
     scan_interval: int
     stop_loss_pct: float
     take_profit_pct: float
@@ -58,6 +59,7 @@ def load_settings():
         trade_quote_currency=os.getenv("TRADE_QUOTE_CURRENCY", "EUR").strip().upper(),
         max_candle_pairs=int(os.getenv("MAX_CANDLE_PAIRS", "10")),
         enable_multi_timeframe=os.getenv("ENABLE_MULTI_TIMEFRAME", "true").strip().lower() in ("1", "true", "yes", "on"),
+        ml_auto_research_markets=int(os.getenv("ML_AUTO_RESEARCH_MARKETS", "3")),
         scan_interval=int(os.getenv("SCAN_INTERVAL_SECONDS", "60")),
         stop_loss_pct=float(os.getenv("STOP_LOSS_PERCENT", "2")),
         take_profit_pct=float(os.getenv("TAKE_PROFIT_PERCENT", "4")),
@@ -79,11 +81,13 @@ def load_settings():
                       s.min_turnover, s.fee_rate, s.stop_loss_pct, s.take_profit_pct, s.trailing_stop_pct)
     if not all(math.isfinite(value) for value in numeric_values):
         raise ValueError("All numeric settings must be finite numbers.")
-    if min(s.max_daily_loss, s.max_positions, s.max_candle_pairs, s.scan_interval, s.stop_loss_pct, s.take_profit_pct, s.trailing_stop_pct, s.risk_per_trade_pct) <= 0:
+    if min(s.max_daily_loss, s.max_positions, s.max_candle_pairs, s.ml_auto_research_markets, s.scan_interval, s.stop_loss_pct, s.take_profit_pct, s.trailing_stop_pct, s.risk_per_trade_pct) <= 0:
         raise ValueError("Risk limits and scan interval must be positive.")
     # TRADE_QUOTE_CURRENCY is retained for backwards-compatible display/defaults.
     if s.max_spread_bps <= 0 or s.min_turnover < 0:
         raise ValueError("Spread limit must be positive and minimum turnover cannot be negative.")
+    if s.ml_auto_research_markets > 5:
+        raise ValueError("ML_AUTO_RESEARCH_MARKETS must not exceed 5.")
     if s.risk_per_trade_pct > 2.0:
         raise ValueError("RISK_PER_TRADE_PERCENT must not exceed 2.0%.")
     if not 0 <= s.fee_rate < 0.1:
