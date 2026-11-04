@@ -658,6 +658,8 @@ def build_app(s, engine, exchange):
                      ("run", run), ("pause", pause), ("stop", stop), ("help", help_cmd)]:
         app.add_handler(CommandHandler(name, fn))
     app.add_handler(CallbackQueryHandler(callback))
-    app.job_queue.run_repeating(cycle_job, interval=1, first=10, name="paper-cycle")
-    app.job_queue.run_repeating(ml_research_job, interval=3600, first=60, name="daily-ml-research")
+    # The engine enforces a minimum 60-second market cycle. Schedule at that
+    # cadence rather than waking every second and generating skipped jobs.
+    app.job_queue.run_repeating(cycle_job, interval=60, first=10, name="paper-cycle")
+    app.job_queue.run_repeating(ml_research_job, interval=3600, first=60, name="hourly-ml-research")
     return app
