@@ -19,7 +19,7 @@ This archive is a **PAPER-only release**. It is not a live trading bot and must 
 - Dynamic full-market scanner: discovers all online Kraken Spot crypto markets and retrieves their tickers in one request; candle analysis rotates through the configured per-cycle budget across liquid markets with a valid EUR valuation route.
 - Multi-currency PAPER cash, FX conversion, and positions persisted in SQLite.
 - PAPER stop-loss, take-profit and trailing-stop exits, score-ranked entries, per-trade cap, max-position cap, and daily equity-loss pause.
-- Fee- and slippage-aware historical backtester with next-candle-open fills, conservative stop/target ordering, net P/L, profit factor, win rate and maximum drawdown; available as Telegram /backtest SYMBOL.
+- Fee- and slippage-aware single-market and multi-market portfolio historical backtests with next-candle-open fills, conservative stop/target ordering, net P/L, profit factor, win rate and maximum drawdown; available as Telegram `/backtest SYMBOL` and `/backtest portfolio`.
 - Strictly increasing private API nonces within the running process; malformed API responses are rejected.
 - Persistent SQLite state and a safe paused-on-restart behavior.
 - Telegram owner-only commands: `/start`, `/help`, `/status`, `/scan`, `/account`, `/portfolio`, `/interval`, `/run`, `/pause`, `/stop`.
@@ -77,7 +77,7 @@ These are configurable simulation assumptions, not recommendations. Verify Krake
 ## Known limitations
 
 - No LIVE mode, order placement, or demo-order execution is implemented in this ZIP. Do not change the mode variable expecting real trades.
-- Strategy is a simple indicator rule and has not been demonstrated profitable. The `/backtest SYMBOL` command evaluates up to 720 available closed 1-hour candles for one market; it is not a multi-asset portfolio backtest and is not evidence of future profitability.
+- Strategy is a simple indicator rule and has not been demonstrated profitable. `/backtest SYMBOL` evaluates up to 720 available closed 1-hour candles for one market. `/backtest portfolio` evaluates at most five liquid markets on shared timestamps; it uses current FX conversion rates for the entire historical window, so cross-currency valuation is approximate. Neither command is evidence of future profitability.
 - Kraken market tickers are fetched for the complete online Spot universe. To keep REST usage controlled, OHLC indicators are calculated for at most `MAX_CANDLE_PAIRS` (default 10) eligible liquid pairs per cycle; the scan cursor rotates this budget. Markets without a valid EUR valuation route are monitored but cannot be considered for entries. A passing unit test suite does not verify live connectivity or permissions on your Kraken account.
 - `/interval` changes the in-memory scan interval until service restart; it does not reconfigure Render scheduling.
 - A single SQLite-backed worker is intended. Do not scale to multiple instances.
