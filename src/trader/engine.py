@@ -19,6 +19,26 @@ FX_CURRENCIES = frozenset({
 })
 
 
+
+def adaptive_ohlc_budget(configured_limit, interval_seconds, avg_seconds_per_market, safety_fraction=0.55):
+    """Bound sequential OHLC requests to leave headroom for the next scan."""
+    if isinstance(configured_limit, bool) or not isinstance(configured_limit, int) or configured_limit < 1:
+        raise ValueError("configured_limit must be a positive integer")
+    values = (interval_seconds, avg_seconds_per_market, safety_fraction)
+    if any(isinstance(value, bool) for value in values):
+        raise ValueError("scan budget inputs must be numeric")
+    try:
+        interval, average, fraction = (float(value) for value in values)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("scan budget inputs must be finite numbers") from exc
+    if not all(math.isfinite(value) for value in (interval, average, fraction)):
+        raise ValueError("scan budget inputs must be finite numbers")
+    if interval <= 0 or average <= 0 or not 0 < fraction < 1:
+        raise ValueError("scan interval, average latency, and safety fraction are out of range")
+    target_seconds = max(8.0, interval * fraction)
+    return max(1, min(configured_limit, int(target_seconds / average)))
+
+
 def select_ohlc_markets(eligible, analysis_limit, cursor=0, priority_symbols=()):
     """Select priority markets first, then rotate fairly through the remaining universe.
 
@@ -465,7 +485,22 @@ class Engine:
             self.market_ticker_count = len(tickers)
             ticker_by_symbol = {item["symbol"]: item for item in tickers}
             self.last_ticker_data = ticker_by_symbol
-            analysis_limit = max(1, int(getattr(self.s, "max_candle_pairs", 10)))
+            configured_analysis_limit = max(1, int(getattr(self.s, "max_candle_pairs", 10)))
+            # Persist latency across restarts. The conservative default protects
+            # the first cycle; the EWMA adapts to Kraken response time thereafter.
+            average_ohlc_seconds = get_state(self.db, "ohlc_avg_seconds_per_market", 3.0)
+            try:
+                average_ohlc_seconds = float(average_ohlc_seconds)
+                if not math.isfinite(average_ohlc_seconds) or average_ohlc_seconds <= 0:
+                    average_ohlc_seconds = 3.0
+            except (TypeError, ValueError, OverflowError):
+                average_ohlc_seconds = 3.0
+            interval_seconds = getattr(self, "scan_interval_seconds", None)
+            if interval_seconds is None:
+                interval_seconds = getattr(self.s, "scan_interval", 60)
+            analysis_limit = adaptive_ohlc_budget(
+                configured_analysis_limit, interval_seconds, average_ohlc_seconds,
+            )
 
             snapshot_prices = {
                 item["symbol"]: float(item.get("lastPrice") or 0)
@@ -582,12 +617,17 @@ class Engine:
                         "quote": quote,
                         "ohlc_analyzed": False, "reasons": ["Ticker monitored; OHLC analysis deferred by rotating scan budget"],
                     }
+            if selected and ohlc_seconds > 0:
+                observed_average = ohlc_seconds / len(selected)
+                if math.isfinite(observed_average) and observed_average > 0:
+                    updated_average = 0.7 * average_ohlc_seconds + 0.3 * observed_average
+                    set_state(self.db, "ohlc_avg_seconds_per_market", updated_average)
             total_seconds = time.monotonic() - scan_started
             log.info(
-                "Market scan timing: pairs=%d tickers=%d eligible=%d OHLC_selected=%d "
+                "Market scan timing: pairs=%d tickers=%d eligible=%d OHLC_selected=%d OHLC_budget=%d "
                 "OHLC_analyzed=%d priority_selected=%d discovery=%.2fs ticker=%.2fs fx=%.2fs "
                 "OHLC=%.2fs total=%.2fs",
-                len(pairs), len(tickers), len(eligible), len(selected),
+                len(pairs), len(tickers), len(eligible), len(selected), analysis_limit,
                 ohlc_analyzed_count, priority_selected, discovery_seconds, ticker_seconds,
                 fx_seconds, ohlc_seconds, total_seconds,
             )

@@ -851,3 +851,27 @@ def test_liquidation_equity_includes_cash_and_open_positions_after_exit_costs(tm
     assert equity == pytest.approx(5.0 + expected_position_value)
     assert equity > engine.paper.balance("EUR")
     db.close()
+
+
+def test_adaptive_ohlc_budget_leaves_headroom_and_respects_configured_cap():
+    from src.trader.engine import adaptive_ohlc_budget
+
+    assert adaptive_ohlc_budget(20, 60, 3.0) == 11
+    assert adaptive_ohlc_budget(20, 60, 2.6) == 12
+    assert adaptive_ohlc_budget(20, 60, 1.0) == 20
+    assert adaptive_ohlc_budget(5, 60, 30.0) == 1
+    assert adaptive_ohlc_budget(20, 600, 3.0) == 20
+
+
+@pytest.mark.parametrize("args", [
+    (0, 60, 1.0),
+    (10, 0, 1.0),
+    (10, 60, 0),
+    (10, 60, float("nan")),
+    (10, 60, 1.0, 1.0),
+])
+def test_adaptive_ohlc_budget_rejects_invalid_inputs(args):
+    from src.trader.engine import adaptive_ohlc_budget
+
+    with pytest.raises(ValueError):
+        adaptive_ohlc_budget(*args)
