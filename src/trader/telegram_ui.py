@@ -154,10 +154,38 @@ def build_app(s, engine, exchange):
                         market: [row for row in rows if row[0] in common]
                         for market, rows in candles_by_symbol.items()
                     }
+                    # Fetch direct EUR FX markets for the selected quote currencies.
+                    # If Kraken has no direct EUR market, the backtester explicitly
+                    # falls back to the current snapshot rate for that currency.
+                    dated_fx_by_timestamp = {}
+                    fx_fallback = []
+                    for currency in sorted(set(quote_currencies.values()) - {"EUR"}):
+                        fx_pair = next(
+                            (pair for pair in pairs
+                             if (pair["base"] == currency and pair["quote"] == "EUR")
+                             or (pair["base"] == "EUR" and pair["quote"] == currency)),
+                            None,
+                        )
+                        if not fx_pair:
+                            fx_fallback.append(currency)
+                            continue
+                        try:
+                            fx_rows = exchange.candles(fx_pair["symbol"], interval="60", limit=720)
+                            direct = fx_pair["base"] == currency
+                            for row in fx_rows:
+                                if row[0] not in common:
+                                    continue
+                                dated_fx_by_timestamp.setdefault(row[0], {"EUR": 1.0})[currency] = (
+                                    row[4] if direct else 1.0 / row[4]
+                                )
+                        except Exception:
+                            log.exception("Historical FX candles unavailable for %s", currency)
+                            fx_fallback.append(currency)
                     result = run_portfolio_backtest(
                         candles_by_symbol,
                         quote_currencies=quote_currencies,
                         fx_rates=fx_rates,
+                        fx_rates_by_timestamp=dated_fx_by_timestamp,
                         initial_cash_eur=s.paper_start,
                         max_trade_eur=s.max_trade,
                         max_positions=s.max_positions,
@@ -168,8 +196,8 @@ def build_app(s, engine, exchange):
                         trailing_stop_pct=s.trailing_stop_pct,
                         max_daily_loss_eur=s.max_daily_loss,
                     )
-                    return result, failures
-                result, failures = await context.application.bot_data["run_blocking"].run(run_portfolio)
+                    return result, failures, fx_fallback
+                result, failures, fx_fallback = await context.application.bot_data["run_blocking"].run(run_portfolio)
                 factor = result["profit_factor"]
                 factor_text = "∞" if factor == float("inf") else f"{factor:.2f}"
                 lines = [
@@ -183,7 +211,7 @@ def build_app(s, engine, exchange):
                     f"Макс. просадка: {result['max_drawdown_pct']:.2f}%",
                     f"Комиссии: {result['fees_paid_eur']:.4f} EUR",
                     f"Комиссия: {s.fee_rate * 100:.3f}% на сторону; проскальзывание: 5 bps на сторону.",
-                    "Важно: максимум 5 рынков, до 720 закрытых часовых свечей. FX-курсы текущие, применены ко всей истории; это приближение, не точная историческая переоценка.",
+                    f"Исторические FX-свечи: {result['assumptions']['dated_fx_rate_timestamps']} временных точек. Текущий FX использован как запасной курс для: {', '.join(fx_fallback) if fx_fallback else 'нет валют'}.",
                     "Результат — симуляция, не прогноз прибыли и не гарантия будущей доходности.",
                 ]
                 if failures:
