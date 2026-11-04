@@ -41,6 +41,7 @@ def run_backtest(rows, fee_rate=0.0026, slippage_bps=5.0, stop_loss_pct=2.0, tak
         candle = candles[index]
         open_price, high, low, close = map(float, (candle[1], candle[2], candle[3], candle[4]))
         exited = False
+        opened = False
 
         if position is not None:
             stop = position["entry_price"] * (1 - stop_loss_pct / 100)
@@ -65,6 +66,16 @@ def run_backtest(rows, fee_rate=0.0026, slippage_bps=5.0, stop_loss_pct=2.0, tak
                     "capital_before": capital_before, "entry_fee": entry_fee,
                 }
                 cash = 0.0
+                opened = True
+
+        # Check the entry candle after the simulated open fill.
+        if opened and position is not None:
+            stop = position["entry_price"] * (1 - stop_loss_pct / 100)
+            target = position["entry_price"] * (1 + take_profit_pct / 100)
+            if low <= stop:
+                close_position(stop, "STOP_LOSS")
+            elif high >= target:
+                close_position(target, "TAKE_PROFIT")
 
         marked_equity = cash
         if position is not None:
