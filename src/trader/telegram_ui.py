@@ -254,5 +254,22 @@ def build_app(s, engine, exchange):
                      ("run", run), ("pause", pause), ("stop", stop), ("help", help_cmd)]:
         app.add_handler(CommandHandler(name, fn))
     app.add_handler(CallbackQueryHandler(callback))
-    app.job_queue.run_repeating(cycle_job, interval=1, first=10, name="paper-cycle")
+
+    async def application_error_handler(update, context):
+        error = context.error
+        log.error("Unhandled Telegram application error: %s: %s",
+                  type(error).__name__ if error else "UnknownError",
+                  str(error)[:500] if error else "No exception details")
+        try:
+            await send_topic(
+                context, s.topic_errors_id,
+                f"🚨 Ошибка Telegram: {type(error).__name__ if error else 'UnknownError'}"
+            )
+        except Exception:
+            log.exception("Could not notify Telegram error topic")
+
+    app.add_error_handler(application_error_handler)
+    # The actual market scan cadence is controlled by scan_interval_seconds.
+    # Polling the scheduler every second only creates noise and skipped-job warnings.
+    app.job_queue.run_repeating(cycle_job, interval=5, first=10, name="paper-cycle")
     return app
