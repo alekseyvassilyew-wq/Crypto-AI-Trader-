@@ -424,3 +424,46 @@ def test_cached_fx_rate_cannot_authorize_new_conversion(tmp_path):
     assert engine._fx_rates({})["USD"] == pytest.approx(0.9)
     assert "USD" not in engine._fresh_fx_rates({})
     db.close()
+
+
+def test_missing_fresh_quote_for_open_position_pauses_before_any_new_trade(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.paper.buy("XBTEUR", 5, 100.0)
+    engine.scan = lambda **kwargs: [{
+        "symbol": "OTHER", "quote": "EUR", "signal": "BUY", "score": 5,
+        "price": 10.0, "bid": 9.99, "ask": 10.01,
+        "spread_bps": 10, "turnover": 50000, "turnover_eur": 50000,
+        "reasons": [],
+    }]
+    engine.start()
+
+    actions = engine.cycle()
+
+    assert engine.paused is True
+    assert actions == ["SCAN_FAILED — paper trading paused"]
+    assert "XBTEUR" in engine.paper.positions
+    assert "OTHER" not in engine.paper.positions
+    assert db.execute("SELECT COUNT(*) AS n FROM trades WHERE side='Buy'").fetchone()["n"] == 0
+    row = db.execute("SELECT event, details FROM audit WHERE event='SCAN_FAILED' ORDER BY id DESC LIMIT 1").fetchone()
+    assert row is not None
+    assert "Missing fresh ticker for open position XBTEUR" in row["details"]
+    db.close()
+
+
+def test_invalid_executable_quote_for_open_position_fails_closed(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.paper.buy("XBTEUR", 5, 100.0)
+    engine.scan = lambda **kwargs: [{
+        "symbol": "XBTEUR", "quote": "EUR", "signal": "HOLD", "score": 0,
+        "price": 100.0, "bid": 0.0, "ask": 100.1,
+        "spread_bps": 10, "turnover": 50000, "turnover_eur": 50000,
+        "reasons": [],
+    }]
+    engine.start()
+
+    actions = engine.cycle()
+
+    assert engine.paused is True
+    assert actions == ["SCAN_FAILED — paper trading paused"]
+    assert "XBTEUR" in engine.paper.positions
+    db.close()
