@@ -296,46 +296,60 @@ def run_portfolio_backtest(
             required_quote = budget_eur * quote_buy_rate
             quote_balance = cash.get(quote, 0.0)
             conversion_fee_for_trade = 0.0
-            if quote != "EUR" and quote_balance + 1e-12 < required_quote * (1 + fee):
-                # Spend available EUR first, then route only the residual shortfall.
-                shortfall_quote = required_quote * (1 + fee) - quote_balance
-                source_eur_needed = shortfall_quote / (quote_buy_rate * (1 - fee))
-                eur_used = min(cash.get("EUR", 0.0), source_eur_needed)
-                if eur_used > 1e-12:
-                    cash["EUR"] -= eur_used
-                    received = eur_used * quote_buy_rate * (1 - fee)
-                    cash[quote] = cash.get(quote, 0.0) + received
-                    conversion_fee = eur_used * fee
-                    fees_paid += conversion_fee
-                    conversion_fee_for_trade += conversion_fee
-                quote_balance = cash.get(quote, 0.0)
-                shortfall_quote = max(0.0, required_quote * (1 + fee) - quote_balance)
-                source_eur_needed = shortfall_quote / (quote_buy_rate * (1 - fee)) if shortfall_quote > 1e-12 else 0.0
-                # Cross-currency funding routes through EUR and pays a fee
-                # on each exchange leg, not one synthetic fee.
-                if source_eur_needed > 1e-12:
-                    for source in sorted(c for c, amount in cash.items()
-                                         if c not in (quote, "EUR") and amount > 1e-12):
+            required_quote_cash = required_quote * (1 + fee)
+            if quote_balance + 1e-12 < required_quote_cash:
+                # For non-EUR quote markets, spend existing EUR first. For
+                # EUR-quoted markets, EUR is the quote balance itself.
+                if quote != "EUR":
+                    shortfall_quote = required_quote_cash - quote_balance
+                    eur_needed = shortfall_quote / (quote_buy_rate * (1 - fee))
+                    eur_used = min(cash.get("EUR", 0.0), eur_needed)
+                    if eur_used > 1e-12:
+                        received = eur_used * quote_buy_rate * (1 - fee)
+                        cash["EUR"] -= eur_used
+                        cash[quote] = cash.get(quote, 0.0) + received
+                        conversion_fee = eur_used * fee
+                        fees_paid += conversion_fee
+                        conversion_fee_for_trade += conversion_fee
+                        quote_balance = cash[quote]
+
+                # Convert other funded quote wallets through EUR as needed.
+                # Recompute the residual each time so several source wallets
+                # cannot accidentally over-convert after a partial contribution.
+                if quote_balance + 1e-12 < required_quote_cash:
+                    for source in sorted(
+                        c for c, amount in cash.items()
+                        if c not in (quote, "EUR") and amount > 1e-12
+                    ):
                         source_rate = execution_rates.get(source)
                         if not source_rate:
                             continue
+                        remaining_quote = max(0.0, required_quote_cash - quote_balance)
+                        remaining_eur = (
+                            remaining_quote if quote == "EUR"
+                            else remaining_quote / (quote_buy_rate * (1 - fee))
+                        )
                         source_amount = min(
                             cash[source],
-                            source_eur_needed / (source_rate * (1 - fee)),
+                            remaining_eur / (source_rate * (1 - fee)),
                         )
                         if source_amount <= 1e-12:
                             continue
                         eur_received = source_amount * source_rate * (1 - fee)
-                        received = eur_received * quote_buy_rate * (1 - fee)
                         first_fee_eur = source_amount * source_rate * fee
-                        second_fee_eur = eur_received * quote_buy_rate * fee * quote_rate
-                        conversion_fee = first_fee_eur + second_fee_eur
+                        if quote == "EUR":
+                            received = eur_received
+                            conversion_fee = first_fee_eur
+                        else:
+                            received = eur_received * quote_buy_rate * (1 - fee)
+                            second_fee_eur = eur_received * quote_buy_rate * fee * quote_rate
+                            conversion_fee = first_fee_eur + second_fee_eur
                         cash[source] -= source_amount
                         cash[quote] = cash.get(quote, 0.0) + received
                         fees_paid += conversion_fee
                         conversion_fee_for_trade += conversion_fee
                         quote_balance = cash[quote]
-                        if quote_balance + 1e-12 >= required_quote * (1 + fee):
+                        if quote_balance + 1e-12 >= required_quote_cash:
                             break
             quote_balance = cash.get(quote, 0.0)
             spend = min(required_quote, quote_balance / (1 + fee))
