@@ -491,16 +491,23 @@ def build_app(s, engine, exchange):
         if fn: await fn(update, context)
 
     async def ml_research_job(context):
-        """Daily, bounded model refresh on the most liquid eligible markets."""
+        """Six-hourly, bounded model refresh on the most liquid eligible markets."""
         try:
             def research_top_markets():
-                from datetime import datetime, timezone
+                from datetime import datetime, timezone, timedelta
                 from .db import get_state, set_state
                 from .learning import research_candidate
-                today = datetime.now(timezone.utc).date().isoformat()
+                now_utc = datetime.now(timezone.utc)
                 previous = get_state(engine.db, "ml_auto_research_date", {})
-                if isinstance(previous, dict) and previous.get("date") == today:
-                    return []
+                if isinstance(previous, dict) and previous.get("at_utc"):
+                    try:
+                        last_run = datetime.fromisoformat(previous["at_utc"])
+                        if last_run.tzinfo is None:
+                            last_run = last_run.replace(tzinfo=timezone.utc)
+                        if now_utc - last_run < timedelta(hours=6):
+                            return []
+                    except (TypeError, ValueError):
+                        log.warning("Ignoring malformed automatic ML research timestamp")
                 pairs = exchange.discover_pairs()
                 tickers = exchange.tickers()
                 engine.market_pairs = pairs
@@ -542,7 +549,11 @@ def build_app(s, engine, exchange):
                     except Exception as market_exc:
                         log.warning("Automatic model research skipped %s: %s", symbol, market_exc)
                 if trained:
-                    set_state(engine.db, "ml_auto_research_date", {"date": today, "markets": trained})
+                    set_state(engine.db, "ml_auto_research_date", {
+                        "at_utc": now_utc.isoformat(),
+                        "markets": trained,
+                        "cadence_hours": 6,
+                    })
                 return trained
 
             trained = await context.application.bot_data["run_blocking"].run(research_top_markets)
