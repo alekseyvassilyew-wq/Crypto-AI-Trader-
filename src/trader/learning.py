@@ -1,8 +1,8 @@
 """Leakage-aware research models for PAPER strategy experiments.
 
 This module never places orders or promotes a model. It trains a deterministic
-logistic classifier using chronological walk-forward validation and returns a
-candidate artifact for shadow observation only.
+small neural network using chronological walk-forward validation and returns
+a candidate artifact for shadow observation only.
 """
 import math
 
@@ -182,6 +182,33 @@ def _performance(trades, threshold, horizon=1):
     }
 
 
+def _ranking_auc(predictions, labels_by_index):
+    """ROC AUC for ranking scores; None when OOS labels contain one class."""
+    positives = [float(p) for index, p, _ in predictions if labels_by_index[index] == 1]
+    negatives = [float(p) for index, p, _ in predictions if labels_by_index[index] == 0]
+    if not positives or not negatives:
+        return None
+    wins = 0.0
+    for positive in positives:
+        for negative in negatives:
+            wins += 1.0 if positive > negative else 0.5 if positive == negative else 0.0
+    return wins / (len(positives) * len(negatives))
+
+
+def _benchmark_predictions(samples, returns, indices, kind):
+    """Create deterministic, non-fitted benchmark scores on the same OOS rows."""
+    output = []
+    for index in indices:
+        if kind == "always_long":
+            score = 1.0
+        elif kind == "positive_24h_momentum":
+            score = 1.0 if samples[index][2] > 0.0 else 0.0
+        else:
+            raise ValueError("Unknown research benchmark")
+        output.append((index, score, returns[index]))
+    return output
+
+
 def _probability_diagnostics(predictions, horizon=3, thresholds=(0.50, 0.52, 0.55, 0.58, 0.60)):
     """Describe model confidence and threshold sensitivity without selecting a threshold."""
     probabilities = [float(item[1]) for item in predictions]
@@ -292,6 +319,35 @@ def research_candidate(rows, *, horizon=3, fee_rate=0.0026, slippage_bps=5.0,
     ]
     aggregate = _performance(all_oos, threshold, int(horizon))
     independent_holdout = _performance(holdout_predictions, threshold, int(horizon))
+    oos_indices = [item[0] for item in all_oos]
+    holdout_indices = [item[0] for item in holdout_predictions]
+    benchmarks = {
+        "walk_forward_oos": {
+            "always_long": _performance(
+                _benchmark_predictions(samples, future_returns, oos_indices, "always_long"),
+                0.5, int(horizon),
+            ),
+            "positive_24h_momentum": _performance(
+                _benchmark_predictions(samples, future_returns, oos_indices, "positive_24h_momentum"),
+                0.5, int(horizon),
+            ),
+        },
+        "independent_holdout": {
+            "always_long": _performance(
+                _benchmark_predictions(samples, future_returns, holdout_indices, "always_long"),
+                0.5, int(horizon),
+            ),
+            "positive_24h_momentum": _performance(
+                _benchmark_predictions(samples, future_returns, holdout_indices, "positive_24h_momentum"),
+                0.5, int(horizon),
+            ),
+        },
+    }
+    score_ranking = {
+        "walk_forward_oos_roc_auc": _ranking_auc(all_oos, labels),
+        "independent_holdout_roc_auc": _ranking_auc(holdout_predictions, labels),
+        "interpretation": "RANKING_METRIC_ONLY_NOT_PROBABILITY_CALIBRATION",
+    }
     probability_diagnostics = {
         "walk_forward_oos": _probability_diagnostics(all_oos, horizon),
         "independent_holdout": _probability_diagnostics(holdout_predictions, horizon),
@@ -338,6 +394,10 @@ def research_candidate(rows, *, horizon=3, fee_rate=0.0026, slippage_bps=5.0,
     if aggregate["max_drawdown_pct"] > 15.0:
         reason_codes.append("OOS_DRAWDOWN_TOO_HIGH")
         rejection_reasons.append(f"Просадка выше 15%: {aggregate['max_drawdown_pct']:.2f}%")
+    always_long_oos = benchmarks["walk_forward_oos"]["always_long"]
+    if aggregate["net_return_pct"] <= always_long_oos["net_return_pct"]:
+        reason_codes.append("DOES_NOT_BEAT_ALWAYS_LONG")
+        rejection_reasons.append("Модель не превзошла базовый benchmark BUY-AND-HOLD на walk-forward OOS")
     if positive_folds < 2:
         reason_codes.append("UNSTABLE_WALK_FORWARD")
         rejection_reasons.append(f"Нестабильные фолды: положительных {positive_folds} из 3")
@@ -392,6 +452,8 @@ def research_candidate(rows, *, horizon=3, fee_rate=0.0026, slippage_bps=5.0,
         "regime_metrics": regime_metrics,
         "independent_holdout_by_regime": holdout_regime_metrics,
         "probability_diagnostics": probability_diagnostics,
+        "benchmark_metrics": benchmarks,
+        "score_ranking": score_ranking,
         "diagnostics": {
             "reason_codes": reason_codes,
             "rejection_reasons": rejection_reasons,
