@@ -695,7 +695,7 @@ def build_app(s, engine, exchange):
             except Exception:
                 log.error("Could not send ML research error to Telegram")
 
-    async def cycle_job(context):
+    async def _cycle_job(context):
         import time
         now = time.monotonic()
         last = context.application.bot_data.get("last_cycle_at", 0.0)
@@ -804,6 +804,30 @@ def build_app(s, engine, exchange):
             except Exception:
                 log.error("Could not send notification failure to Telegram topic")
 
+    async def cycle_job(context):
+        """Run one scan, then schedule the next after completion (fixed-delay)."""
+        import time
+        started = time.monotonic()
+        try:
+            await _cycle_job(context)
+        finally:
+            duration = time.monotonic() - started
+            target_interval = float(engine.scan_interval_seconds)
+            delay = max(0.0, target_interval - duration)
+            log.info(
+                "Trading cycle finished in %.1fs; next scan scheduled in %.1fs",
+                duration,
+                delay,
+            )
+            # Schedule only after this run finishes. Keep the configured
+            # start-to-start cadence when possible, but never overlap or drop
+            # a scan if the previous cycle or serialized ML research runs long.
+            context.job_queue.run_once(
+                cycle_job,
+                when=delay,
+                name="paper-cycle",
+            )
+
     app = Application.builder().token(s.bot_token).build()
     # Serialize all exchange/SQLite work: cycle jobs, scans and backtests share
     # one requests.Session, engine state and SQLite connection.
@@ -829,8 +853,8 @@ def build_app(s, engine, exchange):
             log.error("Could not notify Telegram error topic")
 
     app.add_error_handler(application_error_handler)
-    # Match the scheduler cadence to the default 1-minute scan interval.
-    # /interval may lengthen the effective cadence; cycle_job enforces it.
-    app.job_queue.run_repeating(cycle_job, interval=60, first=10, name="paper-cycle")
+    # Start once, then cycle_job schedules the next scan after completion.
+    # This fixed-delay cadence avoids overlapping jobs and skipped scans.
+    app.job_queue.run_once(cycle_job, when=10, name="paper-cycle")
     app.job_queue.run_repeating(ml_research_job, interval=3600, first=60, name="hourly-ml-research")
     return app
