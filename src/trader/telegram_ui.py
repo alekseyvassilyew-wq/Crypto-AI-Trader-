@@ -31,7 +31,7 @@ def build_app(s, engine, exchange):
                     or ask < bid):
                 return False, {}
             marks[str(symbol).upper()] = bid
-        return True, {}
+        return True, marks
 
     def safe_error_message(exc):
         message = str(exc) or "Без дополнительного описания"
