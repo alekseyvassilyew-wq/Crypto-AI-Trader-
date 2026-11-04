@@ -178,6 +178,44 @@ def save_paper_snapshot(db, *, ts, equity_eur, cash, open_positions, analyzed_ma
         db.execute("DELETE FROM paper_snapshots WHERE julianday(ts) < julianday('now','-90 days')")
 
 
+def get_latest_paper_snapshot(db):
+    """Return the newest saved PAPER valuation, including its source timestamp."""
+    row = db.execute(
+        "SELECT ts,equity_eur,cash_json,open_positions,analyzed_markets,buy_signals "
+        "FROM paper_snapshots ORDER BY julianday(ts) DESC, id DESC LIMIT 1"
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "ts": row["ts"],
+        "equity_eur": float(row["equity_eur"]),
+        "cash": json.loads(row["cash_json"]),
+        "open_positions": int(row["open_positions"]),
+        "analyzed_markets": int(row["analyzed_markets"]),
+        "buy_signals": int(row["buy_signals"]),
+    }
+
+
+def get_backup_status(backup_dir, *, now=None, stale_after_seconds=26 * 3600):
+    """Inspect the newest verified backup without opening or modifying it."""
+    directory = Path(backup_dir).expanduser()
+    candidates = list(directory.glob("crypto_ai_trader_*.sqlite3")) if directory.exists() else []
+    if not candidates:
+        return {"status": "missing", "timestamp": None, "age_seconds": None, "size_bytes": 0}
+    latest = max(candidates, key=lambda item: item.stat().st_mtime)
+    modified = datetime.fromtimestamp(latest.stat().st_mtime, tz=timezone.utc)
+    reference = now or datetime.now(timezone.utc)
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=timezone.utc)
+    age_seconds = max(0.0, (reference - modified).total_seconds())
+    return {
+        "status": "stale" if age_seconds > float(stale_after_seconds) else "fresh",
+        "timestamp": modified.strftime("%Y-%m-%d %H:%M:%S"),
+        "age_seconds": age_seconds,
+        "size_bytes": latest.stat().st_size,
+    }
+
+
 def get_paper_metrics(db, hours=24):
     """Summarize forward PAPER equity and realized trade accounting."""
     if isinstance(hours, bool) or not isinstance(hours, int) or hours < 1 or hours > 2160:
