@@ -24,6 +24,7 @@ def run_portfolio_backtest(
     *,
     quote_currencies,
     fx_rates,
+    fx_rates_by_timestamp=None,
     initial_cash_eur=1000.0,
     max_trade_eur=100.0,
     max_positions=5,
@@ -37,7 +38,10 @@ def run_portfolio_backtest(
 ):
     """Simulate several spot markets against one shared multi-currency wallet.
 
-    fx_rates maps each quote currency to EUR per one unit (EUR must be 1.0).
+    fx_rates maps quote currencies to EUR per unit (EUR must be 1.0).
+    Optional fx_rates_by_timestamp maps candle timestamps to dated EUR-per-unit
+    rates. Missing currencies fall back to fx_rates. Entry and exit valuations
+    use the rates at their respective fill timestamps.
     signal_fn is called as signal_fn(symbol, history); default is indicators.analyze.
     """
     if not isinstance(candles_by_symbol, dict) or not candles_by_symbol:
@@ -62,6 +66,25 @@ def run_portfolio_backtest(
     rates.setdefault("EUR", 1.0)
     if not math.isclose(rates["EUR"], 1.0, rel_tol=0, abs_tol=1e-12):
         raise ValueError("EUR FX rate must equal 1.0")
+    dated_rates = {}
+    if fx_rates_by_timestamp is not None:
+        if not isinstance(fx_rates_by_timestamp, dict):
+            raise ValueError("fx_rates_by_timestamp must be a mapping")
+        for raw_timestamp, raw_rates in fx_rates_by_timestamp.items():
+            timestamp = _positive(raw_timestamp, "FX timestamp", allow_zero=True)
+            if not isinstance(raw_rates, dict):
+                raise ValueError("Each dated FX rate entry must be a mapping")
+            parsed = {str(k).upper(): _positive(v, f"dated FX rate {k}") for k, v in raw_rates.items()}
+            if "EUR" in parsed and not math.isclose(parsed["EUR"], 1.0, rel_tol=0, abs_tol=1e-12):
+                raise ValueError("EUR FX rate must equal 1.0")
+            parsed["EUR"] = 1.0
+            dated_rates[timestamp] = parsed
+
+    def rates_at(timestamp):
+        current = dict(rates)
+        current.update(dated_rates.get(float(timestamp), {}))
+        return current
+
     markets = {}
     common_timestamps = None
     for raw_symbol, raw_rows in candles_by_symbol.items():
@@ -107,30 +130,32 @@ def run_portfolio_backtest(
     trading_halted = False
     slippage = slip_bps / 10000.0
 
-    def equity(marks):
-        total = sum(amount * rates.get(currency, 0.0) for currency, amount in cash.items())
+    def equity(marks, timestamp):
+        current_rates = rates_at(timestamp)
+        total = sum(amount * current_rates.get(currency, 0.0) for currency, amount in cash.items())
         for symbol, pos in positions.items():
             price = marks.get(symbol, pos["entry_price"])
-            total += pos["qty"] * price * rates[pos["quote"]]
+            total += pos["qty"] * price * current_rates[pos["quote"]]
         return total
 
     def close(symbol, price, timestamp, reason):
         nonlocal fees_paid
         pos = positions.pop(symbol)
+        current_rates = rates_at(timestamp)
         fill = price * (1 - slippage)
         gross = pos["qty"] * fill
         exit_fee = gross * fee
         cash[pos["quote"]] = cash.get(pos["quote"], 0.0) + gross - exit_fee
-        fees_paid += exit_fee
-        entry_cost_eur = (pos["entry_quote"] + pos["entry_fee"]) * rates[pos["quote"]]
-        net_pnl_eur = ((gross - exit_fee) * rates[pos["quote"]]) - entry_cost_eur
+        fees_paid += exit_fee * current_rates[pos["quote"]]
+        entry_cost_eur = (pos["entry_quote"] + pos["entry_fee"]) * pos["entry_fx_rate"]
+        net_pnl_eur = ((gross - exit_fee) * current_rates[pos["quote"]]) - entry_cost_eur
         trades.append({
             "symbol": symbol, "quote_currency": pos["quote"],
             "entry_time": pos["entry_time"], "exit_time": timestamp,
             "entry_price": pos["entry_price"], "exit_price": fill,
             "quantity": pos["qty"], "net_pnl_eur": net_pnl_eur,
             "return_pct": net_pnl_eur / entry_cost_eur * 100 if entry_cost_eur else 0.0,
-            "fees_eur": (pos["entry_fee"] + exit_fee) * rates[pos["quote"]],
+            "fees_eur": pos["entry_fee"] * pos["entry_fx_rate"] + exit_fee * current_rates[pos["quote"]],
             "reason": reason,
         })
 
@@ -139,7 +164,7 @@ def run_portfolio_backtest(
         day = int(timestamp // 86400)
         if active_day != day:
             active_day = day
-            daily_start = equity({s: m["rows"][index][4] for s, m in markets.items()})
+            daily_start = equity({s: m["rows"][index][4] for s, m in markets.items()}, timestamp)
             trading_halted = False
         marks = {s: m["rows"][index][4] for s, m in markets.items()}
 
@@ -167,7 +192,7 @@ def run_portfolio_backtest(
             else:
                 pos["peak"] = max(pos["peak"], high)
 
-        current_equity = equity(marks)
+        current_equity = equity(marks, timestamp)
         if daily_limit is not None and current_equity - daily_start <= -daily_limit:
             trading_halted = True
 
@@ -188,9 +213,10 @@ def run_portfolio_backtest(
                 break
             market = markets[symbol]
             quote = market["quote"]
-            quote_rate = rates[quote]
+            current_rates = rates_at(timestamp)
+            quote_rate = current_rates[quote]
             next_open = market["rows"][index + 1][1]
-            available_eur = sum(amount * rates.get(currency, 0.0) for currency, amount in cash.items())
+            available_eur = sum(amount * current_rates.get(currency, 0.0) for currency, amount in cash.items())
             budget_eur = min(trade_cap, available_eur, current_equity / int(max_positions))
             if budget_eur <= 0:
                 break
@@ -203,7 +229,7 @@ def run_portfolio_backtest(
                 if cash.get("EUR", 0.0) + 1e-12 < source_eur:
                     # Use any other funded quote wallet via its EUR valuation.
                     for source in sorted(c for c, amount in cash.items() if c != quote and amount > 1e-12):
-                        source_rate = rates.get(source)
+                        source_rate = current_rates.get(source)
                         if not source_rate:
                             continue
                         source_amount = min(cash[source], source_eur / source_rate)
@@ -232,10 +258,11 @@ def run_portfolio_backtest(
                 "quote": quote, "qty": qty, "entry_price": fill,
                 "entry_quote": spend, "entry_fee": entry_fee,
                 "entry_time": common_timestamps[index + 1], "peak": fill,
+                "entry_fx_rate": rates_at(common_timestamps[index + 1])[quote],
             }
 
         next_marks = {s: m["rows"][index + 1][1] for s, m in markets.items()}
-        current_equity = equity(next_marks)
+        current_equity = equity(next_marks, common_timestamps[index + 1])
         equity_curve.append({"timestamp": common_timestamps[index + 1], "equity_eur": current_equity})
         max_equity = max(max_equity, current_equity)
         max_drawdown = max(max_drawdown, (max_equity - current_equity) / max_equity if max_equity else 0.0)
@@ -244,7 +271,8 @@ def run_portfolio_backtest(
     last_timestamp = common_timestamps[-1]
     for symbol in list(positions):
         close(symbol, markets[symbol]["rows"][-1][4], last_timestamp, "END_OF_DATA")
-    final_equity = sum(amount * rates.get(currency, 0.0) for currency, amount in cash.items())
+    final_rates = rates_at(last_timestamp)
+    final_equity = sum(amount * final_rates.get(currency, 0.0) for currency, amount in cash.items())
     net_pnl = final_equity - initial
     wins = [t for t in trades if t["net_pnl_eur"] > 0]
     losses = [t for t in trades if t["net_pnl_eur"] <= 0]
@@ -263,6 +291,7 @@ def run_portfolio_backtest(
             "slippage_bps_per_side": slip_bps,
             "execution": "next candle open",
             "intrabar_priority": "stop before take-profit",
-            "fx_rates": rates,
+            "fx_rates_fallback": rates,
+            "dated_fx_rate_timestamps": len(dated_rates),
         },
     }
