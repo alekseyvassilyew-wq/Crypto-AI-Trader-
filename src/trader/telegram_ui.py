@@ -948,15 +948,15 @@ def build_app(s, engine, exchange):
                 title = html.escape(event["title"])
                 detail = html.escape(event["detail"][:700])
                 url = event.get("url", "")
-                link = f'\\n<a href="{html.escape(url, quote=True)}">Открыть событие</a>' if url.startswith("https://") else ""
+                link = f'\n<a href="{html.escape(url, quote=True)}">Открыть событие</a>' if url.startswith("https://") else ""
                 successful = event["status"] in {"LIVE", "SUCCESS"}
                 heading = "🟢 СИСТЕМНОЕ ИЗВЕЩЕНИЕ" if successful else "🚨 СБОЙ ВНЕШНЕГО СЕРВИСА"
                 message = (
-                    f"<b>{heading}</b>\\n"
-                    f"🕒 Время: <code>{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</code>\\n"
-                    f"🧩 Источник: <b>{source}</b>\\n"
-                    f"📌 Событие: <b>{title}</b>\\n"
-                    f"⚠️ Статус: <code>{status}</code>\\n"
+                    f"<b>{heading}</b>\n"
+                    f"🕒 Время: <code>{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</code>\n"
+                    f"🧩 Источник: <b>{source}</b>\n"
+                    f"📌 Событие: <b>{title}</b>\n"
+                    f"⚠️ Статус: <code>{status}</code>\n"
                     f"📝 Описание: {detail}{link}"
                 )
                 topic = s.topic_general_id if successful else s.topic_errors_id
