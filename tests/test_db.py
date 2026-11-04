@@ -58,3 +58,53 @@ def test_sqlite_backup_rejects_invalid_retention(tmp_path):
     with pytest.raises(ValueError, match="retention"):
         backup_database(db, tmp_path / "backups", keep=0)
     db.close()
+
+
+
+def test_paper_trade_accounting_metrics_include_realized_pnl_fees_and_symbol_breakdown():
+    from src.trader.db import save_trade
+
+    db = connect(":memory:")
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    save_paper_snapshot(
+        db, ts=now, equity_eur=21.0, cash={"EUR": 21.0},
+        open_positions=0, analyzed_markets=20, buy_signals=0,
+    )
+    save_trade(db, "PAPER", "XBTEUR", "Buy", 0.01, 100.0, 0.26, 10000.0, "FILLED", fee_eur=0.26)
+    save_trade(
+        db, "PAPER", "XBTEUR", "Sell", 0.01, 103.0, 0.2678, 10300.0, "FILLED",
+        fee_eur=0.2678, realized_pnl_eur=2.4722,
+    )
+    save_trade(
+        db, "PAPER", "ETHEUR", "Sell", 0.1, 20.0, 0.052, 200.0, "FILLED",
+        fee_eur=0.052, realized_pnl_eur=-1.052,
+    )
+    metrics = get_paper_metrics(db, 24)
+    assert metrics["closed_trades"] == 2
+    assert metrics["winning_trades"] == 1
+    assert metrics["losing_trades"] == 1
+    assert metrics["win_rate_pct"] == 50.0
+    assert metrics["realized_pnl_eur"] == pytest.approx(1.4202)
+    assert metrics["total_fees_eur"] == pytest.approx(0.5798)
+    assert metrics["by_symbol"][0]["symbol"] == "XBTEUR"
+    db.close()
+
+
+def test_legacy_trades_table_gets_additive_accounting_migration(tmp_path):
+    import sqlite3
+    from src.trader.db import connect
+
+    path = tmp_path / "legacy.sqlite3"
+    legacy = sqlite3.connect(path)
+    legacy.execute(
+        "CREATE TABLE trades(id INTEGER PRIMARY KEY, ts TEXT DEFAULT CURRENT_TIMESTAMP, "
+        "mode TEXT NOT NULL, symbol TEXT NOT NULL, side TEXT NOT NULL, qty REAL NOT NULL, "
+        "quote REAL NOT NULL, fee REAL NOT NULL, price REAL NOT NULL, status TEXT NOT NULL, order_id TEXT)"
+    )
+    legacy.commit()
+    legacy.close()
+
+    db = connect(path)
+    columns = {row["name"] for row in db.execute("PRAGMA table_info(trades)")}
+    assert {"fee_eur", "realized_pnl_eur"}.issubset(columns)
+    db.close()
