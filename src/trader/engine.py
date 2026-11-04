@@ -309,7 +309,7 @@ class Engine:
                 if (symbol, quote) in selected:
                     result = self.scan_one(symbol, [ticker_by_symbol[symbol]], fx_rates=fresh_fx_rates, quote_currency=quote)
                     result["quote"] = quote
-                    result["turnover_eur"] = float(result.get("turnover") or 0) * fx_rates.get(quote, 0.0)
+                    result["turnover_eur"] = float(result.get("turnover") or 0) * fresh_fx_rates.get(quote, 0.0)
                     results_by_symbol[symbol] = result
                 else:
                     ticker = ticker_by_symbol[symbol]
