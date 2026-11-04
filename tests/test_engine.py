@@ -110,7 +110,7 @@ def test_full_market_scan_monitors_all_pairs_but_analyzes_only_eur_budget(tmp_pa
     engine.exchange = FullMarketExchange()
     analyzed = []
 
-    def fake_scan_one(symbol, tickers=None):
+    def fake_scan_one(symbol, tickers=None, **kwargs):
         analyzed.append(symbol)
         return {"symbol": symbol, "signal": "HOLD", "score": 1, "price": 99, "spread_bps": 10, "turnover": 50000, "reasons": []}
 
