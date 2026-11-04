@@ -957,27 +957,27 @@ def build_app(s, engine, exchange):
         stage = "polling external APIs"
         state = None
         try:
+            import asyncio
             from .monitoring import poll_external_events, merge_monitor_health_state
-            def poll_without_committing():
-                from .db import get_state
-                state = get_state(engine.db, "external_monitor_state", {})
-                if not isinstance(state, dict):
-                    state = {}
-                events = poll_external_events(s, state)
-                return state, events
 
-            # Do not advance the durable cursors until every alert has been
-            # accepted by Telegram. A transient Telegram failure then causes
-            # the same event to be retried on the next poll instead of lost.
+            # Read/write the shared SQLite connection under the engine lock,
+            # but never hold that lock while waiting on Render/GitHub HTTP APIs.
+            def load_monitor_state():
+                from .db import get_state
+                value = get_state(engine.db, "external_monitor_state", {})
+                return value if isinstance(value, dict) else {}
+
+            # Do not advance durable event cursors until Telegram has accepted
+            # every alert. A delivery failure therefore retries the same events.
             if not bool(s.telegram_group_chat_id):
                 log.warning("External monitoring has no Telegram destination; keeping event cursors unchanged")
                 return
 
-            state, events = await context.application.bot_data["run_blocking"].run(poll_without_committing)
+            state = await context.application.bot_data["run_blocking"].run(load_monitor_state)
+            events = await asyncio.to_thread(poll_external_events, s, state)
 
-            # Save API health immediately, but never advance event cursors until
-            # Telegram has accepted every pending notification. This keeps
-            # /monitorstatus truthful even during a Telegram delivery outage.
+            # Save API health immediately, independently of Telegram delivery,
+            # while leaving event cursors untouched for retry safety.
             stage = "persisting API health"
             def persist_monitor_health():
                 from .db import get_state, set_state
