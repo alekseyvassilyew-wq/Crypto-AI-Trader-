@@ -254,3 +254,23 @@ def research_candidate(rows, *, horizon=3, fee_rate=0.0026, slippage_bps=5.0,
         "model": {"feature_names": list(FEATURE_NAMES), **final_model},
         "warning": "Research only. Candidate is not connected to PAPER order decisions and is never auto-promoted.",
     }
+
+
+def rotate_research_batch(eligible, cursor, batch_size):
+    """Return a bounded rotating slice so lower-ranked markets are researched too.
+
+    The caller supplies a deterministically ordered market list (for example,
+    liquidity-ranked Kraken markets). The cursor is persisted between runs.
+    """
+    if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
+        raise ValueError("batch_size must be a positive integer")
+    markets = list(eligible)
+    if not markets:
+        return [], 0
+    try:
+        start = int(cursor or 0) % len(markets)
+    except (TypeError, ValueError, OverflowError):
+        start = 0
+    rotated = markets[start:] + markets[:start]
+    selected = rotated[:min(batch_size, len(markets))]
+    return selected, (start + len(selected)) % len(markets)
