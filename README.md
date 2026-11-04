@@ -56,8 +56,8 @@ The declared Render worker plan and Persistent Disk may incur charges. Review Re
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-cp .env.example .env       # set Telegram values and Kraken credentials
+pip install -r requirements-dev.txt  # includes runtime and test dependencies
+cp .env.example .env       # set Telegram values; Kraken read-only credentials are optional
 pytest -q
 python -m src.trader.main
 ```
