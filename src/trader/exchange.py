@@ -39,6 +39,8 @@ class KrakenSpot:
         self._pair_cache = {}
         self._nonce_lock = threading.Lock()
         self._last_nonce = 0
+        self._public_lock = threading.Lock()
+        self._last_public_request = 0.0
 
     def _request(self, path, data=None, private=False):
         data = data or {}
@@ -64,7 +66,14 @@ class KrakenSpot:
             if private:
                 response = self.session.post(url, data=payload, headers=headers, timeout=self.timeout)
             else:
-                response = self.session.get(url, params=data, timeout=self.timeout)
+                # Kraken public REST endpoints share a per-IP call budget.
+                # Serialize requests and leave a small gap to reduce throttling.
+                with self._public_lock:
+                    wait = 0.5 - (time.monotonic() - self._last_public_request)
+                    if wait > 0:
+                        time.sleep(wait)
+                    self._last_public_request = time.monotonic()
+                    response = self.session.get(url, params=data, timeout=self.timeout)
             response.raise_for_status()
         except (requests.Timeout, requests.ConnectionError) as exc:
             raise RuntimeError(f"Kraken network request failed: {exc}") from exc
