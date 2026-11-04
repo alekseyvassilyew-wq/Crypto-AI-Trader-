@@ -114,7 +114,7 @@ def save_paper_snapshot(db, *, ts, equity_eur, cash, open_positions, analyzed_ma
             (str(ts), equity, payload, open_positions, analyzed_markets, buy_signals),
         )
         # Keep 90 days of minute-level telemetry; never grow SQLite without bound.
-        db.execute("DELETE FROM paper_snapshots WHERE ts < datetime('now','-90 days')")
+        db.execute("DELETE FROM paper_snapshots WHERE julianday(ts) < julianday('now','-90 days')")
 
 
 def get_paper_metrics(db, hours=24):
@@ -123,7 +123,7 @@ def get_paper_metrics(db, hours=24):
         raise ValueError("hours must be an integer between 1 and 2160")
     rows = db.execute(
         "SELECT ts,equity_eur,open_positions,analyzed_markets,buy_signals "
-        "FROM paper_snapshots WHERE ts >= datetime('now', ?) ORDER BY ts ASC",
+        "FROM paper_snapshots WHERE julianday(ts) >= julianday('now', ?) ORDER BY ts ASC",
         (f"-{int(hours)} hours",),
     ).fetchall()
     if not rows:
