@@ -110,6 +110,7 @@ def test_full_market_scan_monitors_all_pairs_and_can_analyze_non_eur_markets(tmp
                 {"symbol": "XBTEUR", "quote": "EUR", "status": "online"},
                 {"symbol": "ETHEUR", "quote": "EUR", "status": "online"},
                 {"symbol": "ETHUSD", "quote": "USD", "status": "online"},
+                {"symbol": "USDZEUR", "quote": "EUR", "status": "online"},
             ]
 
         def tickers(self):
@@ -117,6 +118,7 @@ def test_full_market_scan_monitors_all_pairs_and_can_analyze_non_eur_markets(tmp
                 {"symbol": "XBTEUR", "quote": "EUR", "bid1Price": 99.95, "ask1Price": 100, "lastPrice": 99.98, "turnover24h": 50000},
                 {"symbol": "ETHEUR", "quote": "EUR", "bid1Price": 49.99, "ask1Price": 50, "lastPrice": 49.995, "turnover24h": 20000},
                 {"symbol": "ETHUSD", "quote": "USD", "bid1Price": 2999, "ask1Price": 3001, "lastPrice": 3000, "turnover24h": 500000},
+                {"symbol": "USDZEUR", "quote": "EUR", "bid1Price": 0.8999, "ask1Price": 0.9001, "lastPrice": 0.9, "turnover24h": 100000},
             ]
 
     engine.exchange = FullMarketExchange()
@@ -129,9 +131,9 @@ def test_full_market_scan_monitors_all_pairs_and_can_analyze_non_eur_markets(tmp
     engine.scan_one = fake_scan_one
     rows = engine.scan()
 
-    assert engine.market_ticker_count == 3
-    assert len(rows) == 3
-    assert analyzed == ["XBTEUR"]
+    assert engine.market_ticker_count == 4
+    assert len(rows) == 4
+    assert analyzed == ["ETHUSD"]
     by_symbol = {row["symbol"]: row for row in rows}
     assert by_symbol["ETHUSD"]["signal"] == "HOLD"
     assert "Monitored only" in by_symbol["ETHUSD"]["reasons"][0]
