@@ -14,6 +14,7 @@ class Settings:
     paper_start: float
     max_trade: float
     max_daily_loss: float
+    risk_per_trade_pct: float
     max_positions: int
     max_spread_bps: float
     min_turnover: float
@@ -48,6 +49,7 @@ def load_settings():
         paper_start=float(os.getenv("PAPER_START_EUR", "20")),
         max_trade=float(os.getenv("MAX_TRADE_EUR", "5")),
         max_daily_loss=float(os.getenv("MAX_DAILY_LOSS_EUR", "2")),
+        risk_per_trade_pct=float(os.getenv("RISK_PER_TRADE_PERCENT", "0.5")),
         max_positions=int(os.getenv("MAX_OPEN_POSITIONS", "2")),
         max_spread_bps=float(os.getenv("MAX_SPREAD_BPS", "25")),
         min_turnover=float(os.getenv("MIN_24H_TURNOVER_EUR", "10000")),
@@ -73,15 +75,17 @@ def load_settings():
         raise ValueError("Set BOT_TOKEN and numeric ADMIN_ID.")
     if s.paper_start <= 0 or s.max_trade <= 0 or s.max_trade > s.paper_start:
         raise ValueError("Invalid paper balance or trade size configuration.")
-    numeric_values = (s.paper_start, s.max_trade, s.max_daily_loss, s.max_spread_bps,
+    numeric_values = (s.paper_start, s.max_trade, s.max_daily_loss, s.risk_per_trade_pct, s.max_spread_bps,
                       s.min_turnover, s.fee_rate, s.stop_loss_pct, s.take_profit_pct, s.trailing_stop_pct)
     if not all(math.isfinite(value) for value in numeric_values):
         raise ValueError("All numeric settings must be finite numbers.")
-    if min(s.max_daily_loss, s.max_positions, s.max_candle_pairs, s.scan_interval, s.stop_loss_pct, s.take_profit_pct, s.trailing_stop_pct) <= 0:
+    if min(s.max_daily_loss, s.max_positions, s.max_candle_pairs, s.scan_interval, s.stop_loss_pct, s.take_profit_pct, s.trailing_stop_pct, s.risk_per_trade_pct) <= 0:
         raise ValueError("Risk limits and scan interval must be positive.")
     # TRADE_QUOTE_CURRENCY is retained for backwards-compatible display/defaults.
     if s.max_spread_bps <= 0 or s.min_turnover < 0:
         raise ValueError("Spread limit must be positive and minimum turnover cannot be negative.")
+    if s.risk_per_trade_pct > 2.0:
+        raise ValueError("RISK_PER_TRADE_PERCENT must not exceed 2.0%.")
     if not 0 <= s.fee_rate < 0.1:
         raise ValueError("PAPER_FEE_RATE must be between 0 and 0.1.")
     return s
