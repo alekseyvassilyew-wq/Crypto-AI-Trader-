@@ -136,3 +136,15 @@ def test_settled_shadow_prediction_retention_is_bounded():
     assert db.execute("SELECT COUNT(*) FROM ml_shadow_predictions WHERE symbol='OLDEUR'").fetchone()[0] == 0
     assert db.execute("SELECT COUNT(*) FROM ml_shadow_predictions WHERE symbol='NEWEUR'").fetchone()[0] == 1
     db.close()
+
+
+def test_research_reports_probability_distribution_and_threshold_sweep():
+    result = research_candidate(sample_candles(), fee_rate=0.001, slippage_bps=2)
+    diagnostics = result["probability_diagnostics"]["walk_forward_oos"]
+    assert diagnostics["prediction_count"] > 0
+    assert 0 <= diagnostics["min"] <= diagnostics["median"] <= diagnostics["max"] <= 1
+    assert set(diagnostics["thresholds"]) == {"0.50", "0.52", "0.55", "0.58", "0.60"}
+    assert diagnostics["interpretation"] == "DIAGNOSTIC_ONLY_NOT_FOR_THRESHOLD_SELECTION"
+    for metrics in diagnostics["thresholds"].values():
+        assert "trades" in metrics and "net_return_pct" in metrics
+    assert "same OOS/holdout data" in result["probability_diagnostics"]["warning"]
