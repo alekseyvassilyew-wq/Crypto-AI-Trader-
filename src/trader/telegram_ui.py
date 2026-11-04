@@ -932,6 +932,38 @@ def build_app(s, engine, exchange):
         app.add_handler(CommandHandler(name, fn))
     app.add_handler(CallbackQueryHandler(callback))
 
+    async def external_monitor_job(context):
+        """Poll optional Render/GitHub APIs and route status changes to Telegram."""
+        if not (s.render_api_key and s.render_service_id or s.github_token and s.github_repository):
+            return
+        try:
+            from .monitoring import poll_external_events
+            state = context.application.bot_data.setdefault("external_monitor_state", {})
+            events = await context.application.bot_data["run_blocking"].run(
+                lambda: poll_external_events(s, state)
+            )
+            for event in events:
+                source = html.escape(event["source"])
+                status = html.escape(event["status"])
+                title = html.escape(event["title"])
+                detail = html.escape(event["detail"][:700])
+                url = event.get("url", "")
+                link = f'\\n<a href="{html.escape(url, quote=True)}">Открыть событие</a>' if url.startswith("https://") else ""
+                successful = event["status"] in {"LIVE", "SUCCESS"}
+                heading = "🟢 СИСТЕМНОЕ ИЗВЕЩЕНИЕ" if successful else "🚨 СБОЙ ВНЕШНЕГО СЕРВИСА"
+                message = (
+                    f"<b>{heading}</b>\\n"
+                    f"🕒 Время: <code>{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</code>\\n"
+                    f"🧩 Источник: <b>{source}</b>\\n"
+                    f"📌 Событие: <b>{title}</b>\\n"
+                    f"⚠️ Статус: <code>{status}</code>\\n"
+                    f"📝 Описание: {detail}{link}"
+                )
+                topic = s.topic_general_id if successful else s.topic_errors_id
+                await send_topic(context, topic, message, parse_mode="HTML")
+        except Exception as exc:
+            log.warning("External monitoring job failed: %s", type(exc).__name__)
+
     async def application_error_handler(update, context):
         error = context.error
         # Do not log exception strings: HTTP request exceptions can contain
@@ -948,6 +980,8 @@ def build_app(s, engine, exchange):
             log.error("Could not notify Telegram error topic")
 
     app.add_error_handler(application_error_handler)
+    # Optional API polling is enabled only when both credentials and resource IDs are configured.
+    app.job_queue.run_repeating(external_monitor_job, interval=90, first=25, name="external-platform-monitor")
     # Start once, then cycle_job schedules the next scan after completion.
     # This fixed-delay cadence avoids overlapping jobs and skipped scans.
     app.job_queue.run_once(cycle_job, when=10, name="paper-cycle")
