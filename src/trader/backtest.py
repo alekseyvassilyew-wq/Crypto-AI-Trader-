@@ -123,14 +123,19 @@ def run_backtest(
             elif op >= target_price:
                 exit_reason, exit_at = "TAKE_PROFIT", op
             else:
-                peak = max(peak, high)
-                trail_price = peak * (1.0 - trail_pct) if peak > entry else 0.0
-                active_stop = max(stop_price, trail_price)
-                if low <= active_stop:
-                    exit_reason = "STOP_LOSS" if active_stop == stop_price else "TRAILING_STOP"
-                    exit_at = active_stop
-                elif high >= target_price:
-                    exit_reason, exit_at = "TAKE_PROFIT", target_price
+                # If the original stop and target are both touched in one
+                # candle, the path is unknowable: take the base stop first.
+                if low <= stop_price:
+                    exit_reason, exit_at = "STOP_LOSS", stop_price
+                else:
+                    peak = max(peak, high)
+                    trail_price = peak * (1.0 - trail_pct) if peak > entry else 0.0
+                    active_stop = max(stop_price, trail_price)
+                    if low <= active_stop:
+                        exit_reason = "STOP_LOSS" if active_stop == stop_price else "TRAILING_STOP"
+                        exit_at = active_stop
+                    elif high >= target_price:
+                        exit_reason, exit_at = "TAKE_PROFIT", target_price
             if exit_reason:
                 close_position(exit_at, ts, exit_reason)
 
@@ -178,15 +183,18 @@ def run_backtest(
         elif last_open >= target_price:
             reason, exit_price = "TAKE_PROFIT", last_open
         else:
-            peak = max(peak, last_high)
-            trail_price = peak * (1.0 - trail_pct) if peak > entry else 0.0
-            active_stop = max(stop_price, trail_price)
-            if last_low <= active_stop:
-                reason, exit_price = ("STOP_LOSS" if active_stop == stop_price else "TRAILING_STOP"), active_stop
-            elif last_high >= target_price:
-                reason, exit_price = "TAKE_PROFIT", target_price
+            if last_low <= stop_price:
+                reason, exit_price = "STOP_LOSS", stop_price
             else:
-                reason, exit_price = "END_OF_DATA", last_close
+                peak = max(peak, last_high)
+                trail_price = peak * (1.0 - trail_pct) if peak > entry else 0.0
+                active_stop = max(stop_price, trail_price)
+                if last_low <= active_stop:
+                    reason, exit_price = ("STOP_LOSS" if active_stop == stop_price else "TRAILING_STOP"), active_stop
+                elif last_high >= target_price:
+                    reason, exit_price = "TAKE_PROFIT", target_price
+                else:
+                    reason, exit_price = "END_OF_DATA", last_close
         close_position(exit_price, last_ts, reason)
         equity_curve.append(cash)
         max_equity = max(max_equity, cash)
