@@ -17,6 +17,7 @@ class Engine:
         self.last_signals = []
         self.market_pairs = []
         self.market_ticker_count = 0
+        self.last_ticker_data = {}
         self.limits = Limits(settings.max_trade, settings.max_daily_loss, settings.max_positions,
                              settings.max_spread_bps, settings.min_turnover)
         self._ensure_day()
@@ -47,30 +48,64 @@ class Engine:
         audit(self.db, "PAPER_STOPPED", reason)
 
     def _fresh_fx_rates(self, prices=None):
-        """Build EUR conversion routes using only the current market snapshot."""
+        """Build EUR conversion rates only from direct, fresh EUR markets.
+
+        Crypto-to-crypto cross routes can be distorted by illiquid altcoin
+        prices. A currency without a fresh direct EUR market is monitored but
+        cannot authorize new PAPER conversions or entries.
+        """
         prices = self.last_prices if prices is None else prices
-        graph = {}
+        rates = {"EUR": 1.0}
+        candidates = {}
         for pair in self.market_pairs:
+            symbol = pair.get("symbol")
             base = str(pair.get("base") or "").upper()
             quote = str(pair.get("quote") or "").upper()
-            symbol = pair.get("symbol")
-            try:
-                price = float(prices.get(symbol) or 0) if symbol else 0.0
-            except (TypeError, ValueError, OverflowError):
-                price = 0.0
-            if not base or not quote or not math.isfinite(price) or price <= 0:
+            raw_price = prices.get(symbol) if symbol else None
+            if not symbol or not base or not quote or raw_price is None:
                 continue
-            graph.setdefault(base, {})[quote] = price
-            graph.setdefault(quote, {})[base] = 1.0 / price
-        rates = {"EUR": 1.0}
-        queue = ["EUR"]
-        while queue:
-            target = queue.pop(0)
-            for source, edges in graph.items():
-                if source in rates or target not in edges:
+            try:
+                price = float(raw_price)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if not math.isfinite(price) or price <= 0:
+                continue
+
+            ticker = self.last_ticker_data.get(symbol)
+            turnover_eur = 0.0
+            if ticker is not None:
+                try:
+                    bid = float(ticker.get("bid1Price") or 0)
+                    ask = float(ticker.get("ask1Price") or 0)
+                    turnover = float(ticker.get("turnover24h") or 0)
+                except (TypeError, ValueError, OverflowError):
                     continue
-                rates[source] = edges[target] * rates[target]
-                queue.append(source)
+                if bid <= 0 or ask <= 0 or ask < bid or turnover <= 0:
+                    continue
+                spread_bps = (ask - bid) / ((ask + bid) / 2.0) * 10000.0
+                if not math.isfinite(spread_bps) or spread_bps > self.s.max_spread_bps:
+                    continue
+                if quote == "EUR":
+                    turnover_eur = turnover
+                elif base == "EUR":
+                    turnover_eur = turnover / price
+                if turnover_eur < max(1000.0, self.s.min_turnover * 0.1):
+                    continue
+
+            if quote == "EUR":
+                currency, rate = base, price
+            elif base == "EUR":
+                currency, rate = quote, 1.0 / price
+            else:
+                continue
+            if not math.isfinite(rate) or rate <= 0:
+                continue
+            previous = candidates.get(currency)
+            if previous is None or turnover_eur > previous[0]:
+                candidates[currency] = (turnover_eur, rate)
+
+        for currency, (_, rate) in candidates.items():
+            rates[currency] = rate
         return rates
 
     def _fx_rates(self, prices=None):
@@ -236,6 +271,7 @@ class Engine:
             self.market_pairs = pairs
             self.market_ticker_count = len(tickers)
             ticker_by_symbol = {item["symbol"]: item for item in tickers}
+            self.last_ticker_data = ticker_by_symbol
             analysis_limit = max(1, int(getattr(self.s, "max_candle_pairs", 10)))
 
             snapshot_prices = {
