@@ -494,7 +494,7 @@ def build_app(s, engine, exchange):
         if fn: await fn(update, context)
 
     async def ml_research_job(context):
-        """Six-hourly, bounded model refresh on the most liquid eligible markets."""
+        """Hourly, bounded, rotating model research across all eligible markets."""
         try:
             def research_top_markets():
                 from datetime import datetime, timezone, timedelta
@@ -507,7 +507,7 @@ def build_app(s, engine, exchange):
                         last_run = datetime.fromisoformat(previous["at_utc"])
                         if last_run.tzinfo is None:
                             last_run = last_run.replace(tzinfo=timezone.utc)
-                        if now_utc - last_run < timedelta(hours=6):
+                        if now_utc - last_run < timedelta(hours=1):
                             return []
                     except (TypeError, ValueError):
                         log.warning("Ignoring malformed automatic ML research timestamp")
@@ -533,8 +533,15 @@ def build_app(s, engine, exchange):
                     if spread <= s.max_spread_bps and turnover_eur >= s.min_turnover:
                         eligible.append((turnover_eur, pair["symbol"]))
                 eligible.sort(reverse=True)
+                from .learning import rotate_research_batch
+                cursor = get_state(engine.db, "ml_auto_research_cursor", 0)
+                selected, next_cursor = rotate_research_batch(
+                    eligible, cursor, s.ml_auto_research_markets
+                )
+                if selected:
+                    set_state(engine.db, "ml_auto_research_cursor", next_cursor)
                 trained = []
-                for _, symbol in eligible[:s.ml_auto_research_markets]:
+                for _, symbol in selected:
                     try:
                         candles = exchange.candles(symbol, interval="60", limit=720)
                         candidate = research_candidate(candles, fee_rate=s.fee_rate, slippage_bps=5.0)
@@ -555,7 +562,7 @@ def build_app(s, engine, exchange):
                     set_state(engine.db, "ml_auto_research_date", {
                         "at_utc": now_utc.isoformat(),
                         "markets": trained,
-                        "cadence_hours": 6,
+                        "cadence_hours": 1,
                     })
                 return trained
 
