@@ -20,6 +20,7 @@ CREATE INDEX IF NOT EXISTS idx_paper_snapshots_ts ON paper_snapshots(ts);
 CREATE TABLE IF NOT EXISTS ml_shadow_predictions(
     id INTEGER PRIMARY KEY,
     symbol TEXT NOT NULL,
+    model_version TEXT NOT NULL DEFAULT '',
     signal_ts REAL NOT NULL,
     target_ts REAL NOT NULL,
     probability REAL NOT NULL,
@@ -42,6 +43,10 @@ def connect(path):
     db.execute("PRAGMA foreign_keys=ON")
     db.execute("PRAGMA busy_timeout=30000")
     db.executescript(SCHEMA)
+    # Additive migration for databases created before model-version tracking.
+    columns = {row["name"] for row in db.execute("PRAGMA table_info(ml_shadow_predictions)").fetchall()}
+    if "model_version" not in columns:
+        db.execute("ALTER TABLE ml_shadow_predictions ADD COLUMN model_version TEXT NOT NULL DEFAULT ''")
     return db
 
 def audit(db, event, details=""):
@@ -111,7 +116,7 @@ def get_paper_metrics(db, hours=24):
 
 
 
-def record_shadow_prediction(db, *, symbol, signal_ts, target_ts, probability, threshold, entry_price):
+def record_shadow_prediction(db, *, symbol, model_version='', signal_ts, target_ts, probability, threshold, entry_price):
     """Record one non-overlapping model prediction; never affects the trading engine."""
     symbol = str(symbol).upper()
     signal_ts, target_ts = float(signal_ts), float(target_ts)
@@ -128,9 +133,9 @@ def record_shadow_prediction(db, *, symbol, signal_ts, target_ts, probability, t
         if latest and (signal_ts <= float(latest["signal_ts"]) or signal_ts < float(latest["target_ts"])):
             return False
         db.execute(
-            "INSERT OR IGNORE INTO ml_shadow_predictions(symbol,signal_ts,target_ts,probability,threshold,entry_price) "
-            "VALUES(?,?,?,?,?,?)",
-            (symbol, signal_ts, target_ts, probability, threshold, entry_price),
+            "INSERT OR IGNORE INTO ml_shadow_predictions(symbol,model_version,signal_ts,target_ts,probability,threshold,entry_price) "
+            "VALUES(?,?,?,?,?,?,?)",
+            (symbol, str(model_version), signal_ts, target_ts, probability, threshold, entry_price),
         )
     return True
 
@@ -164,12 +169,14 @@ def settle_shadow_predictions(db, *, symbol, candles, fee_rate, slippage_bps):
     return settled
 
 
-def get_shadow_metrics(db, symbol):
-    rows = db.execute(
-        "SELECT probability,threshold,realized_return FROM ml_shadow_predictions "
-        "WHERE symbol=? AND realized_return IS NOT NULL ORDER BY signal_ts",
-        (str(symbol).upper(),),
-    ).fetchall()
+def get_shadow_metrics(db, symbol, model_version=None):
+    query = "SELECT probability,threshold,realized_return FROM ml_shadow_predictions WHERE symbol=? AND realized_return IS NOT NULL"
+    params = [str(symbol).upper()]
+    if model_version is not None:
+        query += " AND model_version=?"
+        params.append(str(model_version))
+    query += " ORDER BY signal_ts"
+    rows = db.execute(query, tuple(params)).fetchall()
     selected = [float(row["realized_return"]) for row in rows if float(row["probability"]) >= float(row["threshold"])]
     wins = [value for value in selected if value > 0]
     losses = [value for value in selected if value <= 0]
@@ -186,7 +193,8 @@ def get_shadow_metrics(db, symbol):
         "profit_factor": sum(wins) / gross_loss if gross_loss else ("INF" if wins else 0.0),
         "max_drawdown_pct": drawdown * 100,
         "pending": db.execute(
-            "SELECT COUNT(*) AS n FROM ml_shadow_predictions WHERE symbol=? AND realized_return IS NULL",
-            (str(symbol).upper(),),
+            "SELECT COUNT(*) AS n FROM ml_shadow_predictions WHERE symbol=? AND realized_return IS NULL"
+            + (" AND model_version=?" if model_version is not None else ""),
+            (str(symbol).upper(), str(model_version)) if model_version is not None else (str(symbol).upper(),),
         ).fetchone()["n"],
     }
