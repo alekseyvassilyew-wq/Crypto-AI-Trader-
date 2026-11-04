@@ -398,10 +398,18 @@ def research_candidate(rows, *, horizon=3, fee_rate=0.0026, slippage_bps=5.0,
     if aggregate["net_return_pct"] <= always_long_oos["net_return_pct"]:
         reason_codes.append("DOES_NOT_BEAT_ALWAYS_LONG")
         rejection_reasons.append("Модель не превзошла базовый benchmark BUY-AND-HOLD на walk-forward OOS")
+    momentum_oos = benchmarks["walk_forward_oos"]["positive_24h_momentum"]
+    if aggregate["net_return_pct"] <= momentum_oos["net_return_pct"]:
+        reason_codes.append("DOES_NOT_BEAT_MOMENTUM_OOS")
+        rejection_reasons.append("Модель не превзошла 24-часовой momentum benchmark на walk-forward OOS")
     always_long_holdout = benchmarks["independent_holdout"]["always_long"]
     if independent_holdout["net_return_pct"] <= always_long_holdout["net_return_pct"]:
         reason_codes.append("DOES_NOT_BEAT_ALWAYS_LONG_HOLDOUT")
         rejection_reasons.append("Модель не превзошла BUY-AND-HOLD на независимом holdout")
+    momentum_holdout = benchmarks["independent_holdout"]["positive_24h_momentum"]
+    if independent_holdout["net_return_pct"] <= momentum_holdout["net_return_pct"]:
+        reason_codes.append("DOES_NOT_BEAT_MOMENTUM_HOLDOUT")
+        rejection_reasons.append("Модель не превзошла 24-часовой momentum benchmark на независимом holdout")
     if positive_folds < 2:
         reason_codes.append("UNSTABLE_WALK_FORWARD")
         rejection_reasons.append(f"Нестабильные фолды: положительных {positive_folds} из 3")
@@ -418,6 +426,11 @@ def research_candidate(rows, *, horizon=3, fee_rate=0.0026, slippage_bps=5.0,
     if holdout_pf != "INF" and float(holdout_pf) < 1.0:
         reason_codes.append("HOLDOUT_PROFIT_FACTOR_TOO_LOW")
         rejection_reasons.append(f"Profit Factor независимого holdout ниже 1.00: {holdout_pf}")
+    if independent_holdout["max_drawdown_pct"] > 15.0:
+        reason_codes.append("HOLDOUT_DRAWDOWN_TOO_HIGH")
+        rejection_reasons.append(
+            f"Просадка независимого holdout выше 15%: {independent_holdout['max_drawdown_pct']:.2f}%"
+        )
 
     for regime in ("BULL", "BEAR", "SIDEWAYS"):
         metrics = regime_metrics[regime]
@@ -447,6 +460,8 @@ def research_candidate(rows, *, horizon=3, fee_rate=0.0026, slippage_bps=5.0,
             "entry": "next candle open with adverse slippage",
             "exit": "close of horizon candle with adverse slippage",
             "validation": "3 expanding-window folds with purged label horizon",
+            "benchmarks": "must beat both buy-and-hold and positive 24-candle momentum after costs",
+            "holdout_risk_limit": "independent holdout max drawdown must not exceed 15%",
             "independent_holdout": "final 15% chronological block; not used for fitting its evaluator",
             "regime_definition": "24-candle return >= +3% bull; <= -3% bear; otherwise sideways",
         },
