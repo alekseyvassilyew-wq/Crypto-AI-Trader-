@@ -127,7 +127,12 @@ class Engine:
         quote_currency = str(quote_currency or t.get("quote") or "EUR").upper()
         turnover_eur = turnover * (fx_rates or {"EUR": 1.0}).get(quote_currency, 0.0)
         try:
-            result = analyze(self.exchange.candles(symbol, interval="60", limit=120))
+            try:
+                base_candles = self.exchange.candles(symbol, interval="60", limit=120)
+            except TypeError:
+                # Backwards-compatible adapter for simple test doubles.
+                base_candles = self.exchange.candles(symbol)
+            result = analyze(base_candles)
             # Higher-timeframe requests are made only for potential entries,
             # limiting Kraken REST load while refusing unconfirmed BUY signals.
             if result.get("signal") == "BUY" and getattr(self.s, "enable_multi_timeframe", False):
