@@ -197,7 +197,7 @@ def build_app(s, engine, exchange):
 
     async def help_cmd(update, context):
         if not await authorized(update): return await deny(update)
-        await update.effective_message.reply_text("/start — меню\n/status — состояние и P/L\n/scan — сканирование\n/account — баланс Kraken (только чтение)\n/portfolio — PAPER-позиции\n/interval 1m|5m|15m|30m|1h|4h|24h — интервал\n/run — запуск PAPER\n/pause — пауза\n/stop — аварийная остановка\n/topicid — ID группы и темы\n/testtopics или /test_topics — проверка тем")
+        await update.effective_message.reply_text("/start — меню\n/status — состояние и P/L\n/scan — сканирование\n/backtest [PAIR] — исторический бэктест (по умолчанию ZECEUR)\n/account — баланс Kraken (только чтение)\n/portfolio — PAPER-позиции\n/interval 1m|5m|15m|30m|1h|4h|24h — интервал\n/run — запуск PAPER\n/pause — пауза\n/stop — аварийная остановка\n/topicid — ID группы и темы\n/testtopics или /test_topics — проверка тем")
 
     async def callback(update, context):
         q = update.callback_query
