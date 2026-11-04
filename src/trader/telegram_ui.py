@@ -669,27 +669,28 @@ def build_app(s, engine, exchange):
             return
 
         def read_cycle_state():
+            fresh_rates = engine._fresh_fx_rates(engine.last_prices)
+            required_currencies = {
+                currency for currency, amount in engine.paper.cash_by_currency.items()
+                if float(amount) > 1e-12
+            } | {
+                str(position.get("quote_currency", "EUR")).upper()
+                for position in engine.paper.positions.values()
+            }
+            missing_fx = sorted(currency for currency in required_currencies if currency not in fresh_rates)
             return {
                 "paused": engine.paused,
                 "last_scan_at": engine.last_scan_at,
                 "last_signals": list(engine.last_signals),
                 "cash": dict(engine.paper.cash_by_currency),
                 "positions": {symbol: dict(position) for symbol, position in engine.paper.positions.items()},
-                "fresh_rates": engine._fresh_fx_rates(engine.last_prices),
-                "required_currencies": {
-                    currency for currency, amount in engine.paper.cash_by_currency.items()
-                    if float(amount) > 1e-12
-                } | {
-                    str(position.get("quote_currency", "EUR")).upper()
-                    for position in engine.paper.positions.values()
-                },
+                "daily_pnl": engine.daily_pnl(engine.last_prices) if not missing_fx else None,
+                "missing_fx": missing_fx,
             }
 
         try:
             state = await runner.run(read_cycle_state)
-            missing_fx = sorted(currency for currency in state["required_currencies"] if currency not in state["fresh_rates"])
-            state["daily_pnl"] = engine.daily_pnl(engine.last_prices) if not missing_fx else None
-            daily_text = f"{state['daily_pnl']:.2f} EUR" if state["daily_pnl"] is not None else "недоступен — нет свежего FX: " + ", ".join(missing_fx)
+            daily_text = f"{state['daily_pnl']:.2f} EUR" if state["daily_pnl"] is not None else "недоступен — нет свежего FX: " + ", ".join(state["missing_fx"])
 
             # Send a compact heartbeat to General every 15 minutes after a
             # successful scan while PAPER is actively trading.
