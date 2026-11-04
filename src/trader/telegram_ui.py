@@ -707,7 +707,7 @@ def build_app(s, engine, exchange):
                 from .db import get_state, set_state
                 from .research_history import perform_research
                 now_utc = datetime.now(timezone.utc)
-                previous = get_state(engine.db, "ml_auto_research_date", {})
+                previous = get_state(research_db, "ml_auto_research_date", {})
                 if isinstance(previous, dict) and previous.get("at_utc"):
                     try:
                         last_run = datetime.fromisoformat(previous["at_utc"])
@@ -720,14 +720,13 @@ def build_app(s, engine, exchange):
                         log.warning("Ignoring malformed automatic ML research timestamp")
                 pairs = exchange.discover_pairs()
                 tickers = exchange.tickers()
-                engine.market_pairs = pairs
                 by_symbol = {item["symbol"]: item for item in tickers}
-                engine.last_ticker_data = by_symbol
                 prices = {
                     item["symbol"]: float(item.get("lastPrice") or 0)
                     for item in tickers if float(item.get("lastPrice") or 0) > 0
                 }
-                rates = engine._fresh_fx_rates(prices)
+                from .engine import fresh_fx_rates_from_market
+                rates = fresh_fx_rates_from_market(s, pairs, by_symbol, prices)
                 eligible = []
                 for pair in pairs:
                     ticker = by_symbol.get(pair["symbol"])
@@ -744,18 +743,18 @@ def build_app(s, engine, exchange):
                 log.info("Automatic ML research discovered %d Kraken pairs; %d pass liquidity/FX filters",
                          len(pairs), len(eligible))
                 from .learning import rotate_research_batch
-                cursor = get_state(engine.db, "ml_auto_research_cursor", 0)
+                cursor = get_state(research_db, "ml_auto_research_cursor", 0)
                 selected, next_cursor = rotate_research_batch(
                     eligible, cursor, s.ml_auto_research_markets
                 )
                 if selected:
-                    set_state(engine.db, "ml_auto_research_cursor", next_cursor)
+                    set_state(research_db, "ml_auto_research_cursor", next_cursor)
                 log.info("Automatic ML research selected %d markets for this batch", len(selected))
                 trained = []
                 for _, symbol in selected:
                     try:
                         candidate = perform_research(
-                            engine.db, exchange, s, symbol, source="automatic"
+                            research_db, exchange, s, symbol, source="automatic"
                         )
                         trained.append({
                             "symbol": symbol,
@@ -774,14 +773,14 @@ def build_app(s, engine, exchange):
                 log.info("Automatic ML research completed: %d of %d selected markets trained",
                          len(trained), len(selected))
                 if trained:
-                    set_state(engine.db, "ml_auto_research_date", {
+                    set_state(research_db, "ml_auto_research_date", {
                         "at_utc": now_utc.isoformat(),
                         "markets": trained,
                         "cadence_hours": 1,
                     })
                 return trained
 
-            trained = await context.application.bot_data["run_blocking"].run(research_top_markets)
+            trained = await context.application.bot_data["research_runner"].run(research_top_markets)
             if trained:
                 summary = "\n".join(
                     f"{item['symbol']}: {'research PASS' if item['pass'] else 'NOT PASSED'} "
@@ -940,16 +939,18 @@ def build_app(s, engine, exchange):
         connect_timeout=10, read_timeout=30, write_timeout=30, pool_timeout=10,
         connection_pool_size=16,
     )
-    async def close_monitor_db(application):
+    async def close_auxiliary_dbs(application):
+        import asyncio
         if monitor_db is not engine.db:
-            import asyncio
             await asyncio.to_thread(monitor_db.close)
+        if research_db is not engine.db and research_db is not monitor_db:
+            await asyncio.to_thread(research_db.close)
 
     app = (
         Application.builder()
         .token(s.bot_token)
         .request(telegram_request)
-        .post_shutdown(close_monitor_db)
+        .post_shutdown(close_auxiliary_dbs)
         .build()
     )
     # Keep exchange/engine work serialized on its own connection. External
@@ -959,10 +960,13 @@ def build_app(s, engine, exchange):
     from .db import connect
     engine_runner = SerializedRunner()
     monitor_db = engine.db if s.db_path == ":memory:" else connect(s.db_path)
+    research_db = engine.db if s.db_path == ":memory:" else connect(s.db_path)
     monitor_runner = engine_runner if monitor_db is engine.db else SerializedRunner()
+    research_runner = engine_runner if research_db is engine.db else SerializedRunner()
     app.bot_data["run_blocking"] = engine_runner
     app.bot_data["monitor_db"] = monitor_db
     app.bot_data["monitor_runner"] = monitor_runner
+    app.bot_data["research_runner"] = research_runner
     for name, fn in [("start", start), ("status", status), ("monitorstatus", monitorstatus), ("scan", scan), ("account", account), ("realbalance", realbalance), ("paperreport", paperreport), ("learn", learn), ("learning", learning), ("research", research_history_cmd), ("backtest", backtest), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
                      ("run", run), ("pause", pause), ("stop", stop), ("help", help_cmd)]:
         app.add_handler(CommandHandler(name, fn))

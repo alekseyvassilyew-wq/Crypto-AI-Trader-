@@ -14,6 +14,63 @@ FX_CURRENCIES = frozenset({
 })
 
 
+def fresh_fx_rates_from_market(settings, market_pairs, ticker_data, prices):
+    """Build conservative EUR marks from fresh, liquid direct EUR spot pairs."""
+    rates = {"EUR": 1.0}
+    candidates = {}
+    for pair in market_pairs:
+        symbol = pair.get("symbol")
+        base = str(pair.get("base") or "").upper()
+        quote = str(pair.get("quote") or "").upper()
+        raw_price = prices.get(symbol) if symbol else None
+        if not symbol or not base or not quote or raw_price is None:
+            continue
+        try:
+            price = float(raw_price)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if not math.isfinite(price) or price <= 0:
+            continue
+
+        ticker = ticker_data.get(symbol)
+        turnover_eur = 0.0
+        bid = ask = 0.0
+        if ticker is not None:
+            try:
+                bid = float(ticker.get("bid1Price") or 0)
+                ask = float(ticker.get("ask1Price") or 0)
+                turnover = float(ticker.get("turnover24h") or 0)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if bid <= 0 or ask <= 0 or ask < bid or turnover <= 0:
+                continue
+            spread_bps = (ask - bid) / ((ask + bid) / 2.0) * 10000.0
+            if not math.isfinite(spread_bps) or spread_bps > settings.max_spread_bps:
+                continue
+            if quote == "EUR":
+                turnover_eur = turnover
+            elif base == "EUR":
+                turnover_eur = turnover / price
+            if turnover_eur < max(1000.0, settings.min_turnover * 0.1):
+                continue
+
+        if quote == "EUR":
+            currency, rate = base, (bid if ticker is not None else price)
+        elif base == "EUR":
+            currency, rate = quote, (1.0 / ask if ticker is not None else 1.0 / price)
+        else:
+            continue
+        if not math.isfinite(rate) or rate <= 0:
+            continue
+        previous = candidates.get(currency)
+        if previous is None or turnover_eur > previous[0]:
+            candidates[currency] = (turnover_eur, rate)
+
+    for currency, (_, rate) in candidates.items():
+        rates[currency] = rate
+    return rates
+
+
 class Engine:
     def __init__(self, settings, db, exchange, paper):
         self.s, self.db, self.exchange, self.paper = settings, db, exchange, paper
@@ -56,67 +113,11 @@ class Engine:
         audit(self.db, "PAPER_STOPPED", reason)
 
     def _fresh_fx_rates(self, prices=None):
-        """Build EUR conversion rates only from direct, fresh EUR markets.
-
-        Crypto-to-crypto cross routes can be distorted by illiquid altcoin
-        prices. A currency without a fresh direct EUR market is monitored but
-        cannot authorize new PAPER conversions or entries.
-        """
+        """Build EUR valuation rates from direct, fresh EUR markets only."""
         prices = self.last_prices if prices is None else prices
-        rates = {"EUR": 1.0}
-        candidates = {}
-        for pair in self.market_pairs:
-            symbol = pair.get("symbol")
-            base = str(pair.get("base") or "").upper()
-            quote = str(pair.get("quote") or "").upper()
-            raw_price = prices.get(symbol) if symbol else None
-            if not symbol or not base or not quote or raw_price is None:
-                continue
-            try:
-                price = float(raw_price)
-            except (TypeError, ValueError, OverflowError):
-                continue
-            if not math.isfinite(price) or price <= 0:
-                continue
-
-            ticker = self.last_ticker_data.get(symbol)
-            turnover_eur = 0.0
-            if ticker is not None:
-                try:
-                    bid = float(ticker.get("bid1Price") or 0)
-                    ask = float(ticker.get("ask1Price") or 0)
-                    turnover = float(ticker.get("turnover24h") or 0)
-                except (TypeError, ValueError, OverflowError):
-                    continue
-                if bid <= 0 or ask <= 0 or ask < bid or turnover <= 0:
-                    continue
-                spread_bps = (ask - bid) / ((ask + bid) / 2.0) * 10000.0
-                if not math.isfinite(spread_bps) or spread_bps > self.s.max_spread_bps:
-                    continue
-                if quote == "EUR":
-                    turnover_eur = turnover
-                elif base == "EUR":
-                    turnover_eur = turnover / price
-                if turnover_eur < max(1000.0, self.s.min_turnover * 0.1):
-                    continue
-
-            if quote == "EUR":
-                # Liquidating the base currency receives the executable bid.
-                currency, rate = base, (bid if ticker is not None else price)
-            elif base == "EUR":
-                # Liquidating quote currency requires buying EUR at the ask.
-                currency, rate = quote, (1.0 / ask if ticker is not None else 1.0 / price)
-            else:
-                continue
-            if not math.isfinite(rate) or rate <= 0:
-                continue
-            previous = candidates.get(currency)
-            if previous is None or turnover_eur > previous[0]:
-                candidates[currency] = (turnover_eur, rate)
-
-        for currency, (_, rate) in candidates.items():
-            rates[currency] = rate
-        return rates
+        return fresh_fx_rates_from_market(
+            self.s, self.market_pairs, self.last_ticker_data, prices,
+        )
 
     def _fresh_fx_buy_rates(self, prices=None):
         """Return target-currency units obtainable per EUR at executable sides.
