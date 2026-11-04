@@ -492,17 +492,24 @@ def build_app(s, engine, exchange):
                 for position in engine.paper.positions.values()
             )
             missing = sorted(currency for currency in required if currency not in fresh_rates)
+            quotes_fresh, bid_marks = fresh_position_marks()
             lines = []
             for sym, p in engine.paper.positions.items():
                 quote = p.get("quote_currency", "EUR")
-                mark = engine.last_prices.get(sym, p["avg_price"])
+                mark = bid_marks.get(str(sym).upper()) if quotes_fresh else None
+                peak = p.get("peak_price", p["avg_price"])
+                if mark is None:
+                    lines.append(
+                        f"{sym}: {p['qty']:.8f} | вход {p['avg_price']:.8g} {quote} | "
+                        "цена недоступна — нет свежей исполнимой котировки | P/L недоступен"
+                    )
+                    continue
                 pnl_quote = (mark - p["avg_price"]) * p["qty"]
                 pnl_eur = pnl_quote * fresh_rates.get(quote, 0.0) if quote in fresh_rates else None
-                peak = p.get("peak_price", p["avg_price"])
                 pnl_text = f"{pnl_eur:+.4f} EUR" if pnl_eur is not None else "P/L EUR недоступен"
                 lines.append(
                     f"{sym}: {p['qty']:.8f} | вход {p['avg_price']:.8g} {quote} | "
-                    f"цена {mark:.8g} | пик {peak:.8g} | {pnl_text}"
+                    f"цена Bid {mark:.8g} | пик {peak:.8g} | {pnl_text}"
                 )
             fx_text = "Свежие EUR-курсы для всех валют." if not missing else "Нет свежего EUR-курса: " + ", ".join(missing)
             return "PAPER-кошелёк:\n" + ("\n".join(balances) or "Нет свободных средств.") + "\n" + fx_text + "\n\nПозиции:\n" + ("\n".join(lines) or "Нет открытых позиций.")
