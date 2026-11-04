@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 import math
 from .risk import Limits, check_order
 from .indicators import analyze, confirm_multi_timeframe
-from .db import audit, save_trade, get_state, set_state
+from .db import audit, save_trade, get_state, set_state, save_paper_snapshot
 
 
 class Engine:
