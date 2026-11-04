@@ -419,6 +419,17 @@ def build_app(s, engine, exchange):
                 ) + "\n"
                 + ("Причины отказа:\n" + "\n".join("• " + reason for reason in candidate.get("rejection_reasons", [])[:6])
                    if candidate.get("rejection_reasons") else "Все исследовательские критерии пройдены.") + "\n"
+                + "Диагностика вероятностей (не подбор торгового порога):\\n"
+                + "\\n".join(
+                    f"Порог {level}: {data['trades']} сделок, P/L {data['net_return_pct']:+.2f}%"
+                    for level, data in candidate.get("probability_diagnostics", {}).get("walk_forward_oos", {}).get("thresholds", {}).items()
+                ) + "\\n"
+                + (f"Вероятность: min {candidate['probability_diagnostics']['walk_forward_oos']['min']:.3f}, "
+                   f"средняя {candidate['probability_diagnostics']['walk_forward_oos']['mean']:.3f}, "
+                   f"медиана {candidate['probability_diagnostics']['walk_forward_oos']['median']:.3f}, "
+                   f"max {candidate['probability_diagnostics']['walk_forward_oos']['max']:.3f}\\n"
+                   if candidate.get("probability_diagnostics", {}).get("walk_forward_oos", {}).get("min") is not None
+                   else "Нет вневыборочных прогнозов.\\n")
                 + f"Исторических свечей накоплено: {candidate.get('history_candles', candidate['samples'])}\n"
                 "Модель остаётся SHADOW ONLY: автоматического внедрения в торговлю нет."
             )
@@ -478,6 +489,19 @@ def build_app(s, engine, exchange):
                 )
                 if reasons:
                     lines.append("Причина: " + "; ".join(str(reason) for reason in reasons[:3]))
+                probability = report.get("probability_diagnostics", {}).get("walk_forward_oos", {})
+                if probability:
+                    lines.append("Вероятности: " + (
+                        f"min {probability['min']:.3f}, mean {probability['mean']:.3f}, "
+                        f"median {probability['median']:.3f}, max {probability['max']:.3f}"
+                        if probability.get("min") is not None else "нет прогнозов"
+                    ))
+                    thresholds = probability.get("thresholds") or {}
+                    if thresholds:
+                        lines.append("Пороги (диагностика): " + " | ".join(
+                            f"{level}: {metrics.get('trades', 0)} trades / {metrics.get('net_return_pct', 0):+.2f}%"
+                            for level, metrics in thresholds.items()
+                        ))
                 regimes = report.get("regime_metrics") or {}
                 if regimes:
                     lines.append("Режимы: " + " | ".join(
