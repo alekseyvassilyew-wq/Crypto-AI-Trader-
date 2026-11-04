@@ -69,3 +69,17 @@ def test_pair_routes_normalize_other_legacy_assets_from_market_universe():
         [{"symbol": "XMREUR", "base": "XMR", "quote": "EUR"}],
     )
     assert [item["symbol"] for item in routes["XMR"]] == ["XMREUR"]
+
+def test_toncoin_wallet_routes_include_kraken_eur_and_usd_spot_markets():
+    routes = build_asset_pair_routes(
+        ["TON"],
+        [
+            {"symbol": "TONEUR", "base": "TON", "quote": "EUR",
+             "ordermin": "5", "costmin": "5"},
+            {"symbol": "TONUSD", "base": "TON", "quote": "USD"},
+            {"symbol": "BTCEUR", "base": "XBT", "quote": "EUR"},
+        ],
+    )
+    assert [item["symbol"] for item in routes["TON"]] == ["TONEUR", "TONUSD"]
+    assert routes["TON"][0]["ordermin"] == "5"
+    assert routes["TON"][0]["costmin"] == "5"
