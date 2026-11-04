@@ -1227,7 +1227,7 @@ def build_app(s, engine, exchange):
                 heading = "🟢 СИСТЕМНОЕ ИЗВЕЩЕНИЕ" if successful else "🚨 СБОЙ ВНЕШНЕГО СЕРВИСА"
                 message = (
                     f"<b>{heading}</b>\n"
-                    f"🕒 Время: <code>{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</code>\n"
+                        f"🕒 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
                     f"🧩 Источник: <b>{source}</b>\n"
                     f"📌 Событие: <b>{title}</b>\n"
                     f"⚠️ Статус: <code>{status}</code>\n"
@@ -1298,18 +1298,18 @@ def build_app(s, engine, exchange):
                     )
                     await send_topic(
                         context, s.topic_errors_id,
-                        "🚨 <b>ПРОБЛЕМА РЕЗЕРВНОГО КОПИРОВАНИЯ</b>\\n"
-                        f"🕒 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\\n"
+                        "🚨 <b>ПРОБЛЕМА РЕЗЕРВНОГО КОПИРОВАНИЯ</b>\n"
+                        f"🕒 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
                         f"⚠️ {html.escape(detail)}",
                         parse_mode="HTML",
                     )
             elif transition == "recovered":
-                    await send_topic(
-                        context, s.topic_general_id,
-                        "🟢 <b>РЕЗЕРВНОЕ КОПИРОВАНИЕ ВОССТАНОВЛЕНО</b>\\n"
-                        f"Последняя проверенная копия: {current['timestamp']} UTC",
-                        parse_mode="HTML",
-                    )
+                await send_topic(
+                    context, s.topic_general_id,
+                    "🟢 <b>РЕЗЕРВНОЕ КОПИРОВАНИЕ ВОССТАНОВЛЕНО</b>\n"
+                    f"Последняя проверенная копия: {current['timestamp']} UTC",
+                    parse_mode="HTML",
+                )
             def persist():
                 set_state(monitor_db, "sqlite_backup_health", {
                     "status": new_status,
