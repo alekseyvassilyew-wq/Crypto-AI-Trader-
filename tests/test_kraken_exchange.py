@@ -79,3 +79,29 @@ def test_ohlc_requests_are_spaced_at_least_one_second(monkeypatch):
     client.candles("XBTEUR")
     client.candles("XBTEUR")
     assert sleeps == pytest.approx([1.05, 1.05])
+
+
+def test_all_public_rest_requests_are_spaced_at_least_1_05_seconds(monkeypatch):
+    import src.trader.exchange as exchange_module
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+        def json(self):
+            return {"error": [], "result": {"ok": 1}}
+
+    client = KrakenSpot()
+    monkeypatch.setattr(client.session, "get", lambda *args, **kwargs: FakeResponse())
+    clock = [100.0]
+    sleeps = []
+    monkeypatch.setattr(exchange_module.time, "monotonic", lambda: clock[0])
+
+    def advance(seconds):
+        sleeps.append(seconds)
+        clock[0] += seconds
+
+    monkeypatch.setattr(exchange_module.time, "sleep", advance)
+    client._request("/0/public/SystemStatus")
+    client._request("/0/public/SystemStatus")
+
+    assert sleeps == pytest.approx([1.05])
