@@ -444,7 +444,7 @@ def test_missing_open_position_price_fails_closed(tmp_path):
     engine.start()
     actions = engine.cycle()
     assert engine.paused is True
-    assert any("price unavailable" in action for action in actions)
+    assert any("quote unavailable" in action for action in actions)
     assert "XBTEUR" in engine.paper.positions
     db.close()
 
@@ -524,4 +524,65 @@ def test_stale_cached_fx_cannot_create_buy_candidate_for_unpriced_quote_currency
     assert rows[0]["signal"] == "HOLD"
     assert rows[0]["ohlc_analyzed"] is False
     assert "no fresh EUR conversion route" in rows[0]["reasons"][0]
+    db.close()
+
+
+def test_invalid_bid_ask_for_open_position_fails_closed(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.paper.buy("XBTEUR", 5, 100.0)
+    engine.scan = lambda **kwargs: [{
+        "symbol": "XBTEUR", "quote": "EUR", "signal": "HOLD", "score": 0,
+        "price": 100.0, "bid": 0.0, "ask": 100.1,
+        "spread_bps": 10, "turnover": 50000, "turnover_eur": 50000,
+        "reasons": [],
+    }]
+    engine.start()
+
+    actions = engine.cycle()
+
+    assert engine.paused is True
+    assert any("quote unavailable" in action for action in actions)
+    assert "XBTEUR" in engine.paper.positions
+    db.close()
+
+
+def test_strategy_sell_signal_closes_position_at_bid(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.paper.buy("XBTEUR", 5, 100.0)
+    engine.scan = lambda **kwargs: [{
+        "symbol": "XBTEUR", "quote": "EUR", "signal": "SELL", "score": 0,
+        "price": 101.0, "bid": 100.5, "ask": 100.6,
+        "spread_bps": 10, "turnover": 50000, "turnover_eur": 50000,
+        "reasons": ["strategy exit"],
+    }]
+    engine.start()
+
+    actions = engine.cycle()
+
+    assert any("XBTEUR SELL SIGNAL_SELL" in action for action in actions)
+    assert "XBTEUR" not in engine.paper.positions
+    trade = db.execute("SELECT side,price FROM trades WHERE side='Sell' ORDER BY id DESC LIMIT 1").fetchone()
+    assert trade["side"] == "Sell"
+    assert trade["price"] == pytest.approx(100.5)
+    db.close()
+
+
+def test_open_position_equity_uses_bid_not_last_trade(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.paper.buy("XBTEUR", 5, 100.0)
+    engine.scan = lambda **kwargs: [{
+        "symbol": "XBTEUR", "quote": "EUR", "signal": "HOLD", "score": 0,
+        "price": 110.0, "bid": 99.0, "ask": 110.0,
+        "spread_bps": 10, "turnover": 50000, "turnover_eur": 50000,
+        "reasons": [],
+    }]
+    engine.start()
+
+    engine.cycle()
+
+    assert "XBTEUR" in engine.paper.positions
+    assert engine.daily_pnl({"XBTEUR": 99.0}) == pytest.approx(
+        engine.paper.equity({"XBTEUR": 99.0}, engine._fx_rates({"XBTEUR": 99.0}))
+        - get_state(db, "daily")["start_equity"]
+    )
     db.close()
