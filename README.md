@@ -25,7 +25,7 @@ This archive is a **PAPER-only release**. It is not a live trading bot and must 
 - Fee- and slippage-aware single-market and multi-market portfolio historical backtests with next-candle-open fills, conservative stop/target ordering, net P/L, profit factor, win rate and maximum drawdown; available as Telegram `/backtest SYMBOL` and `/backtest portfolio`.
 - Strictly increasing private API nonces within the running process; malformed API responses are rejected.
 - Persistent SQLite state and a safe paused-on-restart behavior.
-- Telegram owner-only commands: `/start`, `/help`, `/status`, `/monitorstatus`, `/scan`, `/account` (virtual PAPER), `/realbalance` (Kraken read-only), `/portfolio`, `/paperreport`, `/learn SYMBOL`, `/learning`, `/backtest`, `/interval`, `/run`, `/pause`, `/stop`.
+- Telegram owner-only commands: `/start`, `/help`, `/status`, `/monitorstatus`, `/scan`, `/account` (virtual PAPER), `/realbalance` (Kraken read-only), `/walletcheck` (read-only spot pairs/minimums/fees), `/portfolio`, `/paperreport [hours]`, `/learn SYMBOL`, `/learning`, `/research [SYMBOL]`, `/backtest SYMBOL|portfolio`, `/interval`, `/run`, `/pause`, `/stop`, `/topicid`, `/testtopics`.
 - Render Background Worker blueprint with Persistent Disk mounted at `/var/data`.
 
 ## Kraken API key setup
@@ -41,13 +41,13 @@ IP restriction can remain disabled for this first connection test. This means th
 
 ## Deploy on Render
 
-1. Upload the contents of this ZIP to the GitHub repository's `main` branch (the repository root must contain `render.yaml`, `requirements.txt`, and `src/`).
-2. In Render, create a Blueprint from that repository, or create a Background Worker manually.
-3. Confirm the Persistent Disk is mounted at `/var/data`. Keep the service to **one instance** because SQLite is local to that disk.
-4. Set `BOT_TOKEN` and numeric `ADMIN_ID`.
-5. Set `KRAKEN_API_KEY` and `KRAKEN_API_SECRET` as secret environment variables.
-6. Keep `TRADING_MODE=PAPER`. Deploy, then message the Telegram bot with `/start`, `/status`, `/account`, and `/scan`.
-7. The bot starts paused after every restart. Use `/run` only when you want the local paper simulator to run; `/pause` or `/stop` halts simulated actions. All online Kraken Spot pairs are monitored by ticker. Candle analysis rotates across liquid pairs with a valid EUR valuation route; PAPER entries may use quote currencies funded from the multi-currency virtual wallet through simulated FX conversions.
+1. Connect the existing GitHub repository to a Render **Background Worker**; the committed `render.yaml` describes the worker, one instance, and its persistent disk.
+2. Keep the persistent disk mounted at `/var/data`, with `DATABASE_PATH=/var/data/crypto_ai_trader.sqlite3`. Do not scale above one instance while using local SQLite.
+3. Configure `BOT_TOKEN` and numeric `ADMIN_ID` as secret environment variables.
+4. Optionally configure `KRAKEN_API_KEY` and `KRAKEN_API_SECRET` for the read-only Query Funds check. Never grant trading, withdrawal, deposit, staking, or funding permissions to this PAPER build.
+5. Keep `TRADING_MODE=PAPER`; startup rejects any other mode. After deployment, verify `/start`, `/status`, `/account`, `/scan`, `/realbalance`, and `/walletcheck` from the owner Telegram account.
+6. The worker starts paused after every restart. Use `/run` to start the local PAPER simulator; `/pause` or `/stop` halts simulated actions. Ticker monitoring covers the online Kraken Spot universe; OHLC analysis rotates through the configured per-cycle budget of liquid markets with valid EUR valuation routes.
+7. Optional external alerts require `RENDER_API_KEY` + `RENDER_SERVICE_ID` and/or `GITHUB_REPOSITORY`; Telegram delivery requires `TELEGRAM_GROUP_CHAT_ID` and the appropriate topic IDs. The service polls configured external sources and retries unacknowledged events if Telegram delivery fails.
 
 The declared Render worker plan and Persistent Disk may incur charges. Review Render's current pricing before applying the Blueprint.
 
@@ -83,7 +83,7 @@ These are configurable simulation assumptions, not recommendations. Verify Krake
 ## Model research and forward PAPER testing
 
 - /learn XBTEUR fetches up to 720 closed 1-hour candles and trains a small deterministic neural network using momentum, EMA spread, RSI, ATR and volume features.
-- Evaluation uses three chronological expanding-window validation folds, purges overlapping label horizons at fold boundaries, and includes round-trip fee/slippage assumptions. It reports out-of-sample return, trade count, win rate, profit factor and drawdown.
+- Evaluation uses three chronological expanding-window validation folds, purges overlapping label horizons at fold boundaries, and includes round-trip fee/slippage assumptions. Candidates must meet minimum trade-count, positive net-return, profit-factor and drawdown gates; outperform both buy-and-hold and positive 24-candle momentum on walk-forward OOS and the independent final holdout; and keep independent holdout drawdown at or below 15%. It reports OOS/holdout returns, trade counts, win rate, profit factor, drawdown, regime results and explicit rejection reasons.
 - The service automatically retrains candidates hourly on rotating batches of up to three eligible markets, rather than repeatedly selecting only the top three; the cursor is persisted in SQLite so successive runs advance through the eligible Kraken market list. /learn SYMBOL can trigger manual research. Signal features are calculated after a candle closes, entries are modelled at the next candle open, and fees/slippage are applied on both sides. A research PASS is only a filter, not proof of an edge. Candidates are saved as SHADOW_ONLY; they do not influence entries, cannot place orders, and are never automatically promoted.
 - During later scans of a researched symbol, shadow forecasts are recorded once per candle and settled after the configured three-hour horizon using subsequent closed candles. /learning reports realized shadow results. Collect a substantial sample across different market regimes before considering any strategy change.
 - /paperreport 24 (or another hour count up to 2160) reports saved PAPER equity changes and observed drawdown. Snapshots are recorded only while PAPER is actively running; retention is 90 days.
