@@ -252,7 +252,8 @@ class Engine:
                     conversion = self.paper.convert("EUR", quote_currency, eur_to_spend, 1.0 / quote_to_eur)
                     audit(self.db, "PAPER_FX_CONVERSION",
                           f"{conversion['from']}->{conversion['to']} spent={conversion['spent']:.8f} received={conversion['received']:.8f}")
-                    allocation = conversion["received"]
+                    # Reserve the PAPER trade fee inside the converted amount.
+                    allocation = conversion["received"] / (1.0 + self.paper.fee_rate)
                 if allocation <= 0:
                     continue
                 fill = self.paper.buy(signal["symbol"], allocation, signal["price"], currency=quote_currency)
