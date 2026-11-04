@@ -199,3 +199,44 @@ def test_github_monitor_detects_new_run_with_same_timestamp_as_baseline(monkeypa
     events = poll_external_events(settings, state)
     assert len(events) == 1
     assert events[0]["status"] == "FAILURE"
+
+
+from src.trader.monitoring import format_monitor_status
+
+
+def test_monitor_status_reports_missing_configuration_without_secrets():
+    settings = SimpleNamespace(
+        render_api_key="",
+        render_service_id="",
+        github_repository="owner/repo",
+        telegram_group_chat_id=0,
+    )
+    report = format_monitor_status(settings, {})
+    assert "Render API: НЕ НАСТРОЕН" in report
+    assert "GitHub Actions: ПОДКЛЮЧЁН" in report
+    assert "Telegram-группа: НЕ НАСТРОЕНА" in report
+    assert "API-ключи не отображаются" in report
+
+
+def test_monitor_status_reports_last_success_and_errors():
+    settings = SimpleNamespace(
+        render_api_key="secret-value",
+        render_service_id="srv-test",
+        github_repository="owner/repo",
+        telegram_group_chat_id=-100123,
+    )
+    report = format_monitor_status(settings, {
+        "render_event_ids": ["a", "b"],
+        "render_last_error": "Timeout",
+        "github_status": {"1": "completed"},
+        "github_last_success_at": "2026-11-04T14:00:00+00:00",
+        "last_poll_at": "2026-11-04T14:01:00+00:00",
+        "last_events_count": 2,
+        "last_alert_delivery_at": "2026-11-04T14:01:00+00:00",
+    })
+    assert "сохранено событий — 2" in report
+    assert "Timeout" in report
+    assert "отслеживается запусков — 1" in report
+    assert "Новых событий в последнем цикле: 2" in report
+    assert "Последняя отправка уведомления" in report
+    assert "secret-value" not in report
