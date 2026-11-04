@@ -46,12 +46,13 @@ def build_app(s, engine, exchange):
     async def status(update, context):
         if not await authorized(update): return await deny(update)
         state = "PAUSED" if engine.paused else "RUNNING"
+        balances = ", ".join(f"{currency}: {amount:.6f}" for currency, amount in sorted(engine.paper.cash_by_currency.items()))
         await update.effective_message.reply_text(
-            f"Режим: PAPER\nСостояние: {state}\nPAPER cash: {engine.paper.cash:.2f} EUR\n"
-            f"Позиции: {len(engine.paper.positions)}/{s.max_positions}\nP/L сегодня: {engine.daily_pnl():.2f} EUR\n"
+            f"Режим: PAPER\nСостояние: {state}\nВиртуальные средства: {balances}\n"
+            f"Позиции: {len(engine.paper.positions)}/{s.max_positions}\nP/L сегодня: {engine.daily_pnl():.2f} EUR*\n"
             f"Рынок Kraken: {len(engine.market_pairs)} пар; котировок получено: {engine.market_ticker_count}\n"
-            f"Полный мониторинг; анализ свечей: до {s.max_candle_pairs} самых ликвидных пар за цикл\n"
-            f"Новые PAPER-сделки: только пары с котировкой {s.trade_quote_currency}."
+            f"Мониторинг всех котировок; анализ свечей: до {s.max_candle_pairs} пар за цикл.\n"
+            "* P/L в EUR пока не включает переоценку валют, отличных от EUR."
         )
 
     async def scan(update, context):
@@ -60,12 +61,12 @@ def build_app(s, engine, exchange):
         try:
             rows = await context.application.bot_data["run_blocking"].run(engine.scan)
             buy_rows = [x for x in rows if x.get("signal") == "BUY"]
-            analyzed = [x for x in rows if "Ticker monitored; OHLC analysis deferred by scan budget" not in x.get("reasons", []) and x.get("quote") == s.trade_quote_currency]
+            analyzed = [x for x in rows if "Ticker monitored; OHLC analysis deferred by rotating scan budget" not in x.get("reasons", []) and x.get("quote") in engine.paper.cash_by_currency]
             ranked = sorted(analyzed, key=lambda x: (x.get("score", 0), x.get("turnover", 0)), reverse=True)[:12]
             lines = [
                 f"Всего рынков Kraken: {len(engine.market_pairs)}",
                 f"Тикеров получено: {engine.market_ticker_count}",
-                f"Пар {s.trade_quote_currency} с индикаторным анализом: {len(analyzed)}",
+                f"Пар с валютой кошелька в индикаторном анализе: {len(analyzed)}",
                 f"Сигналов BUY: {len(buy_rows)}",
                 "",
             ]
@@ -83,15 +84,8 @@ def build_app(s, engine, exchange):
 
     async def account(update, context):
         if not await authorized(update): return await deny(update)
-        try:
-            balances = await context.application.bot_data["run_blocking"].run(exchange.balance)
-            nonzero = [f"{asset}: {float(amount):.8f}" for asset, amount in balances.items() if float(amount) > 0]
-            await update.effective_message.reply_text("Kraken account balances (read-only):\n" + ("\n".join(nonzero[:30]) or "Нулевые остатки."))
-        except Exception as exc:
-            log.exception("Kraken account query failed")
-            await update.effective_message.reply_text(
-                format_error(exc, "/account", update.effective_user)
-            )
+        balances = [f"{currency}: {amount:.8f}" for currency, amount in sorted(engine.paper.cash_by_currency.items())]
+        await update.effective_message.reply_text("Виртуальные остатки PAPER:\n" + ("\n".join(balances) or "Нулевые остатки."))
 
     async def interval(update, context):
         if not await authorized(update): return await deny(update)
@@ -103,9 +97,9 @@ def build_app(s, engine, exchange):
 
     async def portfolio(update, context):
         if not await authorized(update): return await deny(update)
-        if not engine.paper.positions: return await update.effective_message.reply_text(f"Открытых позиций нет. PAPER cash: {engine.paper.cash:.2f} EUR")
-        lines = [f"{sym}: {p['qty']:.8f} @ avg {p['avg_price']:.6f}" for sym, p in engine.paper.positions.items()]
-        await update.effective_message.reply_text(f"Cash: {engine.paper.cash:.2f} EUR\n" + "\n".join(lines))
+        balances = [f"{currency}: {amount:.8f}" for currency, amount in sorted(engine.paper.cash_by_currency.items())]
+        lines = [f"{sym}: {p['qty']:.8f} @ avg {p['avg_price']:.8g} {p.get('quote_currency', 'EUR')}" for sym, p in engine.paper.positions.items()]
+        await update.effective_message.reply_text("PAPER-кошелёк:\n" + ("\n".join(balances) or "Нет свободных средств.") + "\n\nПозиции:\n" + ("\n".join(lines) or "Нет открытых позиций."))
 
     async def run(update, context):
         if not await authorized(update): return await deny(update)
