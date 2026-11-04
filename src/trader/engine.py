@@ -19,6 +19,36 @@ FX_CURRENCIES = frozenset({
 })
 
 
+def select_ohlc_markets(eligible, analysis_limit, cursor=0, priority_symbols=()):
+    """Select priority markets first, then rotate fairly through the remaining universe.
+
+    eligible is a sequence of (turnover_eur, symbol, quote_currency) tuples.
+    Priority symbols are checked every cycle (open positions, explicit watchlist,
+    and explicitly requested markets such as TON); all remaining capacity rotates.
+    """
+    markets = list(eligible or ())
+    if not markets:
+        return set(), 0, 0
+    limit = max(1, int(analysis_limit))
+    cursor = int(cursor or 0) % len(markets)
+    by_symbol = {str(symbol).upper(): (symbol, quote) for _, symbol, quote in markets}
+    selected = set()
+    for raw_symbol in priority_symbols or ():
+        symbol = str(raw_symbol or "").strip().upper().replace("/", "")
+        match = by_symbol.get(symbol)
+        if match and match not in selected:
+            selected.add(match)
+            if len(selected) >= limit:
+                break
+    ordered = markets[cursor:] + markets[:cursor]
+    for _, symbol, quote in ordered:
+        if len(selected) >= limit:
+            break
+        selected.add((symbol, quote))
+    next_cursor = (cursor + limit) % len(markets)
+    return selected, next_cursor, len(selected.intersection(set(by_symbol.values())))
+
+
 def fresh_fx_rates_from_market(settings, market_pairs, ticker_data, prices):
     """Build conservative EUR marks from fresh, liquid direct EUR spot pairs."""
     rates = {"EUR": 1.0}
@@ -433,11 +463,20 @@ class Engine:
             # Monitor every Kraken spot market through tickers. Rotate the
             # limited OHLC budget across all funded quote currencies.
             eligible.sort(reverse=True)
-            cursor = int(get_state(self.db, "analysis_cursor", 0) or 0) % max(1, len(eligible))
-            ordered = eligible[cursor:] + eligible[:cursor]
-            selected = {(symbol, quote) for _, symbol, quote in ordered[:analysis_limit]}
+            cursor = int(get_state(self.db, "analysis_cursor", 0) or 0)
+            # Keep held positions and explicit user priorities fresh every
+            # cycle. TON is an explicit requested market; all remaining slots
+            # continue rotating fairly across the full eligible universe.
+            priorities = (
+                list(self.paper.positions)
+                + list(getattr(self.s, "watchlist", ()))
+                + ["TONEUR", "TONUSD"]
+            )
+            selected, next_cursor, priority_selected = select_ohlc_markets(
+                eligible, analysis_limit, cursor, priorities,
+            )
             if eligible:
-                set_state(self.db, "analysis_cursor", (cursor + analysis_limit) % len(eligible))
+                set_state(self.db, "analysis_cursor", next_cursor)
             for _, symbol, quote in eligible:
                 if (symbol, quote) in selected:
                     stage_started = time.monotonic()
@@ -466,10 +505,10 @@ class Engine:
             total_seconds = time.monotonic() - scan_started
             log.info(
                 "Market scan timing: pairs=%d tickers=%d eligible=%d OHLC_selected=%d "
-                "OHLC_analyzed=%d discovery=%.2fs ticker=%.2fs fx=%.2fs "
+                "OHLC_analyzed=%d priority_selected=%d discovery=%.2fs ticker=%.2fs fx=%.2fs "
                 "OHLC=%.2fs total=%.2fs",
                 len(pairs), len(tickers), len(eligible), len(selected),
-                ohlc_analyzed_count, discovery_seconds, ticker_seconds,
+                ohlc_analyzed_count, priority_selected, discovery_seconds, ticker_seconds,
                 fx_seconds, ohlc_seconds, total_seconds,
             )
             return [results_by_symbol[pair["symbol"]] for pair in pairs if pair["symbol"] in results_by_symbol]
