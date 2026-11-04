@@ -2,6 +2,50 @@
 import math
 
 
+_KRAKEN_ASSET_ALIASES = {
+    "XXBT": "XBT", "BTC": "XBT", "XBT": "XBT",
+    "XETH": "ETH", "ETH": "ETH",
+    "ZEUR": "EUR", "ZUSD": "USD", "ZGBP": "GBP",
+    "ZCAD": "CAD", "ZJPY": "JPY", "ZCHF": "CHF", "ZAUD": "AUD",
+    "XXRP": "XRP", "XXLM": "XLM", "XXDG": "DOGE", "XDG": "DOGE",
+}
+
+
+def normalize_kraken_asset_code(code):
+    """Normalize common Kraken legacy asset codes to market-universe symbols."""
+    normalized = str(code or "").strip().upper()
+    return _KRAKEN_ASSET_ALIASES.get(normalized, normalized)
+
+
+def build_asset_pair_routes(assets, market_pairs):
+    """Find online spot pairs involving each wallet asset; retain exchange limits."""
+    asset_codes = {normalize_kraken_asset_code(code) for code in assets}
+    routes = {code: [] for code in sorted(asset_codes)}
+    for pair in market_pairs or []:
+        if not isinstance(pair, dict):
+            continue
+        base = normalize_kraken_asset_code(pair.get("base"))
+        quote = normalize_kraken_asset_code(pair.get("quote"))
+        if not base or not quote:
+            continue
+        for asset in asset_codes.intersection({base, quote}):
+            routes[asset].append({
+                "symbol": str(pair.get("symbol") or ""),
+                "base": base,
+                "quote": quote,
+                "role": "base" if asset == base else "quote",
+                "ordermin": pair.get("ordermin"),
+                "costmin": pair.get("costmin"),
+                "lot_decimals": pair.get("lot_decimals"),
+                "pair_decimals": pair.get("pair_decimals"),
+                "fees": pair.get("fees"),
+                "fees_maker": pair.get("fees_maker"),
+            })
+    for asset in routes:
+        routes[asset].sort(key=lambda item: item["symbol"])
+    return routes
+
+
 def build_wallet_inventory(balances, eur_rates):
     """Return positive balances with optional EUR marks; never infer missing FX as zero."""
     if not isinstance(balances, dict):
@@ -18,7 +62,7 @@ def build_wallet_inventory(balances, eur_rates):
 
     assets = []
     for raw_code, raw_amount in sorted(balances.items(), key=lambda item: str(item[0]).upper()):
-        code = str(raw_code).strip().upper()
+        code = normalize_kraken_asset_code(raw_code)
         if not code:
             continue
         try:
