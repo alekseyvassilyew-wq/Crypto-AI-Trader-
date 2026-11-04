@@ -128,6 +128,21 @@ def predict_probability(model, features):
     )
 
 
+def _net_return_after_costs(entry_price, exit_price, fee_rate, slippage_bps):
+    """Long spot return after adverse entry/exit slippage and fees on both sides."""
+    entry = float(entry_price)
+    exit_value = float(exit_price)
+    fee = float(fee_rate)
+    slip = float(slippage_bps) / 10000.0
+    if not all(math.isfinite(value) for value in (entry, exit_value, fee, slip)):
+        raise ValueError("Execution prices and costs must be finite")
+    if entry <= 0 or exit_value <= 0 or fee < 0 or fee >= 1 or slip < 0 or slip >= 1:
+        raise ValueError("Invalid execution prices or costs")
+    entry_fill = entry * (1.0 + slip)
+    exit_fill = exit_value * (1.0 - slip)
+    return (exit_fill * (1.0 - fee)) / (entry_fill * (1.0 + fee)) - 1.0
+
+
 def _performance(trades, threshold, horizon=1):
     equity, peak, drawdown = 1.0, 1.0, 0.0
     wins, losses = [], []
@@ -185,10 +200,12 @@ def research_candidate(rows, *, horizon=3, fee_rate=0.0026, slippage_bps=5.0,
     samples, labels, future_returns = [], [], []
     for index in range(60, len(parsed) - int(horizon)):
         features = extract_features(parsed, index)
-        entry, exit_price = parsed[index][4], parsed[index + int(horizon)][4]
+        # Signal is known only after candle[index] closes. The earliest
+        # executable entry is the following candle's open, not that close.
+        entry, exit_price = parsed[index + 1][1], parsed[index + int(horizon)][4]
         if features is None or entry <= 0:
             continue
-        net_return = exit_price * (1.0 - fee - slip) / (entry * (1.0 + fee + slip)) - 1.0
+        net_return = _net_return_after_costs(entry, exit_price, fee, slippage_bps)
         samples.append(features)
         labels.append(1 if net_return > 0 else 0)
         future_returns.append(net_return)
@@ -226,7 +243,13 @@ def research_candidate(rows, *, horizon=3, fee_rate=0.0026, slippage_bps=5.0,
         "status": "SHADOW_ONLY", "research_pass": research_pass, "samples": len(samples),
         "positive_labels_pct": sum(labels) / len(labels) * 100,
         "horizon_candles": int(horizon), "probability_threshold": threshold,
-        "assumptions": {"fee_rate_per_side": fee, "slippage_bps_per_side": float(slippage_bps)},
+        "assumptions": {
+            "fee_rate_per_side": fee,
+            "slippage_bps_per_side": float(slippage_bps),
+            "signal": "after signal candle close",
+            "entry": "next candle open with adverse slippage",
+            "exit": "close of horizon candle with adverse slippage",
+        },
         "walk_forward": folds, "out_of_sample": aggregate,
         "model": {"feature_names": list(FEATURE_NAMES), **final_model},
         "warning": "Research only. Candidate is not connected to PAPER order decisions and is never auto-promoted.",
