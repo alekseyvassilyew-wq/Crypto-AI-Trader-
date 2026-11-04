@@ -123,3 +123,13 @@ def test_env_example_is_a_dotenv_file_with_safe_paper_defaults():
     assert values["BOT_TOKEN"] in (None, "")
     assert values["KRAKEN_API_KEY"] in (None, "")
     assert "services" not in values
+
+def test_paper_slippage_is_configurable_and_bounded(monkeypatch):
+    monkeypatch.setenv("BOT_TOKEN", "token")
+    monkeypatch.setenv("ADMIN_ID", "123")
+    monkeypatch.setenv("PAPER_SLIPPAGE_BPS", "7.5")
+    settings = load_settings()
+    assert settings.paper_slippage_bps == 7.5
+    monkeypatch.setenv("PAPER_SLIPPAGE_BPS", "101")
+    with pytest.raises(ValueError, match="between 0 and 100"):
+        load_settings()
