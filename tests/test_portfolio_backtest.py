@@ -97,7 +97,7 @@ def test_portfolio_backtest_uses_entry_and_exit_fx_rates():
 
 
 def test_portfolio_drawdown_includes_final_liquidation_fees():
-    candles = flat_candles(count=64, price=100)
+    candles = [[float(i), 100.0, 100.0, 100.0, 100.0, 1000.0] for i in range(64)]
     result = run_portfolio_backtest(
         {"BTCEUR": candles},
         quote_currencies={"BTCEUR": "EUR"},
