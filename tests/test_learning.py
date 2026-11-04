@@ -41,3 +41,24 @@ def test_research_rejects_short_or_unsorted_history():
 def test_research_rejects_invalid_costs():
     with pytest.raises(ValueError, match="fee or slippage"):
         research_candidate(sample_candles(), fee_rate=float("nan"))
+
+@pytest.mark.parametrize("threshold", [float("nan"), float("inf"), -0.1, 0.0, 1.0, 1.1, True])
+def test_research_rejects_invalid_probability_threshold(threshold):
+    with pytest.raises(ValueError, match="probability_threshold"):
+        research_candidate(sample_candles(), probability_threshold=threshold)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"min_train": 0},
+        {"min_train": -1},
+        {"min_train": True},
+        {"min_validation": 0},
+        {"min_validation": 2.5},
+        {"min_validation": False},
+    ],
+)
+def test_research_rejects_invalid_fold_sizes(kwargs):
+    with pytest.raises(ValueError, match="min_train|min_validation"):
+        research_candidate(sample_candles(), **kwargs)
