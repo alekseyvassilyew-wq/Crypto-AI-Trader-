@@ -105,6 +105,43 @@ def backup_database(db, backup_dir, keep=7):
     return str(destination)
 
 
+def get_backup_health(backup_dir, *, max_age_hours=26, keep=7):
+    """Inspect the newest SQLite backup without modifying any files."""
+    if isinstance(max_age_hours, bool) or not isinstance(max_age_hours, (int, float)) or not math.isfinite(float(max_age_hours)) or max_age_hours <= 0:
+        raise ValueError("max_age_hours must be a positive finite number")
+    if isinstance(keep, bool) or not isinstance(keep, int) or keep < 1:
+        raise ValueError("keep must be a positive integer")
+    directory = Path(backup_dir).expanduser()
+    backups = sorted(
+        directory.glob("crypto_ai_trader_*.sqlite3") if directory.exists() else [],
+        key=lambda item: item.stat().st_mtime,
+        reverse=True,
+    )
+    if not backups:
+        return {"healthy": False, "count": 0, "latest_path": None,
+                "latest_at": None, "age_seconds": None, "integrity": "missing",
+                "retention_ok": True}
+    latest = backups[0]
+    modified = datetime.fromtimestamp(latest.stat().st_mtime, timezone.utc)
+    age_seconds = max(0.0, (datetime.now(timezone.utc) - modified).total_seconds())
+    integrity = "error"
+    connection = None
+    try:
+        connection = sqlite3.connect(f"file:{latest}?mode=ro", uri=True, timeout=10)
+        row = connection.execute("PRAGMA integrity_check").fetchone()
+        integrity = str(row[0]) if row else "no_result"
+    except (sqlite3.Error, OSError) as exc:
+        integrity = type(exc).__name__
+    finally:
+        if connection is not None:
+            connection.close()
+    retention_ok = len(backups) <= keep
+    healthy = integrity == "ok" and age_seconds <= float(max_age_hours) * 3600 and retention_ok
+    return {"healthy": healthy, "count": len(backups), "latest_path": str(latest),
+            "latest_at": modified.isoformat(), "age_seconds": age_seconds,
+            "integrity": integrity, "retention_ok": retention_ok}
+
+
 def audit(db, event, details=""):
     with db:
         db.execute("INSERT INTO audit(event,details) VALUES(?,?)", (event, str(details)))

@@ -131,6 +131,7 @@ def build_app(s, engine, exchange):
             return (
                 f"Режим: PAPER\nСостояние: {state}\nСвободные средства: {balances}\n"
                 f"Общая стоимость портфеля после расчётных расходов на выход: {equity_text}\n"
+                f"Время оценки по последнему сканированию: {engine.last_scan_at.strftime('%Y-%m-%d %H:%M:%S UTC') if engine.last_scan_at else 'нет данных'}\n"
                 f"Позиции: {len(engine.paper.positions)}/{s.max_positions}\nP/L сегодня (UTC): {daily_text}\n"
                 f"Риск: SL {s.stop_loss_pct:.2f}% | TP {s.take_profit_pct:.2f}% | trailing {getattr(s, 'trailing_stop_pct', 1.5):.2f}%\n"
                 f"Рынок Kraken: {len(engine.market_pairs)} пар; котировок получено: {engine.market_ticker_count}\n"
@@ -151,6 +152,40 @@ def build_app(s, engine, exchange):
             return format_monitor_status(s, state)
         message = await context.application.bot_data["monitor_runner"].run(read_monitor_status)
         await update.effective_message.reply_text(message)
+
+    async def dbhealth(update, context):
+        if not await authorized(update): return await deny(update)
+
+        def inspect_database():
+            from .db import get_backup_health
+            current = engine.db.execute("PRAGMA quick_check").fetchone()
+            integrity = str(current[0]) if current else "no_result"
+            db_path = Path(s.db_path).expanduser()
+            backup = get_backup_health(db_path.parent / "backups", max_age_hours=26, keep=7)
+            db_size = db_path.stat().st_size if db_path.exists() else 0
+            wal_path = Path(str(db_path) + "-wal")
+            wal_size = wal_path.stat().st_size if wal_path.exists() else 0
+            return integrity, db_size, wal_size, backup
+
+        try:
+            integrity, db_size, wal_size, backup = await context.application.bot_data["run_blocking"].run(inspect_database)
+            age = backup["age_seconds"]
+            age_text = "нет резервной копии" if age is None else f"{int(age // 3600)} ч {int((age % 3600) // 60)} мин"
+            status_text = "OK" if integrity == "ok" and backup["healthy"] else "ТРЕБУЕТ ВНИМАНИЯ"
+            message = (
+                "🗄 SQLITE — ДИАГНОСТИКА\n"
+                f"Общий статус: {status_text}\n"
+                f"Проверка рабочей БД: {integrity}\n"
+                f"Размер БД: {db_size / 1024 / 1024:.2f} MB | WAL: {wal_size / 1024 / 1024:.2f} MB\n"
+                f"Резервных копий: {backup['count']}/7\n"
+                f"Возраст последней копии: {age_text}\n"
+                f"Integrity последней копии: {backup['integrity']}\n"
+                f"Лимит возраста: 26 ч | Ротация: {'OK' if backup['retention_ok'] else 'ПРЕВЫШЕНА'}"
+            )
+            await update.effective_message.reply_text(message)
+        except Exception as exc:
+            log.error("Database health check failed: %s", type(exc).__name__)
+            await update.effective_message.reply_text(f"🚨 Проверка SQLite не выполнена: {type(exc).__name__}")
 
     async def scan(update, context):
         if not await authorized(update): return await deny(update)
@@ -854,7 +889,7 @@ def build_app(s, engine, exchange):
     async def help_cmd(update, context):
         if not await authorized(update): return await deny(update)
         await update.effective_message.reply_text(
-            "/start — меню\n/status — состояние и P/L\n/monitorstatus — диагностика Render/GitHub/Telegram\n/scan — сканирование\n"
+            "/start — меню\n/status — состояние и P/L\n/dbhealth — целостность SQLite и свежесть резервной копии\n/monitorstatus — диагностика Render/GitHub/Telegram\n/scan — сканирование\n"
             "/account — виртуальные остатки PAPER\n/realbalance — реальные остатки Kraken (только чтение)\n/walletcheck — пары, минимумы и комиссии Kraken (только чтение)\n"
             "/portfolio — PAPER-позиции\n/paperreport [часы] — статистика автономного PAPER-теста\n"
             "/learn XBTEUR — обучение/проверка ML-кандидата без торговли\n/learning — текущие кандидаты и shadow-тест\n"
@@ -1142,7 +1177,7 @@ def build_app(s, engine, exchange):
     app.bot_data["monitor_db"] = monitor_db
     app.bot_data["monitor_runner"] = monitor_runner
     app.bot_data["research_runner"] = research_runner
-    for name, fn in [("start", start), ("status", status), ("monitorstatus", monitorstatus), ("scan", scan), ("account", account), ("realbalance", realbalance), ("walletcheck", walletcheck), ("paperreport", paperreport), ("learn", learn), ("learning", learning), ("research", research_history_cmd), ("backtest", backtest), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
+    for name, fn in [("start", start), ("status", status), ("dbhealth", dbhealth), ("monitorstatus", monitorstatus), ("scan", scan), ("account", account), ("realbalance", realbalance), ("walletcheck", walletcheck), ("paperreport", paperreport), ("learn", learn), ("learning", learning), ("research", research_history_cmd), ("backtest", backtest), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
                      ("run", run), ("pause", pause), ("stop", stop), ("help", help_cmd)]:
         app.add_handler(CommandHandler(name, fn))
     app.add_handler(CommandHandler("test_topics", testtopics))  # Backwards-compatible alias shown in /help.

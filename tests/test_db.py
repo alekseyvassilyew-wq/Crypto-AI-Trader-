@@ -201,3 +201,43 @@ def test_backup_restore_reopens_paper_wallet_positions_and_history(tmp_path):
         assert restored_db.execute("SELECT COUNT(*) FROM trades").fetchone()[0] == 1
     finally:
         restored_db.close()
+
+
+
+def test_backup_health_reports_missing_backup(tmp_path):
+    from src.trader.db import get_backup_health
+
+    health = get_backup_health(tmp_path / "backups")
+    assert health["healthy"] is False
+    assert health["count"] == 0
+    assert health["integrity"] == "missing"
+    assert health["latest_path"] is None
+
+
+def test_backup_health_checks_integrity_age_and_retention(tmp_path):
+    from src.trader.db import backup_database, get_backup_health
+
+    db = connect(tmp_path / "live.sqlite3")
+    backup_dir = tmp_path / "backups"
+    backup_database(db, backup_dir, keep=7)
+    health = get_backup_health(backup_dir, max_age_hours=26, keep=7)
+
+    assert health["healthy"] is True
+    assert health["count"] == 1
+    assert health["integrity"] == "ok"
+    assert health["retention_ok"] is True
+    assert health["age_seconds"] < 60
+    db.close()
+
+
+def test_backup_health_flags_corrupt_latest_backup(tmp_path):
+    from src.trader.db import get_backup_health
+
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    (backup_dir / "crypto_ai_trader_corrupt.sqlite3").write_bytes(b"not a sqlite database")
+
+    health = get_backup_health(backup_dir)
+
+    assert health["healthy"] is False
+    assert health["integrity"] != "ok"
