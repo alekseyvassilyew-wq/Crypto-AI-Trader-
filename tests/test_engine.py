@@ -126,7 +126,7 @@ def test_full_market_scan_monitors_all_pairs_and_can_analyze_non_eur_markets(tmp
 
     def fake_scan_one(symbol, tickers=None, **kwargs):
         analyzed.append(symbol)
-        return {"symbol": symbol, "signal": "HOLD", "score": 1, "price": 99, "spread_bps": 10, "turnover": 50000, "reasons": []}
+        return {"symbol": symbol, "signal": "HOLD", "score": 1, "price": 99, "spread_bps": 10, "turnover": 50000, "ohlc_analyzed": True, "reasons": [f"Analyzed {symbol}"]}
 
     engine.scan_one = fake_scan_one
     rows = engine.scan()
@@ -136,7 +136,8 @@ def test_full_market_scan_monitors_all_pairs_and_can_analyze_non_eur_markets(tmp
     assert analyzed == ["ETHUSD"]
     by_symbol = {row["symbol"]: row for row in rows}
     assert by_symbol["ETHUSD"]["signal"] == "HOLD"
-    assert "Monitored only" in by_symbol["ETHUSD"]["reasons"][0]
+    assert by_symbol["ETHUSD"]["ohlc_analyzed"] is True
+    assert "Analyzed ETHUSD" in by_symbol["ETHUSD"]["reasons"][0]
     assert "deferred" in by_symbol["ETHEUR"]["reasons"][0]
     db.close()
 
