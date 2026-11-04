@@ -323,3 +323,37 @@ def test_scan_analyzes_markets_with_fx_route_without_quote_cash(tmp_path):
     assert 'ETHUSD' in analyzed
     assert engine.paper.balance('USD') == 0
     db.close()
+
+
+
+def test_paper_buy_crosses_spread_at_ask(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.scan = lambda **kwargs: [{
+        "symbol": "XBTEUR", "quote": "EUR", "signal": "BUY", "score": 5,
+        "price": 100.0, "bid": 99.0, "ask": 101.0,
+        "spread_bps": 20, "turnover": 50000, "turnover_eur": 50000, "reasons": [],
+    }]
+    engine.start()
+    actions = engine.cycle()
+    assert len(actions) == 1
+    assert engine.paper.positions["XBTEUR"]["avg_price"] == pytest.approx(101.0)
+    trade = db.execute("SELECT price FROM trades WHERE side='Buy'").fetchone()
+    assert trade["price"] == pytest.approx(101.0)
+    db.close()
+
+
+def test_paper_stop_uses_executable_bid_not_last_trade(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.paper.buy("XBTEUR", 5, 100.0)
+    engine.scan = lambda **kwargs: [{
+        "symbol": "XBTEUR", "quote": "EUR", "signal": "HOLD", "score": 0,
+        "price": 98.5, "bid": 97.9, "ask": 99.1,
+        "spread_bps": 20, "turnover": 50000, "turnover_eur": 50000, "reasons": [],
+    }]
+    engine.start()
+    actions = engine.cycle()
+    assert any("XBTEUR SELL STOP_LOSS" in action for action in actions)
+    trade = db.execute("SELECT price FROM trades WHERE side='Sell'").fetchone()
+    assert trade["price"] == pytest.approx(97.9)
+    assert "XBTEUR" not in engine.paper.positions
+    db.close()
