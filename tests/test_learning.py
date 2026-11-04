@@ -148,3 +148,15 @@ def test_research_reports_probability_distribution_and_threshold_sweep():
     for metrics in diagnostics["thresholds"].values():
         assert "trades" in metrics and "net_return_pct" in metrics
     assert "same OOS/holdout data" in result["probability_diagnostics"]["warning"]
+
+def test_fit_balances_imbalanced_training_labels_and_marks_scores_uncalibrated():
+    from src.trader.learning import _fit
+
+    samples = [[float(i), float(i % 3)] for i in range(20)]
+    labels = [1] * 2 + [0] * 18
+    model = _fit(samples, labels, epochs=5)
+
+    assert model["training_class_counts"] == {"negative": 18, "positive": 2}
+    assert model["training_class_weights"]["0"] == pytest.approx(20 / 36)
+    assert model["training_class_weights"]["1"] == pytest.approx(5.0)
+    assert model["score_type"] == "class_weighted_probability_score_not_calibrated_probability"
