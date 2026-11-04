@@ -100,7 +100,7 @@ def _performance(trades, threshold):
         "trades": count, "wins": len(wins),
         "win_rate_pct": len(wins) / count * 100 if count else 0.0,
         "net_return_pct": (equity - 1.0) * 100,
-        "profit_factor": gross_win / gross_loss if gross_loss else (float("inf") if gross_win else 0.0),
+        "profit_factor": gross_win / gross_loss if gross_loss else ("INF" if gross_win else 0.0),
         "max_drawdown_pct": drawdown * 100,
     }
 
@@ -165,7 +165,7 @@ def research_candidate(rows, *, horizon=3, fee_rate=0.0026, slippage_bps=5.0,
     positive_folds = sum(1 for item in folds if item["net_return_pct"] > 0)
     research_pass = (
         aggregate["trades"] >= 20 and aggregate["net_return_pct"] > 0
-        and aggregate["profit_factor"] >= 1.15
+        and (aggregate["profit_factor"] == "INF" or aggregate["profit_factor"] >= 1.15)
         and aggregate["max_drawdown_pct"] <= 15.0 and positive_folds >= 2
     )
     return {
