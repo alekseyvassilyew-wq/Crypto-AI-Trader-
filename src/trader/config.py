@@ -52,7 +52,7 @@ def load_settings():
         fee_rate=float(os.getenv("PAPER_FEE_RATE", "0.0026")),
         watchlist=tuple(x.strip().upper().replace("/", "") for x in os.getenv("WATCHLIST", "").split(",") if x.strip()),
         trade_quote_currency=os.getenv("TRADE_QUOTE_CURRENCY", "EUR").strip().upper(),
-        max_candle_pairs=int(os.getenv("MAX_CANDLE_PAIRS", "10")),
+        max_candle_pairs=int(os.getenv("MAX_CANDLE_PAIRS", "20")),
         scan_interval=int(os.getenv("SCAN_INTERVAL_SECONDS", "60")),
         stop_loss_pct=float(os.getenv("STOP_LOSS_PERCENT", "2")),
         take_profit_pct=float(os.getenv("TAKE_PROFIT_PERCENT", "4")),
@@ -73,7 +73,7 @@ def load_settings():
                       s.min_turnover, s.fee_rate, s.stop_loss_pct, s.take_profit_pct)
     if not all(math.isfinite(value) for value in numeric_values):
         raise ValueError("All numeric settings must be finite numbers.")
-    if min(s.max_daily_loss, s.max_positions, s.max_candle_pairs, s.scan_interval, s.stop_loss_pct, s.take_profit_pct) <= 0:
+    if min(s.max_daily_loss, s.max_positions, s.max_candle_pairs, s.scan_interval, s.stop_loss_pct, s.take_profit_pct) <= 0 or s.max_candle_pairs > 20:
         raise ValueError("Risk limits and scan interval must be positive.")
     if s.trade_quote_currency != "EUR":
         raise ValueError("This PAPER wallet is denominated in EUR; TRADE_QUOTE_CURRENCY must remain EUR.")
