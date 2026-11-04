@@ -176,7 +176,7 @@ def build_app(s, engine, exchange):
                 )
                 if backup["status"] == "stale":
                     backup_line += " — ВНИМАНИЕ: старше 26 часов"
-            return report + "\\n" + backup_line
+            return report + "\n" + backup_line
         message = await context.application.bot_data["monitor_runner"].run(read_monitor_status)
         await update.effective_message.reply_text(message)
 
