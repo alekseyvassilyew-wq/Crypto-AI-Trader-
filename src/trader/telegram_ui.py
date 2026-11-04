@@ -133,11 +133,11 @@ def build_app(s, engine, exchange):
         def read_monitor_status():
             from .db import get_state
             from .monitoring import format_monitor_status
-            state = get_state(engine.db, "external_monitor_state", {})
+            state = get_state(monitor_db, "external_monitor_state", {})
             if not isinstance(state, dict):
                 state = {}
             return format_monitor_status(s, state)
-        message = await context.application.bot_data["run_blocking"].run(read_monitor_status)
+        message = await context.application.bot_data["monitor_runner"].run(read_monitor_status)
         await update.effective_message.reply_text(message)
 
     async def scan(update, context):
@@ -940,11 +940,29 @@ def build_app(s, engine, exchange):
         connect_timeout=10, read_timeout=30, write_timeout=30, pool_timeout=10,
         connection_pool_size=16,
     )
-    app = Application.builder().token(s.bot_token).request(telegram_request).build()
-    # Serialize all exchange/SQLite work: cycle jobs, scans and backtests share
-    # one requests.Session, engine state and SQLite connection.
+    async def close_monitor_db(application):
+        if monitor_db is not engine.db:
+            import asyncio
+            await asyncio.to_thread(monitor_db.close)
+
+    app = (
+        Application.builder()
+        .token(s.bot_token)
+        .request(telegram_request)
+        .post_shutdown(close_monitor_db)
+        .build()
+    )
+    # Keep exchange/engine work serialized on its own connection. External
+    # monitor state uses a second SQLite connection and runner so network/API
+    # monitoring never queues behind a full market scan.
     from .worker import SerializedRunner
-    app.bot_data["run_blocking"] = SerializedRunner()
+    from .db import connect
+    engine_runner = SerializedRunner()
+    monitor_db = engine.db if s.db_path == ":memory:" else connect(s.db_path)
+    monitor_runner = engine_runner if monitor_db is engine.db else SerializedRunner()
+    app.bot_data["run_blocking"] = engine_runner
+    app.bot_data["monitor_db"] = monitor_db
+    app.bot_data["monitor_runner"] = monitor_runner
     for name, fn in [("start", start), ("status", status), ("monitorstatus", monitorstatus), ("scan", scan), ("account", account), ("realbalance", realbalance), ("paperreport", paperreport), ("learn", learn), ("learning", learning), ("research", research_history_cmd), ("backtest", backtest), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
                      ("run", run), ("pause", pause), ("stop", stop), ("help", help_cmd)]:
         app.add_handler(CommandHandler(name, fn))
@@ -955,24 +973,39 @@ def build_app(s, engine, exchange):
         if not (s.render_api_key and s.render_service_id or s.github_repository):
             return
         stage = "polling external APIs"
+        state = None
         try:
-            from .monitoring import poll_external_events
-            def poll_without_committing():
-                from .db import get_state
-                state = get_state(engine.db, "external_monitor_state", {})
-                if not isinstance(state, dict):
-                    state = {}
-                events = poll_external_events(s, state)
-                return state, events
+            import asyncio
+            from .monitoring import poll_external_events, merge_monitor_health_state
 
-            # Do not advance the durable cursors until every alert has been
-            # accepted by Telegram. A transient Telegram failure then causes
-            # the same event to be retried on the next poll instead of lost.
+            # Read/write the shared SQLite connection under the engine lock,
+            # but never hold that lock while waiting on Render/GitHub HTTP APIs.
+            def load_monitor_state():
+                from .db import get_state
+                value = get_state(monitor_db, "external_monitor_state", {})
+                return value if isinstance(value, dict) else {}
+
+            # Do not advance durable event cursors until Telegram has accepted
+            # every alert. A delivery failure therefore retries the same events.
             if not bool(s.telegram_group_chat_id):
                 log.warning("External monitoring has no Telegram destination; keeping event cursors unchanged")
                 return
 
-            state, events = await context.application.bot_data["run_blocking"].run(poll_without_committing)
+            state = await context.application.bot_data["monitor_runner"].run(load_monitor_state)
+            events = await asyncio.to_thread(poll_external_events, s, state)
+
+            # Save API health immediately, independently of Telegram delivery,
+            # while leaving event cursors untouched for retry safety.
+            stage = "persisting API health"
+            def persist_monitor_health():
+                from .db import get_state, set_state
+                persisted = get_state(monitor_db, "external_monitor_state", {})
+                set_state(
+                    monitor_db,
+                    "external_monitor_state",
+                    merge_monitor_health_state(persisted, state),
+                )
+            await context.application.bot_data["monitor_runner"].run(persist_monitor_health)
             log.info("External monitoring APIs polled; pending_notifications=%d", len(events))
             for event in events:
                 stage = f"sending {event.get('source', 'external')} notification"
@@ -1002,11 +1035,11 @@ def build_app(s, engine, exchange):
             state["last_events_count"] = len(events)
             if events:
                 state["last_alert_delivery_at"] = state["last_poll_at"]
-            log.info("External monitoring cycle succeeded: new_events=%d", len(events))
             def persist_monitor_state():
                 from .db import set_state
-                set_state(engine.db, "external_monitor_state", state)
-            await context.application.bot_data["run_blocking"].run(persist_monitor_state)
+                set_state(monitor_db, "external_monitor_state", state)
+            await context.application.bot_data["monitor_runner"].run(persist_monitor_state)
+            log.info("External monitoring cycle succeeded: new_events=%d", len(events))
         except Exception as exc:
             log.warning("External monitoring job failed during %s: %s", stage, type(exc).__name__)
 
