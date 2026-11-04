@@ -7,6 +7,10 @@ from .engine import Engine
 from .telegram_ui import build_app
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+# Telegram's HTTP client logs request URLs at INFO; Bot API URLs contain the
+# bot token. Never allow httpx/httpcore to write those URLs to persistent logs.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 def main():
     settings = load_settings()
