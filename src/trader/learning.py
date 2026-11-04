@@ -72,18 +72,31 @@ def _fit(samples, labels, epochs=450, learning_rate=0.05, l2=0.01, hidden_units=
     w2 = [0.08 * math.cos(j + 1) for j in range(hidden_units)]
     b2 = 0.0
     count = len(normalized)
+    positive_count = sum(1 for label in labels if label == 1)
+    negative_count = count - positive_count
+    # Balance the loss so a rare profitable class is not overwhelmed by the
+    # majority class. These weights are fitted on the training partition only.
+    if positive_count and negative_count:
+        class_weights = {
+            "0": count / (2.0 * negative_count),
+            "1": count / (2.0 * positive_count),
+        }
+    else:
+        class_weights = {"0": 1.0, "1": 1.0}
+    weight_sum = sum(class_weights[str(label)] for label in labels)
     for _ in range(epochs):
         gw1 = [[0.0] * hidden_units for _ in range(width)]
         gb1 = [0.0] * hidden_units
         gw2 = [0.0] * hidden_units
         gb2 = 0.0
         for row, label in zip(normalized, labels):
+            sample_weight = class_weights[str(label)]
             hidden = [
                 math.tanh(b1[j] + sum(w1[i][j] * row[i] for i in range(width)))
                 for j in range(hidden_units)
             ]
             probability = _sigmoid(b2 + sum(w2[j] * hidden[j] for j in range(hidden_units)))
-            output_delta = probability - label
+            output_delta = (probability - label) * sample_weight
             gb2 += output_delta
             hidden_deltas = [
                 output_delta * w2[j] * (1.0 - hidden[j] * hidden[j])
@@ -94,18 +107,21 @@ def _fit(samples, labels, epochs=450, learning_rate=0.05, l2=0.01, hidden_units=
                 gb1[j] += hidden_deltas[j]
                 for i in range(width):
                     gw1[i][j] += hidden_deltas[j] * row[i]
-        b2 -= learning_rate * gb2 / count
+        b2 -= learning_rate * gb2 / weight_sum
         for j in range(hidden_units):
-            w2[j] -= learning_rate * (gw2[j] / count + l2 * w2[j])
-            b1[j] -= learning_rate * gb1[j] / count
+            w2[j] -= learning_rate * (gw2[j] / weight_sum + l2 * w2[j])
+            b1[j] -= learning_rate * gb1[j] / weight_sum
         for i in range(width):
             for j in range(hidden_units):
-                w1[i][j] -= learning_rate * (gw1[i][j] / count + l2 * w1[i][j])
+                w1[i][j] -= learning_rate * (gw1[i][j] / weight_sum + l2 * w1[i][j])
     return {
         "architecture": f"{width}-{hidden_units}-1",
         "means": means, "scales": scales,
         "weights_input_hidden": w1, "bias_hidden": b1,
         "weights_hidden_output": w2, "bias_output": b2,
+        "training_class_counts": {"negative": negative_count, "positive": positive_count},
+        "training_class_weights": class_weights,
+        "score_type": "class_weighted_probability_score_not_calibrated_probability",
     }
 
 
