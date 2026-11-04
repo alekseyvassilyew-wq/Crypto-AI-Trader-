@@ -38,3 +38,5 @@ services:
         value: "true"
       - key: RISK_PER_TRADE_PERCENT
         value: "0.5"
+      - key: ML_AUTO_RESEARCH_MARKETS
+        value: "3"
