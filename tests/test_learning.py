@@ -160,3 +160,20 @@ def test_fit_balances_imbalanced_training_labels_and_marks_scores_uncalibrated()
     assert model["training_class_weights"]["0"] == pytest.approx(20 / 36)
     assert model["training_class_weights"]["1"] == pytest.approx(5.0)
     assert model["score_type"] == "class_weighted_probability_score_not_calibrated_probability"
+
+def test_research_reports_unfitted_baselines_and_oos_ranking_metrics():
+    result = research_candidate(sample_candles(), fee_rate=0.001, slippage_bps=2)
+
+    benchmarks = result["benchmark_metrics"]
+    assert set(benchmarks) == {"walk_forward_oos", "independent_holdout"}
+    for period in benchmarks.values():
+        assert set(period) == {"always_long", "positive_24h_momentum"}
+        for metrics in period.values():
+            assert metrics["trades"] >= 0
+            assert "net_return_pct" in metrics
+
+    ranking = result["score_ranking"]
+    assert ranking["interpretation"] == "RANKING_METRIC_ONLY_NOT_PROBABILITY_CALIBRATION"
+    assert ranking["walk_forward_oos_roc_auc"] is None or 0 <= ranking["walk_forward_oos_roc_auc"] <= 1
+    assert ranking["independent_holdout_roc_auc"] is None or 0 <= ranking["independent_holdout_roc_auc"] <= 1
+    assert "benchmark_metrics" in result
