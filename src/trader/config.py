@@ -24,6 +24,7 @@ class Settings:
     scan_interval: int
     stop_loss_pct: float
     take_profit_pct: float
+    trailing_stop_pct: float
     kraken_api_key: str
     kraken_api_secret: str
     telegram_group_chat_id: int
@@ -56,6 +57,7 @@ def load_settings():
         scan_interval=int(os.getenv("SCAN_INTERVAL_SECONDS", "60")),
         stop_loss_pct=float(os.getenv("STOP_LOSS_PERCENT", "2")),
         take_profit_pct=float(os.getenv("TAKE_PROFIT_PERCENT", "4")),
+        trailing_stop_pct=float(os.getenv("TRAILING_STOP_PERCENT", "1.5")),
         kraken_api_key=os.getenv("KRAKEN_API_KEY", "").strip(),
         kraken_api_secret=os.getenv("KRAKEN_API_SECRET", "").strip(),
         telegram_group_chat_id=int(os.getenv("TELEGRAM_GROUP_CHAT_ID", "0")),
@@ -70,10 +72,10 @@ def load_settings():
     if s.paper_start <= 0 or s.max_trade <= 0 or s.max_trade > s.paper_start:
         raise ValueError("Invalid paper balance or trade size configuration.")
     numeric_values = (s.paper_start, s.max_trade, s.max_daily_loss, s.max_spread_bps,
-                      s.min_turnover, s.fee_rate, s.stop_loss_pct, s.take_profit_pct)
+                      s.min_turnover, s.fee_rate, s.stop_loss_pct, s.take_profit_pct, s.trailing_stop_pct)
     if not all(math.isfinite(value) for value in numeric_values):
         raise ValueError("All numeric settings must be finite numbers.")
-    if min(s.max_daily_loss, s.max_positions, s.max_candle_pairs, s.scan_interval, s.stop_loss_pct, s.take_profit_pct) <= 0:
+    if min(s.max_daily_loss, s.max_positions, s.max_candle_pairs, s.scan_interval, s.stop_loss_pct, s.take_profit_pct, s.trailing_stop_pct) <= 0:
         raise ValueError("Risk limits and scan interval must be positive.")
     # TRADE_QUOTE_CURRENCY is retained for backwards-compatible display/defaults.
     if s.max_spread_bps <= 0 or s.min_turnover < 0:
