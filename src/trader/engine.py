@@ -15,6 +15,7 @@ class Engine:
         self.last_signals = []
         self.market_pairs = []
         self.market_ticker_count = 0
+        self._analysis_cursor = 0
         self.limits = Limits(settings.max_trade, settings.max_daily_loss, settings.max_positions,
                              settings.max_spread_bps, settings.min_turnover)
         self._ensure_day()
@@ -125,7 +126,17 @@ class Engine:
             # limits, OHLC/indicator analysis is budgeted to the most liquid
             # EUR pairs each cycle; the complete universe is re-ranked each scan.
             eligible.sort(reverse=True)
-            selected = {symbol for _, symbol in eligible[:analysis_limit]}
+            # Rotate through liquid EUR markets instead of repeatedly analyzing
+            # only the same top symbols on every scan.
+            if eligible:
+                cursor = self._analysis_cursor % len(eligible)
+                batch = [eligible[(cursor + offset) % len(eligible)]
+                         for offset in range(min(analysis_limit, len(eligible)))]
+                selected = {symbol for _, symbol in batch}
+                self._analysis_cursor = (cursor + len(batch)) % len(eligible)
+            else:
+                selected = set()
+                self._analysis_cursor = 0
             for _, symbol in eligible:
                 if symbol in selected:
                     result = self.scan_one(symbol, [ticker_by_symbol[symbol]])
