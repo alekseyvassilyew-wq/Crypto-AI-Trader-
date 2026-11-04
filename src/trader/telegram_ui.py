@@ -927,7 +927,7 @@ def build_app(s, engine, exchange):
     # one requests.Session, engine state and SQLite connection.
     from .worker import SerializedRunner
     app.bot_data["run_blocking"] = SerializedRunner()
-    for name, fn in [("start", start), ("status", status), ("scan", scan), ("account", account), ("realbalance", realbalance), ("paperreport", paperreport), ("learn", learn), ("learning", learning), ("research", research_history_cmd), ("backtest", backtest), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
+    for name, fn in [("start", start), ("status", status), ("monitorstatus", monitorstatus), ("scan", scan), ("account", account), ("realbalance", realbalance), ("paperreport", paperreport), ("learn", learn), ("learning", learning), ("research", research_history_cmd), ("backtest", backtest), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
                      ("run", run), ("pause", pause), ("stop", stop), ("help", help_cmd)]:
         app.add_handler(CommandHandler(name, fn))
     app.add_handler(CallbackQueryHandler(callback))
