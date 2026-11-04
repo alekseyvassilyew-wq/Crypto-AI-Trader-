@@ -62,3 +62,28 @@ def test_research_rejects_invalid_probability_threshold(threshold):
 def test_research_rejects_invalid_fold_sizes(kwargs):
     with pytest.raises(ValueError, match="min_train|min_validation"):
         research_candidate(sample_candles(), **kwargs)
+
+
+
+def test_learning_execution_uses_next_candle_open_and_two_sided_costs():
+    from src.trader.learning import _net_return_after_costs
+
+    # A 10% gap between signal close and next open must affect the entry price.
+    signal_close = 100.0
+    next_open = 110.0
+    exit_close = 121.0
+    result = _net_return_after_costs(next_open, exit_close, 0.001, 5.0)
+    close_to_close = _net_return_after_costs(signal_close, exit_close, 0.001, 5.0)
+
+    assert result < close_to_close
+    assert result == pytest.approx(
+        (exit_close * (1 - 0.0005) * (1 - 0.001))
+        / (next_open * (1 + 0.0005) * (1 + 0.001)) - 1
+    )
+
+
+def test_research_candidate_declares_executable_fill_assumptions():
+    result = research_candidate(sample_candles(), fee_rate=0.001, slippage_bps=2)
+    assert result["assumptions"]["signal"] == "after signal candle close"
+    assert result["assumptions"]["entry"] == "next candle open with adverse slippage"
+    assert result["assumptions"]["exit"] == "close of horizon candle with adverse slippage"
