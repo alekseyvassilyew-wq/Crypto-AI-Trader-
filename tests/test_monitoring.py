@@ -137,3 +137,32 @@ def test_github_monitor_reports_run_that_transitions_to_completed(monkeypatch):
     events = poll_external_events(settings, state)
     assert len(events) == 1
     assert events[0]["status"] == "SUCCESS"
+
+def test_render_deploy_success_is_reported_as_recovery(monkeypatch):
+    settings = SimpleNamespace(
+        render_api_key="test-key",
+        render_service_id="srv-test",
+        github_token="",
+        github_repository="",
+    )
+    state = {}
+    payloads = [
+        [{"event": {"id": "evt-old", "type": "server_restarted", "details": {}}}],
+        [
+            {"event": {"id": "evt-deploy", "type": "deploy_ended",
+                       "details": {"deployStatus": "succeeded", "status": 2}}},
+            {"event": {"id": "evt-old", "type": "server_restarted", "details": {}}},
+        ],
+    ]
+
+    def fake_get(*args, **kwargs):
+        return Response(payloads.pop(0))
+
+    monkeypatch.setattr("src.trader.monitoring.requests.get", fake_get)
+
+    assert poll_external_events(settings, state) == []
+    events = poll_external_events(settings, state)
+    assert len(events) == 1
+    assert events[0]["title"] == "DEPLOY ENDED"
+    assert events[0]["status"] == "RECOVERED"
+    assert "succeeded" in events[0]["detail"]
