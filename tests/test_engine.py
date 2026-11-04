@@ -267,3 +267,18 @@ def test_manual_market_scan_does_not_rebalance_paper_wallet(tmp_path):
     assert engine.paper.balance("USD") == 0
     assert engine.paper.balance("USDT") == 0
     db.close()
+
+
+def test_engine_trailing_stop_closes_position_after_retracement(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.s.trailing_stop_pct = 1.5
+    engine.paper.buy('XBTEUR', 5, 10)
+    engine.paper.update_peak('XBTEUR', 10.5)
+    engine.scan = lambda **kwargs: [{'symbol': 'XBTEUR', 'quote': 'EUR', 'signal': 'HOLD', 'score': 0, 'price': 10.3, 'spread_bps': 10, 'turnover': 50000, 'turnover_eur': 50000, 'reasons': []}]
+    engine.start()
+    actions = engine.cycle()
+    assert any('XBTEUR SELL TRAILING_STOP' in action for action in actions)
+    assert 'XBTEUR' not in engine.paper.positions
+    row = db.execute("SELECT event FROM audit WHERE event='TRAILING_STOP'").fetchone()
+    assert row is not None
+    db.close()
