@@ -282,3 +282,18 @@ def test_engine_trailing_stop_closes_position_after_retracement(tmp_path):
     row = db.execute("SELECT event FROM audit WHERE event='TRAILING_STOP'").fetchone()
     assert row is not None
     db.close()
+
+
+def test_buy_candidates_are_ranked_by_score(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.s.max_positions = 1
+    engine.s.max_trade = 5
+    engine.scan = lambda **kwargs: [
+        {'symbol': 'LOWEUR', 'quote': 'EUR', 'signal': 'BUY', 'score': 2, 'price': 10, 'spread_bps': 10, 'turnover': 50000, 'turnover_eur': 50000, 'reasons': []},
+        {'symbol': 'HIGHEUR', 'quote': 'EUR', 'signal': 'BUY', 'score': 5, 'price': 10, 'spread_bps': 10, 'turnover': 50000, 'turnover_eur': 50000, 'reasons': []},
+    ]
+    engine.start()
+    actions = engine.cycle()
+    assert len(actions) == 1
+    assert 'HIGHEUR BUY' in actions[0]
+    db.close()
