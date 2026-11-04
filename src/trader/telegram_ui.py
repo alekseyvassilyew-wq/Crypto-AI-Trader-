@@ -695,11 +695,11 @@ def build_app(s, engine, exchange):
                         "Запусти /run и оставь PAPER работать для сбора статистики."
                     )
                 return await update.effective_message.reply_text(
-                    f"📊 PAPER СДЕЛКИ — {hours} ч.\\n"
-                    f"Закрытых сделок: {metrics['closed_trades']}\\n"
-                    f"Прибыльных: {metrics['winning_trades']} | убыточных: {metrics['losing_trades']}\\n"
-                    f"Win rate: {metrics['win_rate_pct']:.1f}% | Profit factor: {metrics['profit_factor']}\\n"
-                    f"Реализованный P/L: {metrics['realized_pnl_eur']:+.4f} EUR\\n"
+                    f"📊 PAPER СДЕЛКИ — {hours} ч.\n"
+                    f"Закрытых сделок: {metrics['closed_trades']}\n"
+                    f"Прибыльных: {metrics['winning_trades']} | убыточных: {metrics['losing_trades']}\n"
+                    f"Win rate: {metrics['win_rate_pct']:.1f}% | Profit factor: {metrics['profit_factor']}\n"
+                    f"Реализованный P/L: {metrics['realized_pnl_eur']:+.4f} EUR\n"
                     f"Комиссии: {metrics['total_fees_eur']:.4f} EUR"
                 )
             by_symbol_text = ", ".join(
