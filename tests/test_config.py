@@ -109,3 +109,17 @@ def test_spread_and_turnover_limits_are_bounded(monkeypatch):
     monkeypatch.setenv("MIN_24H_TURNOVER_EUR", "0")
     with pytest.raises(ValueError, match="greater than 0"):
         load_settings()
+
+
+def test_env_example_is_a_dotenv_file_with_safe_paper_defaults():
+    from pathlib import Path
+    from dotenv import dotenv_values
+
+    path = Path(__file__).resolve().parents[1] / ".env.example"
+    values = dotenv_values(path)
+    assert values["TRADING_MODE"] == "PAPER"
+    assert values["DATABASE_PATH"] == "/var/data/crypto_ai_trader.sqlite3"
+    assert values["SCAN_INTERVAL_SECONDS"] == "60"
+    assert values["BOT_TOKEN"] in (None, "")
+    assert values["KRAKEN_API_KEY"] in (None, "")
+    assert "services" not in values
