@@ -217,7 +217,7 @@ def test_portfolio_backtest_reports_same_window_buy_and_hold_benchmark():
 
 def test_portfolio_final_candle_high_activates_trailing_stop_before_low():
     rows = flat_candles(62)
-    rows[61] = [61.0, 100.0, 110.0, 104.0, 105.0, 1000.0]
+    rows[61] = [61.0, 100.0, 110.0, 100.0, 105.0, 1000.0]
     result = run_portfolio_backtest(
         {"BTCEUR": rows},
         quote_currencies={"BTCEUR": "EUR"},
