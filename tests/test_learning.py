@@ -108,3 +108,27 @@ def test_rotate_research_batch_handles_empty_list_and_invalid_size():
     assert rotate_research_batch([], 0, 3) == ([], 0)
     with pytest.raises(ValueError, match="batch_size"):
         rotate_research_batch([("COIN", 1)], 0, 0)
+
+
+def test_settled_shadow_prediction_retention_is_bounded():
+    import time
+    from src.trader.db import connect, record_shadow_prediction
+
+    db = connect(":memory:")
+    old_signal = time.time() - 91 * 86400
+    record_shadow_prediction(
+        db, symbol="OLDEUR", model_version="v1", signal_ts=old_signal,
+        target_ts=old_signal + 3600, probability=0.8, threshold=0.6, entry_price=100,
+    )
+    db.execute(
+        "UPDATE ml_shadow_predictions SET exit_price=105, realized_return=0.05 WHERE symbol='OLDEUR'"
+    )
+    now = time.time()
+    record_shadow_prediction(
+        db, symbol="NEWEUR", model_version="v2", signal_ts=now,
+        target_ts=now + 3600, probability=0.7, threshold=0.6, entry_price=100,
+    )
+
+    assert db.execute("SELECT COUNT(*) FROM ml_shadow_predictions WHERE symbol='OLDEUR'").fetchone()[0] == 0
+    assert db.execute("SELECT COUNT(*) FROM ml_shadow_predictions WHERE symbol='NEWEUR'").fetchone()[0] == 1
+    db.close()
