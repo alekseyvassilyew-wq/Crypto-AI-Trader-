@@ -208,15 +208,20 @@ def run_portfolio_backtest(
             elif op >= target_price:
                 reason, exit_price = "TAKE_PROFIT", op
             else:
-                # Assume high precedes low within a candle; this activates a
-                # newly-raised trailing stop before checking the candle low.
-                pos["peak"] = max(pos["peak"], high)
-                trailing_price = pos["peak"] * (1 - trail) if pos["peak"] > pos["entry_price"] else 0.0
-                active_stop = max(stop_price, trailing_price)
-                if low <= active_stop:
-                    reason, exit_price = ("STOP_LOSS" if active_stop == stop_price else "TRAILING_STOP"), active_stop
-                elif high >= target_price:
-                    reason, exit_price = "TAKE_PROFIT", target_price
+                # If the base stop and target are both touched in one candle,
+                # the path is unknowable: conservatively take the base stop.
+                if low <= stop_price:
+                    reason, exit_price = "STOP_LOSS", stop_price
+                else:
+                    # Otherwise assume the high precedes the low so a new
+                    # trailing stop can activate within this candle.
+                    pos["peak"] = max(pos["peak"], high)
+                    trailing_price = pos["peak"] * (1 - trail) if pos["peak"] > pos["entry_price"] else 0.0
+                    active_stop = max(stop_price, trailing_price)
+                    if low <= active_stop:
+                        reason, exit_price = ("STOP_LOSS" if active_stop == stop_price else "TRAILING_STOP"), active_stop
+                    elif high >= target_price:
+                        reason, exit_price = "TAKE_PROFIT", target_price
             if reason:
                 close(symbol, exit_price, timestamp, reason)
 
@@ -331,15 +336,18 @@ def run_portfolio_backtest(
         elif op >= target_price:
             reason, exit_price = "TAKE_PROFIT", op
         else:
-            pos["peak"] = max(pos["peak"], high)
-            trailing_price = pos["peak"] * (1 - trail) if pos["peak"] > pos["entry_price"] else 0.0
-            active_stop = max(stop_price, trailing_price)
-            if low <= active_stop:
-                reason, exit_price = ("STOP_LOSS" if active_stop == stop_price else "TRAILING_STOP"), active_stop
-            elif high >= target_price:
-                reason, exit_price = "TAKE_PROFIT", target_price
+            if low <= stop_price:
+                reason, exit_price = "STOP_LOSS", stop_price
             else:
-                reason, exit_price = "END_OF_DATA", close_price
+                pos["peak"] = max(pos["peak"], high)
+                trailing_price = pos["peak"] * (1 - trail) if pos["peak"] > pos["entry_price"] else 0.0
+                active_stop = max(stop_price, trailing_price)
+                if low <= active_stop:
+                    reason, exit_price = ("STOP_LOSS" if active_stop == stop_price else "TRAILING_STOP"), active_stop
+                elif high >= target_price:
+                    reason, exit_price = "TAKE_PROFIT", target_price
+                else:
+                    reason, exit_price = "END_OF_DATA", close_price
         close(symbol, exit_price, last_timestamp, reason)
     final_rates = rates_at(last_timestamp)
     final_equity = sum(amount * final_rates.get(currency, 0.0) for currency, amount in cash.items())
