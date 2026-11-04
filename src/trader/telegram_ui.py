@@ -147,7 +147,7 @@ def build_app(s, engine, exchange):
                 f"Позиции: {len(engine.paper.positions)}/{s.max_positions}\nP/L сегодня (UTC): {daily_text}\n"
                 f"Риск: SL {s.stop_loss_pct:.2f}% | TP {s.take_profit_pct:.2f}% | trailing {getattr(s, 'trailing_stop_pct', 1.5):.2f}%\n"
                 f"Рынок Kraken: {len(engine.market_pairs)} пар; котировок получено: {engine.market_ticker_count}\n"
-                (
+                + (
                     "Последний цикл сканирования: "
                     f"{engine.last_scan_metrics['duration_seconds']:.1f} с; "
                     f"OHLC {engine.last_scan_metrics['ohlc_analyzed']}/"
@@ -157,7 +157,7 @@ def build_app(s, engine, exchange):
                     if engine.last_scan_metrics else
                     "Последний цикл сканирования: ещё не завершён.\n"
                 )
-                f"Мониторинг всех котировок; анализ свечей: до {s.max_candle_pairs} пар за цикл.\n"
+                + f"Мониторинг всех котировок; анализ свечей: до {s.max_candle_pairs} пар за цикл.\n"
                 "* P/L показывается только при наличии свежих EUR-курсов для всех валют кошелька."
             )
         message = await context.application.bot_data["run_blocking"].run(read_status)
