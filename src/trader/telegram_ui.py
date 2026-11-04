@@ -400,6 +400,12 @@ def build_app(s, engine, exchange):
             metrics = candidate["out_of_sample"]
             pf = metrics["profit_factor"]
             pf_text = "∞" if pf == "INF" else f"{pf:.2f}"
+            benchmarks = candidate.get("benchmark_metrics", {})
+            oos_benchmarks = benchmarks.get("walk_forward_oos", {})
+            holdout_benchmarks = benchmarks.get("independent_holdout", {})
+            ranking = candidate.get("score_ranking", {})
+            def auc_text(value):
+                return "н/д" if value is None else f"{float(value):.3f}"
             gate = "ПРОШЛА исследовательский фильтр" if candidate["research_pass"] else "НЕ прошла исследовательский фильтр"
             await update.effective_message.reply_text(
                 f"🧠 МОДЕЛЬ {symbol} — {gate}\n"
@@ -410,6 +416,12 @@ def build_app(s, engine, exchange):
                 f"Доходность после издержек: {metrics['net_return_pct']:+.2f}%\n"
                 f"Win rate: {metrics['win_rate_pct']:.1f}% | Profit factor: {pf_text}\n"
                 f"Макс. просадка OOS: {metrics['max_drawdown_pct']:.2f}%\n"
+                f"Benchmark OOS: BUY&HOLD {oos_benchmarks.get('always_long', {}).get('net_return_pct', 0):+.2f}% | "
+                f"Momentum {oos_benchmarks.get('positive_24h_momentum', {}).get('net_return_pct', 0):+.2f}%\n"
+                f"Benchmark holdout: BUY&HOLD {holdout_benchmarks.get('always_long', {}).get('net_return_pct', 0):+.2f}% | "
+                f"Momentum {holdout_benchmarks.get('positive_24h_momentum', {}).get('net_return_pct', 0):+.2f}%\n"
+                f"ROC AUC (ranking only): OOS {auc_text(ranking.get('walk_forward_oos_roc_auc'))} | "
+                f"holdout {auc_text(ranking.get('independent_holdout_roc_auc'))}\n"
                 f"Независимый holdout: {candidate['independent_holdout']['net_return_pct']:+.2f}% | "
                 f"{candidate['independent_holdout']['trades']} сделок | "
                 f"DD {candidate['independent_holdout']['max_drawdown_pct']:.2f}%\n"
