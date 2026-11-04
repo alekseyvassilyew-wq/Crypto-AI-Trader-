@@ -466,7 +466,16 @@ def build_app(s, engine, exchange):
 
     async def help_cmd(update, context):
         if not await authorized(update): return await deny(update)
-        await update.effective_message.reply_text("/start — меню\n/status — состояние и P/L\n/scan — сканирование\n/account — виртуальные остатки PAPER\n/portfolio — PAPER-позиции\n/backtest XBTEUR — тест одного рынка; /backtest portfolio — до 5 рынков\n/interval 1m|5m|15m|30m|1h|4h|24h — интервал\n/run — запуск PAPER\n/pause — пауза\n/stop — аварийная остановка\n/topicid — ID группы и темы\n/testtopics или /test_topics — проверка тем")
+        await update.effective_message.reply_text(
+            "/start — меню\n/status — состояние и P/L\n/scan — сканирование\n"
+            "/account — виртуальные остатки PAPER\n/realbalance — реальные остатки Kraken (только чтение)\n"
+            "/portfolio — PAPER-позиции\n/paperreport [часы] — статистика автономного PAPER-теста\n"
+            "/learn XBTEUR — обучение/проверка ML-кандидата без торговли\n/learning — результаты walk-forward и shadow-теста\n"
+            "/backtest XBTEUR — тест одного рынка; /backtest portfolio — до 5 рынков\n"
+            "/interval 1m|5m|15m|30m|1h|4h|24h — интервал\n"
+            "/run — запуск PAPER\n/pause — пауза\n/stop — аварийная остановка\n"
+            "/topicid — ID группы и темы\n/testtopics или /test_topics — проверка тем"
+        )
 
     async def callback(update, context):
         q = update.callback_query
