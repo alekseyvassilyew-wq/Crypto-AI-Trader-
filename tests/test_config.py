@@ -63,3 +63,28 @@ def test_automatic_research_market_limit_is_bounded(monkeypatch):
     monkeypatch.setenv("ML_AUTO_RESEARCH_MARKETS", "6")
     with pytest.raises(ValueError, match="must not exceed 5"):
         load_settings()
+
+
+def test_candle_budget_cannot_exceed_kraken_safe_limit(monkeypatch):
+    monkeypatch.setenv("BOT_TOKEN", "token")
+    monkeypatch.setenv("ADMIN_ID", "123")
+    monkeypatch.setenv("MAX_CANDLE_PAIRS", "21")
+    with pytest.raises(ValueError, match="must not exceed 20"):
+        load_settings()
+
+
+def test_scan_interval_must_respect_minimum_public_api_cadence(monkeypatch):
+    monkeypatch.setenv("BOT_TOKEN", "token")
+    monkeypatch.setenv("ADMIN_ID", "123")
+    monkeypatch.setenv("SCAN_INTERVAL_SECONDS", "30")
+    with pytest.raises(ValueError, match="at least 60"):
+        load_settings()
+
+
+def test_partial_kraken_credentials_are_rejected(monkeypatch):
+    monkeypatch.setenv("BOT_TOKEN", "token")
+    monkeypatch.setenv("ADMIN_ID", "123")
+    monkeypatch.setenv("KRAKEN_API_KEY", "key-only")
+    monkeypatch.delenv("KRAKEN_API_SECRET", raising=False)
+    with pytest.raises(ValueError, match="Set both"):
+        load_settings()
