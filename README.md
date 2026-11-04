@@ -20,7 +20,7 @@ This archive is a **PAPER-only release**. It is not a live trading bot and must 
 - Dynamic full-market scanner: discovers all online Kraken Spot crypto markets and retrieves their tickers in one request; candle analysis rotates through the configured per-cycle budget across liquid markets with a valid EUR valuation route.
 - Multi-currency PAPER cash, FX conversion, and positions persisted in SQLite.
 - PAPER buys are simulated at the ticker ask and sells at the ticker bid (spread-aware), with stop checks based on the executable bid; includes stop-loss, take-profit and trailing-stop exits, score-ranked entries, volatility-adjusted risk sizing, per-trade cap, max-position cap, and daily equity-loss pause.
-- Deterministic logistic-regression research candidate with chronological expanding-window walk-forward validation, fee/slippage-aware out-of-sample metrics, and shadow-only forecasts that are settled against later closed candles. Candidate models never modify trading decisions or auto-promote.
+- Deterministic 7-8-1 neural-network research candidate with chronological expanding-window walk-forward validation, fee/slippage-aware out-of-sample metrics, and shadow-only forecasts that are settled against later closed candles. Candidate models never modify trading decisions or auto-promote.
 - Persistent PAPER equity snapshots, 90-day telemetry retention, and forward-test reports.
 - Fee- and slippage-aware single-market and multi-market portfolio historical backtests with next-candle-open fills, conservative stop/target ordering, net P/L, profit factor, win rate and maximum drawdown; available as Telegram `/backtest SYMBOL` and `/backtest portfolio`.
 - Strictly increasing private API nonces within the running process; malformed API responses are rejected.
@@ -75,15 +75,16 @@ python -m src.trader.main
 - Simulated fee estimate: 0.26%
 - Stop loss: 2%; take profit: 4%; trailing stop: 1.5%
 - Risk budget: 0.5% of marked PAPER equity per trade; allocation is reduced as ATR volatility rises
+- Automatic model research: up to 3 liquid markets per UTC day (configurable up to 5)
 - Multi-timeframe confirmation: enabled; potential BUY entries require 4h bullish trend, non-bearish 1d trend, and no high-volatility regime on higher timeframes
 
 These are configurable simulation assumptions, not recommendations. Verify Kraken's current minimum order sizes, pair availability, fees, and API behavior before any future live-trading implementation.
 
 ## Model research and forward PAPER testing
 
-- /learn XBTEUR fetches up to 720 closed 1-hour candles and trains a deterministic logistic classifier using momentum, EMA spread, RSI, ATR and volume features.
+- /learn XBTEUR fetches up to 720 closed 1-hour candles and trains a small deterministic neural network using momentum, EMA spread, RSI, ATR and volume features.
 - Evaluation uses three chronological expanding-window validation folds, purges overlapping label horizons at fold boundaries, and includes round-trip fee/slippage assumptions. It reports out-of-sample return, trade count, win rate, profit factor and drawdown.
-- A research PASS is only a filter, not proof of an edge. The model is saved as SHADOW_ONLY; it does not influence entries, cannot place orders, and is never automatically promoted.
+- The service automatically researches up to three of the most liquid eligible markets once per UTC day; /learn SYMBOL can trigger a manual research run. A research PASS is only a filter, not proof of an edge. The model is saved as SHADOW_ONLY; it does not influence entries, cannot place orders, and is never automatically promoted.
 - During later scans of a researched symbol, shadow forecasts are recorded once per candle and settled after the configured three-hour horizon using subsequent closed candles. /learning reports realized shadow results. Collect a substantial sample across different market regimes before considering any strategy change.
 - /paperreport 24 (or another hour count up to 2160) reports saved PAPER equity changes and observed drawdown. Snapshots are recorded only while PAPER is actively running; retention is 90 days.
 - /realbalance calls Kraken's private Balance endpoint in read-only mode. It displays Kraken asset codes and quantities only; it does not transfer or synchronize actual holdings into the virtual PAPER wallet.
@@ -92,7 +93,7 @@ These are configurable simulation assumptions, not recommendations. Verify Krake
 ## Known limitations
 
 - No LIVE mode, order placement, or demo-order execution is implemented in this ZIP. Do not change the mode variable expecting real trades.
-- The production entry strategy remains deterministic technical-indicator logic; the trained logistic-regression model is research-only and shadow-only, not an active trading strategy. Neither has been demonstrated profitable. The private Kraken balance check is read-only and does not import real holdings into PAPER. The PAPER wallet is a separate simulation. `/backtest SYMBOL` evaluates up to 720 available closed 1-hour candles for one market. `/backtest portfolio` evaluates at most five liquid markets on shared timestamps; it uses aligned Kraken EUR FX candles when a direct EUR pair exists; if historical FX data is unavailable, it falls back to the current rate and identifies that currency in the report. Neither command is evidence of future profitability.
+- The production entry strategy remains deterministic technical-indicator logic; the trained neural network is research-only and shadow-only, not an active trading strategy. Neither has been demonstrated profitable. The private Kraken balance check is read-only and does not import real holdings into PAPER. The PAPER wallet is a separate simulation. `/backtest SYMBOL` evaluates up to 720 available closed 1-hour candles for one market. `/backtest portfolio` evaluates at most five liquid markets on shared timestamps; it uses aligned Kraken EUR FX candles when a direct EUR pair exists; if historical FX data is unavailable, it falls back to the current rate and identifies that currency in the report. Neither command is evidence of future profitability.
 - Kraken market tickers are fetched for the complete online Spot universe. To keep REST usage controlled, OHLC indicators are calculated for at most `MAX_CANDLE_PAIRS` (default 10) eligible liquid pairs per cycle; the scan cursor rotates this budget. Markets without a valid EUR valuation route are monitored but cannot be considered for entries. A passing unit test suite does not verify live connectivity or permissions on your Kraken account.
 - `/interval` changes the in-memory scan interval until service restart; it does not reconfigure Render scheduling.
 - A single SQLite-backed worker is intended. Do not scale to multiple instances.
