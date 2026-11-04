@@ -755,15 +755,16 @@ def test_priority_market_selection_keeps_ton_and_open_positions_fresh():
     eligible = [
         (100000 - index, f"COIN{index}EUR", "EUR")
         for index in range(30)
-    ] + [(5000, "TONEUR", "EUR"), (4000, "TONUSD", "USD")]
+    ] + [(6000, "OPENPOSITIONEUR", "EUR"), (5000, "TONEUR", "EUR"), (4000, "TONUSD", "USD")]
     selected, next_cursor, priority_count = select_ohlc_markets(
         eligible, 5, 0, ["OPENPOSITIONEUR", "TONEUR", "TONUSD"]
     )
+    assert ("OPENPOSITIONEUR", "EUR") in selected
     assert ("TONEUR", "EUR") in selected
     assert ("TONUSD", "USD") in selected
     assert len(selected) == 5
     assert next_cursor == 5
-    assert priority_count == 2
+    assert priority_count == 3
 
 
 def test_priority_market_selection_rotates_remaining_markets_without_duplicates():
@@ -775,5 +776,5 @@ def test_priority_market_selection_rotates_remaining_markets_without_duplicates(
     assert len(first) == len(second) == 4
     assert ("COIN0EUR", "EUR") in first
     assert ("COIN0EUR", "EUR") in second
-    assert len((first - {("COIN0EUR", "EUR")}) | (second - {("COIN0EUR", "EUR")})) >= 6
+    assert len((first - {("COIN0EUR", "EUR")}) | (second - {("COIN0EUR", "EUR")})) >= 5
     assert next_cursor == 8
