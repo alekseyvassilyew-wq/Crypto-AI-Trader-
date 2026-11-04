@@ -36,3 +36,21 @@ def test_non_eur_quote_currency_is_allowed_for_multi_currency_paper_wallet(monke
     settings = load_settings()
     assert settings.trade_quote_currency == "USD"
     assert settings.mode == "PAPER"
+
+
+def test_mtf_and_conservative_risk_budget_are_enabled_by_default(monkeypatch):
+    monkeypatch.setenv("BOT_TOKEN", "token")
+    monkeypatch.setenv("ADMIN_ID", "123")
+    monkeypatch.delenv("ENABLE_MULTI_TIMEFRAME", raising=False)
+    monkeypatch.delenv("RISK_PER_TRADE_PERCENT", raising=False)
+    settings = load_settings()
+    assert settings.enable_multi_timeframe is True
+    assert settings.risk_per_trade_pct == 0.5
+
+
+def test_excessive_per_trade_risk_budget_is_rejected(monkeypatch):
+    monkeypatch.setenv("BOT_TOKEN", "token")
+    monkeypatch.setenv("ADMIN_ID", "123")
+    monkeypatch.setenv("RISK_PER_TRADE_PERCENT", "3")
+    with pytest.raises(ValueError, match="must not exceed"):
+        load_settings()
