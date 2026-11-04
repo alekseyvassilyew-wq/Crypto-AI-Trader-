@@ -695,6 +695,7 @@ def build_app(s, engine, exchange):
                         if last_run.tzinfo is None:
                             last_run = last_run.replace(tzinfo=timezone.utc)
                         if now_utc - last_run < timedelta(hours=1):
+                            log.info("Automatic ML research skipped: previous batch was less than one hour ago")
                             return []
                     except (TypeError, ValueError):
                         log.warning("Ignoring malformed automatic ML research timestamp")
@@ -721,6 +722,8 @@ def build_app(s, engine, exchange):
                     if spread <= s.max_spread_bps and turnover_eur >= s.min_turnover:
                         eligible.append((turnover_eur, pair["symbol"]))
                 eligible.sort(reverse=True)
+                log.info("Automatic ML research discovered %d Kraken pairs; %d pass liquidity/FX filters",
+                         len(pairs), len(eligible))
                 from .learning import rotate_research_batch
                 cursor = get_state(engine.db, "ml_auto_research_cursor", 0)
                 selected, next_cursor = rotate_research_batch(
@@ -728,6 +731,7 @@ def build_app(s, engine, exchange):
                 )
                 if selected:
                     set_state(engine.db, "ml_auto_research_cursor", next_cursor)
+                log.info("Automatic ML research selected %d markets for this batch", len(selected))
                 trained = []
                 for _, symbol in selected:
                     try:
@@ -742,9 +746,14 @@ def build_app(s, engine, exchange):
                             "reasons": candidate.get("rejection_reasons", []),
                             "oos_return": candidate["out_of_sample"]["net_return_pct"],
                             "holdout_return": candidate["independent_holdout"]["net_return_pct"],
+                            "benchmarks": candidate.get("benchmark_metrics", {}),
+                            "auc_oos": candidate.get("score_ranking", {}).get("walk_forward_oos_roc_auc"),
+                            "auc_holdout": candidate.get("score_ranking", {}).get("independent_holdout_roc_auc"),
                         })
                     except Exception as market_exc:
                         log.warning("Automatic model research skipped %s: %s", symbol, market_exc)
+                log.info("Automatic ML research completed: %d of %d selected markets trained",
+                         len(trained), len(selected))
                 if trained:
                     set_state(engine.db, "ml_auto_research_date", {
                         "at_utc": now_utc.isoformat(),
@@ -758,7 +767,10 @@ def build_app(s, engine, exchange):
                 summary = "\n".join(
                     f"{item['symbol']}: {'research PASS' if item['pass'] else 'NOT PASSED'} "
                     f"({item['samples']} samples; OOS {item['oos_return']:+.2f}%; "
-                    f"holdout {item['holdout_return']:+.2f}%; shadow only)"
+                    f"holdout {item['holdout_return']:+.2f}%; "
+                    f"BUY&HOLD OOS {item['benchmarks'].get('walk_forward_oos', {}).get('always_long', {}).get('net_return_pct', 0):+.2f}%; "
+                    f"BUY&HOLD holdout {item['benchmarks'].get('independent_holdout', {}).get('always_long', {}).get('net_return_pct', 0):+.2f}%; "
+                    f"AUC {item['auc_oos'] if item['auc_oos'] is not None else 'n/a'}; shadow only)"
                     + (("\nПричина: " + "; ".join(item["reasons"][:2])) if item["reasons"] else "")
                     for item in trained
                 )
