@@ -938,10 +938,16 @@ def build_app(s, engine, exchange):
             return
         try:
             from .monitoring import poll_external_events
-            state = context.application.bot_data.setdefault("external_monitor_state", {})
-            events = await context.application.bot_data["run_blocking"].run(
-                lambda: poll_external_events(s, state)
-            )
+            def poll_and_persist():
+                from .db import get_state, set_state
+                state = get_state(engine.db, "external_monitor_state", {})
+                if not isinstance(state, dict):
+                    state = {}
+                events = poll_external_events(s, state)
+                set_state(engine.db, "external_monitor_state", state)
+                return events
+
+            events = await context.application.bot_data["run_blocking"].run(poll_and_persist)
             for event in events:
                 source = html.escape(event["source"])
                 status = html.escape(event["status"])
