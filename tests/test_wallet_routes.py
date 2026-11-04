@@ -38,7 +38,8 @@ def test_asset_pair_routes_include_base_and_quote_markets_and_constraints():
         ],
     )
     assert {item["symbol"] for item in routes["XBT"]} == {"XBTEUR", "BTCUSD"}
-    assert routes["XBT"][0]["ordermin"] == "0.0001"
-    assert routes["XBT"][0]["fees"] == [[0, 0.26]]
+    xbteur = next(item for item in routes["XBT"] if item["symbol"] == "XBTEUR")
+    assert xbteur["ordermin"] == "0.0001"
+    assert xbteur["fees"] == [[0, 0.26]]
     assert [item["symbol"] for item in routes["EUR"]] == ["XBTEUR"]
     assert routes["EUR"][0]["role"] == "quote"
