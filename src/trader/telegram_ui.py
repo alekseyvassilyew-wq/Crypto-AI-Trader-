@@ -59,13 +59,27 @@ def build_app(s, engine, exchange):
         def read_status():
             state = "PAUSED" if engine.paused else "RUNNING"
             balances = ", ".join(f"{currency}: {amount:.6f}" for currency, amount in sorted(engine.paper.cash_by_currency.items()))
+            fresh_rates = engine._fresh_fx_rates(engine.last_prices)
+            required = {
+                currency for currency, amount in engine.paper.cash_by_currency.items()
+                if float(amount) > 1e-12
+            }
+            required.update(
+                str(position.get("quote_currency", "EUR")).upper()
+                for position in engine.paper.positions.values()
+            )
+            missing = sorted(currency for currency in required if currency not in fresh_rates)
+            daily_text = (
+                f"{engine.daily_pnl():.2f} EUR"
+                if not missing else "недоступен — нет свежего FX: " + ", ".join(missing)
+            )
             return (
                 f"Режим: PAPER\nСостояние: {state}\nВиртуальные средства: {balances}\n"
-                f"Позиции: {len(engine.paper.positions)}/{s.max_positions}\nP/L сегодня: {engine.daily_pnl():.2f} EUR*\n"
+                f"Позиции: {len(engine.paper.positions)}/{s.max_positions}\nP/L сегодня: {daily_text}\n"
                 f"Риск: SL {s.stop_loss_pct:.2f}% | TP {s.take_profit_pct:.2f}% | trailing {getattr(s, 'trailing_stop_pct', 1.5):.2f}%\n"
                 f"Рынок Kraken: {len(engine.market_pairs)} пар; котировок получено: {engine.market_ticker_count}\n"
                 f"Мониторинг всех котировок; анализ свечей: до {s.max_candle_pairs} пар за цикл.\n"
-                "* P/L рассчитан в EUR с учётом доступных валютных курсов Kraken."
+                "* P/L показывается только при наличии свежих EUR-курсов для всех валют кошелька."
             )
         message = await context.application.bot_data["run_blocking"].run(read_status)
         await update.effective_message.reply_text(message)
@@ -435,19 +449,30 @@ def build_app(s, engine, exchange):
         if not await authorized(update): return await deny(update)
         def read_portfolio():
             balances = [f"{currency}: {amount:.8f}" for currency, amount in sorted(engine.paper.cash_by_currency.items())]
-            fx_rates = engine._fx_rates(engine.last_prices)
+            fresh_rates = engine._fresh_fx_rates(engine.last_prices)
+            required = {
+                currency for currency, amount in engine.paper.cash_by_currency.items()
+                if float(amount) > 1e-12
+            }
+            required.update(
+                str(position.get("quote_currency", "EUR")).upper()
+                for position in engine.paper.positions.values()
+            )
+            missing = sorted(currency for currency in required if currency not in fresh_rates)
             lines = []
             for sym, p in engine.paper.positions.items():
                 quote = p.get("quote_currency", "EUR")
                 mark = engine.last_prices.get(sym, p["avg_price"])
                 pnl_quote = (mark - p["avg_price"]) * p["qty"]
-                pnl_eur = pnl_quote * fx_rates.get(quote, 0.0)
+                pnl_eur = pnl_quote * fresh_rates.get(quote, 0.0) if quote in fresh_rates else None
                 peak = p.get("peak_price", p["avg_price"])
+                pnl_text = f"{pnl_eur:+.4f} EUR" if pnl_eur is not None else "P/L EUR недоступен"
                 lines.append(
                     f"{sym}: {p['qty']:.8f} | вход {p['avg_price']:.8g} {quote} | "
-                    f"цена {mark:.8g} | пик {peak:.8g} | P/L {pnl_eur:+.4f} EUR"
+                    f"цена {mark:.8g} | пик {peak:.8g} | {pnl_text}"
                 )
-            return "PAPER-кошелёк:\n" + ("\n".join(balances) or "Нет свободных средств.") + "\n\nПозиции:\n" + ("\n".join(lines) or "Нет открытых позиций.")
+            fx_text = "Свежие EUR-курсы для всех валют." if not missing else "Нет свежего EUR-курса: " + ", ".join(missing)
+            return "PAPER-кошелёк:\n" + ("\n".join(balances) or "Нет свободных средств.") + "\n" + fx_text + "\n\nПозиции:\n" + ("\n".join(lines) or "Нет открытых позиций.")
         message = await context.application.bot_data["run_blocking"].run(read_portfolio)
         await update.effective_message.reply_text(message)
 
