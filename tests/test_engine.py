@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from src.trader.db import connect, get_state, set_state
 from src.trader.engine import Engine
 from src.trader.paper import PaperBroker
+import pytest
 
 
 class DummyExchange:
@@ -158,10 +159,11 @@ def test_rotating_scan_covers_multiple_funded_quote_currencies(tmp_path):
 
  
  
-def test_non_eur_signal_can_be_funded_from_eur_paper_wallet(tmp_path):
+def test_non_eur_trade_spends_existing_quote_currency_without_converting_eur(tmp_path):
     engine, db = make_engine(tmp_path)
     engine.s.max_positions = 2
     engine.s.max_trade = 5
+    engine.paper.cash_by_currency["USD"] = 20
     engine.market_pairs = [
         {"symbol": "USDZEUR", "base": "USD", "quote": "EUR"},
         {"symbol": "ETHUSD", "base": "ETH", "quote": "USD"},
@@ -178,9 +180,42 @@ def test_non_eur_signal_can_be_funded_from_eur_paper_wallet(tmp_path):
     actions = engine.cycle()
     assert len(actions) == 1
     assert "ETHUSD BUY" in actions[0]
-    assert engine.paper.balance("EUR") == 15
-    assert engine.paper.balance("USD") == 0
+    assert engine.paper.balance("EUR") == 20
+    assert engine.paper.balance("USD") < 20
     assert engine.paper.positions["ETHUSD"]["quote_currency"] == "USD"
+    db.close()
+
+
+def test_non_eur_signal_cannot_spend_eur_when_quote_wallet_is_empty(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.s.max_trade = 5
+    engine.market_pairs = [{"symbol": "USDZEUR", "base": "USD", "quote": "EUR"}]
+    engine.last_prices = {"USDZEUR": 0.9, "ETHUSD": 3000}
+    engine.scan = lambda: [
+        {"symbol": "ETHUSD", "quote": "USD", "signal": "BUY", "score": 10,
+         "price": 3000, "spread_bps": 10, "turnover": 50000, "turnover_eur": 45000, "reasons": []},
+    ]
+    engine.start()
+    actions = engine.cycle()
+    assert actions == []
+    assert engine.paper.balance("EUR") == 20
+    assert engine.paper.balance("USD") == 0
+    assert "ETHUSD" not in engine.paper.positions
+    db.close()
+
+
+def test_wallet_seeds_usd_and_usdt_from_starting_eur_once(tmp_path):
+    engine, db = make_engine(tmp_path)
+    rates = {"EUR": 1.0, "USD": 0.9, "USDT": 0.9}
+    engine._seed_multicurrency_wallet(rates)
+    assert engine.paper.balance("EUR") == 10
+    assert engine.paper.balance("USD") == pytest.approx(5 / 0.9 * (1 - engine.paper.fee_rate))
+    assert engine.paper.balance("USDT") == pytest.approx(5 / 0.9 * (1 - engine.paper.fee_rate))
+    before = dict(engine.paper.cash_by_currency)
+    engine._seed_multicurrency_wallet(rates)
+    assert engine.paper.cash_by_currency == before
+    rows = db.execute("SELECT COUNT(*) AS n FROM audit WHERE event='PAPER_WALLET_SEED'").fetchone()
+    assert rows["n"] == 2
     db.close()
 
 
