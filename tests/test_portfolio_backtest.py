@@ -236,3 +236,41 @@ def test_portfolio_final_candle_high_activates_trailing_stop_before_low():
     trade = result["trades_detail"][0]
     assert trade["reason"] == "TRAILING_STOP"
     assert trade["exit_price"] == pytest.approx(104.5)
+
+def test_portfolio_uses_executable_fx_buy_rate_and_cross_currency_funding_for_eur_quotes():
+    usd_rows = flat_candles(count=64)
+    # Close the first USD-quoted position at its base stop, leaving USD cash
+    # alongside the remaining EUR cash for the subsequent EUR-quoted entry.
+    usd_rows[61] = [61.0, 100.0, 101.0, 97.0, 98.0, 1000.0]
+    eur_rows = flat_candles(count=64)
+
+    def staged_signals(symbol, history):
+        if symbol == "ETHUSD" and len(history) == 61:
+            return {"signal": "BUY", "score": 10}
+        if symbol == "BTCEUR" and len(history) == 62:
+            return {"signal": "BUY", "score": 10}
+        return {"signal": "HOLD"}
+
+    result = run_portfolio_backtest(
+        {"ETHUSD": usd_rows, "BTCEUR": eur_rows},
+        quote_currencies={"ETHUSD": "USD", "BTCEUR": "EUR"},
+        fx_rates={"EUR": 1.0, "USD": 0.9},
+        fx_buy_rates={"EUR": 1.0, "USD": 1.1},
+        initial_cash_eur=100,
+        max_trade_eur=50,
+        max_positions=1,
+        risk_per_trade_pct=2.0,
+        fee_rate=0.01,
+        slippage_bps=0,
+        stop_loss_pct=2,
+        take_profit_pct=50,
+        trailing_stop_pct=10,
+        signal_fn=staged_signals,
+    )
+
+    assert result["trades"] == 2
+    usd_trade = next(trade for trade in result["trades_detail"] if trade["symbol"] == "ETHUSD")
+    eur_trade = next(trade for trade in result["trades_detail"] if trade["symbol"] == "BTCEUR")
+    assert usd_trade["entry_quote"] == pytest.approx(55.0)
+    assert eur_trade["conversion_fee_eur"] > 0
+    assert all(amount >= -1e-10 for amount in result["cash_by_currency"].values())
