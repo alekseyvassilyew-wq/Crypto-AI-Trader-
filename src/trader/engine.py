@@ -351,13 +351,28 @@ class Engine:
             audit(self.db, "SCAN_FAILED", f"{type(exc).__name__}: {exc}")
             self.stop("Market data scan failed")
             return ["SCAN_FAILED — paper trading paused"]
-        prices = {x["symbol"]: x.get("price", 0) for x in results if x.get("price", 0) > 0}
-        missing_positions = sorted(set(self.paper.positions) - set(prices))
-        if missing_positions:
-            reason = "Missing fresh ticker prices for open positions: " + ", ".join(missing_positions)
+        prices = {str(x["symbol"]).upper(): x.get("price", 0) for x in results if x.get("price", 0) > 0}
+        result_by_symbol = {str(item.get("symbol", "")).upper(): item for item in results}
+        invalid_positions = []
+        for held_symbol in self.paper.positions:
+            quote = result_by_symbol.get(str(held_symbol).upper())
+            try:
+                bid = float(quote.get("bid") or 0) if quote else 0.0
+                ask = float(quote.get("ask") or 0) if quote else 0.0
+                last = float(prices.get(str(held_symbol).upper()) or 0)
+            except (TypeError, ValueError, OverflowError):
+                bid = ask = last = 0.0
+            if (not all(math.isfinite(value) and value > 0 for value in (bid, ask, last))
+                    or ask < bid):
+                invalid_positions.append(str(held_symbol).upper())
+            else:
+                # Use executable bid as the conservative mark for long spot holdings.
+                prices[str(held_symbol).upper()] = bid
+        if invalid_positions:
+            reason = "Missing or invalid executable bid/ask for open positions: " + ", ".join(sorted(invalid_positions))
             audit(self.db, "OPEN_POSITION_PRICE_MISSING", reason)
             self.stop(reason)
-            return ["SCAN_FAILED — open position price unavailable; PAPER paused"]
+            return ["SCAN_FAILED — open position quote unavailable; PAPER paused"]
         fresh_rates = self._fresh_fx_rates(prices)
         required_currencies = {
             currency for currency, amount in self.paper.cash_by_currency.items()
@@ -394,6 +409,7 @@ class Engine:
                 "STOP_LOSS" if change_pct <= -self.s.stop_loss_pct
                 else "TAKE_PROFIT" if change_pct >= self.s.take_profit_pct
                 else "TRAILING_STOP" if trailing_trigger
+                else "SIGNAL_SELL" if quote_row.get("signal") == "SELL"
                 else None
             )
             if reason:
@@ -432,6 +448,13 @@ class Engine:
             if len(self.paper.positions) >= self.s.max_positions:
                 break
             try:
+                bid = float(signal.get("bid") or 0)
+                ask = float(signal.get("ask") or 0)
+                mark = float(signal.get("price") or 0)
+                if (not all(math.isfinite(value) and value > 0 for value in (bid, ask, mark))
+                        or ask < bid):
+                    audit(self.db, "ENTRY_SKIPPED", f"{signal.get('symbol')}: invalid or non-executable ticker")
+                    continue
                 rates = self._fx_rates(prices)
                 fresh_rates = self._fresh_fx_rates(prices)
                 equity_eur = self.paper.equity(prices, rates)
