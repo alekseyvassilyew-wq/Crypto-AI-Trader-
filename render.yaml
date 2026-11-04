@@ -1,12 +1,14 @@
 services:
   - type: worker
-    name: crypto-ai-trader-kraken
+    name: Crypto-AI-Trader-
     runtime: python
+    region: virginia
     plan: starter
+    numInstances: 1
     buildCommand: pip install -r requirements.txt
     startCommand: python -m src.trader.main
     disk:
-      name: crypto-ai-trader-data
+      name: disk
       mountPath: /var/data
       sizeGB: 1
     envVars:
@@ -18,6 +20,18 @@ services:
         sync: false
       - key: KRAKEN_API_SECRET
         sync: false
+      - key: TELEGRAM_GROUP_CHAT_ID
+        sync: false
+      - key: TOPIC_GENERAL_ID
+        sync: false
+      - key: TOPIC_TRADES_ID
+        sync: false
+      - key: TOPIC_PORTFOLIO_ID
+        sync: false
+      - key: TOPIC_PROFIT_ID
+        sync: false
+      - key: TOPIC_ERRORS_ID
+        sync: false
       - key: TRADING_MODE
         value: PAPER
       - key: DATABASE_PATH
@@ -28,9 +42,29 @@ services:
         value: "5"
       - key: MAX_DAILY_LOSS_EUR
         value: "2"
+      - key: MAX_OPEN_POSITIONS
+        value: "2"
+      - key: MAX_SPREAD_BPS
+        value: "25"
+      - key: MIN_24H_TURNOVER_EUR
+        value: "10000"
+      - key: PAPER_FEE_RATE
+        value: "0.0026"
       - key: SCAN_INTERVAL_SECONDS
         value: "60"
+      - key: STOP_LOSS_PERCENT
+        value: "2"
+      - key: TAKE_PROFIT_PERCENT
+        value: "4"
+      - key: TRAILING_STOP_PERCENT
+        value: "1.5"
       - key: TRADE_QUOTE_CURRENCY
         value: EUR
       - key: MAX_CANDLE_PAIRS
-        value: "10"
+        value: "20"
+      - key: ENABLE_MULTI_TIMEFRAME
+        value: "true"
+      - key: RISK_PER_TRADE_PERCENT
+        value: "0.5"
+      - key: ML_AUTO_RESEARCH_MARKETS
+        value: "3"

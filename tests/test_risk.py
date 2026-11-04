@@ -11,3 +11,18 @@ def test_daily_loss_cap():
 
 def test_valid_order():
     check_order(5, 1, 2000, 0, 0, L)
+
+
+@pytest.mark.parametrize("bad_value", [float("nan"), float("inf"), float("-inf")])
+def test_non_finite_order_values_are_rejected(bad_value):
+    with pytest.raises(ValueError, match="finite"):
+        check_order(bad_value, 1, 2000, 0, 0, L)
+    with pytest.raises(ValueError, match="finite"):
+        check_order(5, bad_value, 2000, 0, 0, L)
+    with pytest.raises(ValueError, match="finite"):
+        check_order(5, 1, bad_value, 0, 0, L)
+
+
+def test_invalid_position_count_is_rejected():
+    with pytest.raises(ValueError, match="non-negative integer"):
+        check_order(5, 1, 2000, 1.5, 0, L)

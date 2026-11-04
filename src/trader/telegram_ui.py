@@ -5,6 +5,12 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 log = logging.getLogger(__name__)
 
 def build_app(s, engine, exchange):
+    def safe_error_message(exc):
+        message = str(exc) or "Без дополнительного описания"
+        if s.bot_token:
+            message = message.replace(s.bot_token, "[REDACTED]")
+        return f"{type(exc).__name__}: {message[:500]}"
+
     def format_error(exc, action, user=None):
         import traceback
         if user:
@@ -13,12 +19,17 @@ def build_app(s, engine, exchange):
         else:
             who = "— (—)"
         trace = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        # Telegram Bot API request URLs contain the bot token; redact defensively
+        # before sending exception details to chats or persistent logs.
+        if s.bot_token:
+            trace = trace.replace(s.bot_token, "[REDACTED]")
+        description = safe_error_message(exc)
         return (
             "🚨 ОШИБКА CRYPTO AI TRADER\n"
             f"👤 Кто: {who}\n"
             f"💬 Действие: {action}\n"
             f"⚠️ Тип: {type(exc).__name__}\n"
-            f"📝 Описание: {str(exc) or 'Без дополнительного описания'}\n"
+            f"📝 Описание: {description}\n"
             "📋 Трейс:\n"
             + '```python\n' + trace[-2200:] + '\n```'
         )[:3900]
@@ -45,114 +56,413 @@ def build_app(s, engine, exchange):
 
     async def status(update, context):
         if not await authorized(update): return await deny(update)
-        state = "PAUSED" if engine.paused else "RUNNING"
-        await update.effective_message.reply_text(
-            f"Режим: PAPER\nСостояние: {state}\nPAPER cash: {engine.paper.cash:.2f} EUR\n"
-            f"Позиции: {len(engine.paper.positions)}/{s.max_positions}\nP/L сегодня: {engine.daily_pnl():.2f} EUR\n"
-            f"Рынок Kraken: {len(engine.market_pairs)} пар; котировок получено: {engine.market_ticker_count}\n"
-            f"Полный мониторинг; анализ свечей: до {s.max_candle_pairs} самых ликвидных пар за цикл\n"
-            f"Новые PAPER-сделки: только пары с котировкой {s.trade_quote_currency}."
-        )
+        def read_status():
+            state = "PAUSED" if engine.paused else "RUNNING"
+            balances = ", ".join(f"{currency}: {amount:.6f}" for currency, amount in sorted(engine.paper.cash_by_currency.items()))
+            return (
+                f"Режим: PAPER\nСостояние: {state}\nВиртуальные средства: {balances}\n"
+                f"Позиции: {len(engine.paper.positions)}/{s.max_positions}\nP/L сегодня: {engine.daily_pnl():.2f} EUR*\n"
+                f"Риск: SL {s.stop_loss_pct:.2f}% | TP {s.take_profit_pct:.2f}% | trailing {getattr(s, 'trailing_stop_pct', 1.5):.2f}%\n"
+                f"Рынок Kraken: {len(engine.market_pairs)} пар; котировок получено: {engine.market_ticker_count}\n"
+                f"Мониторинг всех котировок; анализ свечей: до {s.max_candle_pairs} пар за цикл.\n"
+                "* P/L рассчитан в EUR с учётом доступных валютных курсов Kraken."
+            )
+        message = await context.application.bot_data["run_blocking"].run(read_status)
+        await update.effective_message.reply_text(message)
 
     async def scan(update, context):
         if not await authorized(update): return await deny(update)
         await update.effective_message.reply_text("Сканирование рынка…")
         try:
-            rows = await context.application.bot_data["run_blocking"].run(engine.scan)
+            def run_scan():
+                rows = engine.scan()
+                return rows, len(engine.market_pairs), engine.market_ticker_count
+            rows, pair_count, ticker_count = await context.application.bot_data["run_blocking"].run(run_scan)
             buy_rows = [x for x in rows if x.get("signal") == "BUY"]
-            analyzed = [x for x in rows if x.get("ohlc_analyzed") is True and x.get("quote") == s.trade_quote_currency]
-            candle_failed = [x for x in rows if x.get("quote") == s.trade_quote_currency and any(str(reason).startswith("Candle data unavailable:") for reason in x.get("reasons", []))]
-            ranked = sorted(analyzed, key=lambda x: (x.get("score", 0), x.get("turnover", 0)), reverse=True)[:12]
+            analyzed = [x for x in rows if x.get("ohlc_analyzed") is True]
+            ranked = sorted(
+                analyzed,
+                key=lambda x: (x.get("score", 0), x.get("turnover_eur", 0)),
+                reverse=True,
+            )[:12]
             lines = [
-                f"Всего рынков Kraken: {len(engine.market_pairs)}",
-                f"Тикеров получено: {engine.market_ticker_count}",
-                f"Пар {s.trade_quote_currency} с успешно проанализированными свечами/индикаторами: {len(analyzed)}",
-                f"Ошибок получения свечей: {len(candle_failed)}",
+                f"Всего рынков Kraken: {pair_count}",
+                f"Тикеров получено: {ticker_count}",
+                f"Пар с доступным EUR-маршрутом, прошедших анализ свечей: {len(analyzed)}",
                 f"Сигналов BUY: {len(buy_rows)}",
                 "",
             ]
-            lines.extend(f"{x['symbol']}: {x['signal']} ({x.get('score', 0)}/5), цена {x.get('price', 0):,.8g}" for x in ranked)
+            lines.extend(
+                f"{x['symbol']}: {x['signal']} ({x.get('score', 0)}/5), "
+                f"оборот {x.get('turnover_eur', 0):,.0f} EUR/24ч, цена {x.get('price', 0):,.8g}"
+                for x in ranked
+            )
             lines.append("Все рынки получают мониторинг котировок; анализ свечей ограничен бюджетом запросов.")
             await update.effective_message.reply_text("\n".join(lines)[:3900])
         except Exception as exc:
             # Keep the full traceback in Render logs and expose the actionable
             # exception type/message in the private owner Telegram response.
-            log.exception("Market scan failed")
-            detail = f"{type(exc).__name__}: {exc}"
+            log.error("Market scan failed: %s", type(exc).__name__)
             await update.effective_message.reply_text(
                 format_error(exc, "/scan", update.effective_user)
             )
 
     async def backtest(update, context):
         if not await authorized(update): return await deny(update)
-        symbol = (context.args[0] if context.args else "ZECEUR").upper().replace("/", "")
-        if not symbol.isalnum() or len(symbol) < 6 or len(symbol) > 20:
-            return await update.effective_message.reply_text("Использование: /backtest ZECEUR")
-        await update.effective_message.reply_text(f"Загружаю часовые свечи Kraken для {symbol}; это может занять несколько минут…")
+        if not context.args or len(context.args) != 1:
+            return await update.effective_message.reply_text(
+                "Использование: /backtest XBTEUR или /backtest portfolio\n"
+                "Проверяет закрытые часовые свечи Kraken. Ничего не покупает и не меняет PAPER-кошелёк."
+            )
+        symbol = context.args[0].strip().upper().replace("/", "")
+        if symbol == "PORTFOLIO":
+            await update.effective_message.reply_text("Мульти-рынковый исторический PAPER-тест: выбираю до 5 наиболее ликвидных рынков и загружаю закрытые часовые свечи…")
+            try:
+                def run_portfolio():
+                    from .portfolio_backtest import run_portfolio_backtest
+                    pairs = exchange.discover_pairs()
+                    tickers = exchange.tickers()
+                    engine.market_pairs = pairs
+                    prices = {x["symbol"]: float(x.get("lastPrice") or 0) for x in tickers if float(x.get("lastPrice") or 0) > 0}
+                    fx_rates = engine._fresh_fx_rates(prices)
+                    by_symbol = {x["symbol"]: x for x in tickers}
+                    eligible = []
+                    for pair in pairs:
+                        ticker = by_symbol.get(pair["symbol"])
+                        quote = str(pair.get("quote") or "").upper()
+                        rate = fx_rates.get(quote, 0.0)
+                        if ticker and rate > 0:
+                            turnover_eur = float(ticker.get("turnover24h") or 0) * rate
+                            if turnover_eur >= s.min_turnover:
+                                eligible.append((turnover_eur, pair["symbol"], quote))
+                    eligible.sort(reverse=True)
+                    selected = eligible[:5]
+                    if len(selected) < 2:
+                        raise RuntimeError("Недостаточно ликвидных рынков с доступным EUR-маршрутом для портфельного теста.")
+                    candles_by_symbol = {}
+                    quote_currencies = {}
+                    failures = []
+                    for _, market_symbol, quote in selected:
+                        try:
+                            candles_by_symbol[market_symbol] = exchange.candles(market_symbol, interval="60", limit=720)
+                            quote_currencies[market_symbol] = quote
+                        except Exception as exc:
+                            failures.append(f"{market_symbol}: {type(exc).__name__}")
+                    if len(candles_by_symbol) < 2:
+                        raise RuntimeError("Не удалось загрузить минимум два рынка: " + ", ".join(failures))
+                    # Align markets on their shared closed-candle timestamps; Kraken
+                    # may omit an individual candle for a thin/inactive pair.
+                    common = set(row[0] for rows in candles_by_symbol.values() for row in rows)
+                    for rows in candles_by_symbol.values():
+                        common.intersection_update(row[0] for row in rows)
+                    common_timestamps = sorted(common)
+                    if len(common_timestamps) < 62:
+                        raise RuntimeError("После синхронизации у рынков осталось менее 62 общих часовых свечей.")
+                    candles_by_symbol = {
+                        market: [row for row in rows if row[0] in common]
+                        for market, rows in candles_by_symbol.items()
+                    }
+                    # Fetch direct EUR FX markets for the selected quote currencies.
+                    # If Kraken has no direct EUR market, the backtester explicitly
+                    # falls back to the current snapshot rate for that currency.
+                    dated_fx_by_timestamp = {}
+                    fx_fallback = []
+                    for currency in sorted(set(quote_currencies.values()) - {"EUR"}):
+                        fx_pair = next(
+                            (pair for pair in pairs
+                             if (pair["base"] == currency and pair["quote"] == "EUR")
+                             or (pair["base"] == "EUR" and pair["quote"] == currency)),
+                            None,
+                        )
+                        if not fx_pair:
+                            fx_fallback.append(currency)
+                            continue
+                        try:
+                            fx_rows = exchange.candles(fx_pair["symbol"], interval="60", limit=720)
+                            direct = fx_pair["base"] == currency
+                            matched_fx_timestamps = set()
+                            for row in fx_rows:
+                                if row[0] not in common:
+                                    continue
+                                dated_fx_by_timestamp.setdefault(row[0], {"EUR": 1.0})[currency] = (
+                                    row[4] if direct else 1.0 / row[4]
+                                )
+                                matched_fx_timestamps.add(row[0])
+                            if len(matched_fx_timestamps) < len(common):
+                                fx_fallback.append(currency)
+                        except Exception:
+                            log.error("Historical FX candles unavailable for %s", currency)
+                            fx_fallback.append(currency)
+                    result = run_portfolio_backtest(
+                        candles_by_symbol,
+                        quote_currencies=quote_currencies,
+                        fx_rates=fx_rates,
+                        fx_rates_by_timestamp=dated_fx_by_timestamp,
+                        initial_cash_eur=s.paper_start,
+                        max_trade_eur=s.max_trade,
+                        max_positions=s.max_positions,
+                        risk_per_trade_pct=s.risk_per_trade_pct,
+                        fee_rate=s.fee_rate,
+                        slippage_bps=5.0,
+                        stop_loss_pct=s.stop_loss_pct,
+                        take_profit_pct=s.take_profit_pct,
+                        trailing_stop_pct=s.trailing_stop_pct,
+                        max_daily_loss_eur=s.max_daily_loss,
+                    )
+                    return result, failures, fx_fallback
+                result, failures, fx_fallback = await context.application.bot_data["run_blocking"].run(run_portfolio)
+                factor = result["profit_factor"]
+                factor_text = "∞" if factor == float("inf") else f"{factor:.2f}"
+                lines = [
+                    "📊 ПОРТФЕЛЬНЫЙ ИСТОРИЧЕСКИЙ PAPER-ТЕСТ",
+                    f"Рынки: {', '.join(result['markets'])}",
+                    f"Начальный капитал: {result['initial_equity_eur']:.2f} EUR",
+                    f"Итоговый капитал: {result['final_equity_eur']:.2f} EUR",
+                    f"Чистый P/L: {result['net_pnl_eur']:+.4f} EUR ({result['return_pct']:+.2f}%)",
+                    f"Buy & hold (равновесный): {result['buy_hold_return_pct']:+.2f}%",
+                    f"Сделок: {result['trades']} | прибыльных: {result['wins']} | убыточных: {result['losses']}",
+                    f"Win rate: {result['win_rate_pct']:.1f}% | Profit factor: {factor_text}",
+                    f"Макс. просадка: {result['max_drawdown_pct']:.2f}%",
+                    f"Комиссии: {result['fees_paid_eur']:.4f} EUR",
+                    f"Комиссия: {s.fee_rate * 100:.3f}% на сторону; проскальзывание: 5 bps на сторону.",
+                    f"Исторические FX-свечи: {result['assumptions']['dated_fx_rate_timestamps']} временных точек. Текущий FX использован как запасной курс для: {', '.join(fx_fallback) if fx_fallback else 'нет валют'}.",
+                    "Результат — симуляция, не прогноз прибыли и не гарантия будущей доходности.",
+                ]
+                if failures:
+                    lines.append("Рынки, пропущенные при загрузке: " + ", ".join(failures))
+                await update.effective_message.reply_text("\n".join(lines)[:3900])
+            except Exception as exc:
+                log.error("Portfolio historical backtest failed: %s", type(exc).__name__)
+                await update.effective_message.reply_text(format_error(exc, "/backtest portfolio", update.effective_user))
+            return
+        await update.effective_message.reply_text(f"Исторический тест {symbol}…")
         try:
             from .backtest import run_backtest
-            def work():
-                rows = exchange.candles(symbol, interval="60", limit=720)
-                return run_backtest(rows, fee_rate=s.fee_rate, slippage_bps=5.0,
-                                    stop_loss_pct=s.stop_loss_pct, take_profit_pct=s.take_profit_pct)
-            result = await context.application.bot_data["run_blocking"].run(work)
-            report = (
-                f"📉 ИСТОРИЧЕСКИЙ PAPER-БЭКТЕСТ — {symbol}/EUR\n"
-                f"Свечей (1h): {result['candles']}\n"
-                f"Сделок: {result['trades']} | прибыльных: {result['wins']}\n"
+            def run_single_backtest():
+                pair = next(
+                    (item for item in exchange.discover_pairs() if item["symbol"] == symbol),
+                    None,
+                )
+                if pair is None:
+                    raise ValueError(f"Kraken Spot market {symbol} was not found.")
+                if str(pair.get("quote") or "").upper() != "EUR":
+                    raise ValueError(
+                        "Single-market backtests use EUR-quoted pairs only. "
+                        "Use /backtest portfolio for USD/USDT and other quote currencies."
+                    )
+                return run_backtest(
+                    exchange.candles(symbol, interval="60", limit=720),
+                    initial_cash=s.paper_start,
+                    max_trade=s.max_trade,
+                    fee_rate=s.fee_rate,
+                    slippage_bps=5.0,
+                    stop_loss_pct=s.stop_loss_pct,
+                    take_profit_pct=s.take_profit_pct,
+                    trailing_stop_pct=s.trailing_stop_pct,
+                    risk_per_trade_pct=s.risk_per_trade_pct,
+                )
+            result = await context.application.bot_data["run_blocking"].run(run_single_backtest)
+            factor = result["profit_factor"]
+            factor_text = "∞" if factor == float("inf") else f"{factor:.2f}"
+            await update.effective_message.reply_text(
+                f"📉 ИСТОРИЧЕСКИЙ PAPER-ТЕСТ: {symbol}\n"
+                f"Свечей: {result['candles']} (часовые, закрытые)\n"
+                f"Начальный капитал: {result['initial_cash']:.2f}\n"
+                f"Итоговый капитал: {result['final_equity']:.2f}\n"
+                f"Чистый P/L: {result['net_pnl']:+.4f} ({result['return_pct']:+.2f}%)\n"
+                f"Сделок: {result['trades']} | прибыльных: {result['wins']} | убыточных: {result['losses']}\n"
                 f"Win rate: {result['win_rate_pct']:.1f}%\n"
-                f"Доходность стратегии: {result['return_pct']:+.2f}%\n"
-                f"Buy & hold: {result['buy_hold_pct']:+.2f}%\n"
+                f"Profit factor: {factor_text}\n"
                 f"Макс. просадка: {result['max_drawdown_pct']:.2f}%\n"
-                f"Комиссии в закрытых сделках: {result['fees_total']:.4f} EUR\n"
-                "Учтено: комиссия {s.fee_rate * 100:.3f}% на сторону, 5 bps проскальзывания, стоп {s.stop_loss_pct:.2f}%, тейк {s.take_profit_pct:.2f}%. "
-                "Если стоп и тейк задеты одной свечой — считается стоп.\n"
-                "Это историческая проверка, не прогноз и не гарантия будущей прибыли."
+                f"Buy & hold: {result['buy_hold_return_pct']:+.2f}%\n"
+                f"Комиссии всего: {result['fees_paid']:.6f}\n"
+                f"Комиссии вход/выход: {result['entry_fees_paid']:.6f} / {result['exit_fees_paid']:.6f}\n"
+                f"Оборот: {result['gross_turnover']:.4f}; ставка: {result['fee_rate'] * 100:.3f}% на сторону\n"
+                "Издержки: комиссия на вход/выход + проскальзывание 5 bps на сторону. "
+                "Исполнение моделируется по открытию следующей свечи. "
+                "Это тест одного рынка, не прогноз и не гарантия будущей прибыли."
             )
-            await update.effective_message.reply_text(report[:3900])
         except Exception as exc:
-            log.exception("Historical backtest failed for %s", symbol)
-            await update.effective_message.reply_text(format_error(exc, f"/backtest {symbol}", update.effective_user))
+            log.error("Historical backtest failed for %s: %s", symbol, type(exc).__name__)
+            await update.effective_message.reply_text(
+                format_error(exc, f"/backtest {symbol}", update.effective_user)
+            )
 
     async def account(update, context):
         if not await authorized(update): return await deny(update)
+        def read_account():
+            balances = [f"{currency}: {amount:.8f}" for currency, amount in sorted(engine.paper.cash_by_currency.items())]
+            return "Виртуальные остатки PAPER:\n" + ("\n".join(balances) or "Нулевые остатки.")
+        message = await context.application.bot_data["run_blocking"].run(read_account)
+        await update.effective_message.reply_text(message)
+
+    async def realbalance(update, context):
+        if not await authorized(update): return await deny(update)
+        if not s.kraken_api_key or not s.kraken_api_secret:
+            return await update.effective_message.reply_text(
+                "Реальный баланс Kraken недоступен: не заданы API-ключи. "
+                "Нужны только права Query Funds. Это чтение не меняет PAPER-кошелёк."
+            )
+        await update.effective_message.reply_text("Запрашиваю реальные остатки Kraken (только чтение)…")
         try:
             balances = await context.application.bot_data["run_blocking"].run(exchange.balance)
-            nonzero = [f"{asset}: {float(amount):.8f}" for asset, amount in balances.items() if float(amount) > 0]
-            await update.effective_message.reply_text("Kraken account balances (read-only):\n" + ("\n".join(nonzero[:30]) or "Нулевые остатки."))
-        except Exception as exc:
-            log.exception("Kraken account query failed")
+            lines = []
+            for asset, raw_amount in sorted(balances.items()):
+                try:
+                    amount = float(raw_amount)
+                except (TypeError, ValueError, OverflowError):
+                    continue
+                if amount > 0:
+                    lines.append(f"{asset}: {amount:.10f}")
             await update.effective_message.reply_text(
-                format_error(exc, "/account", update.effective_user)
+                "🏦 РЕАЛЬНЫЙ БАЛАНС KRAKEN\n"
+                + ("\n".join(lines) if lines else "Положительных остатков не найдено.")
+                + "\n\nТолько чтение. Реальные средства не импортируются в виртуальный PAPER-кошелёк."
             )
+        except Exception as exc:
+            log.error("Read-only Kraken balance request failed: %s", type(exc).__name__)
+            await update.effective_message.reply_text(format_error(exc, "/realbalance", update.effective_user))
+
+    async def learn(update, context):
+        if not await authorized(update): return await deny(update)
+        if len(context.args) != 1:
+            return await update.effective_message.reply_text("Использование: /learn XBTEUR — исследование модели на закрытых часовых свечах.")
+        symbol = context.args[0].strip().upper().replace("/", "")
+        await update.effective_message.reply_text(
+            f"🧠 Исследую {symbol}: обучаю модель и провожу 3 хронологических walk-forward проверки. "
+            "Это не запускает и не меняет торговлю."
+        )
+        try:
+            def run_research():
+                from .learning import research_candidate
+                from .db import set_state
+                candles = exchange.candles(symbol, interval="60", limit=720)
+                candidate = research_candidate(candles, fee_rate=s.fee_rate, slippage_bps=5.0)
+                from datetime import datetime, timezone
+                trained_at = datetime.now(timezone.utc)
+                candidate["symbol"] = symbol
+                candidate["model_version"] = trained_at.strftime("%Y%m%dT%H%M%S")
+                candidate["trained_at_utc"] = trained_at.isoformat()
+                set_state(engine.db, "ml_candidate_" + symbol, candidate)
+                return candidate
+            candidate = await context.application.bot_data["run_blocking"].run(run_research)
+            metrics = candidate["out_of_sample"]
+            pf = metrics["profit_factor"]
+            pf_text = "∞" if pf == "INF" else f"{pf:.2f}"
+            gate = "ПРОШЛА исследовательский фильтр" if candidate["research_pass"] else "НЕ прошла исследовательский фильтр"
+            await update.effective_message.reply_text(
+                f"🧠 МОДЕЛЬ {symbol} — {gate}\n"
+                f"Статус: SHADOW ONLY (не торгует)\n"
+                f"Обучающих/тестовых выборок: {candidate['samples']}\n"
+                f"Walk-forward фолдов: {len(candidate['walk_forward'])}/3\n"
+                f"Вневыборочных сделок: {metrics['trades']}\n"
+                f"Доходность после издержек: {metrics['net_return_pct']:+.2f}%\n"
+                f"Win rate: {metrics['win_rate_pct']:.1f}% | Profit factor: {pf_text}\n"
+                f"Макс. просадка: {metrics['max_drawdown_pct']:.2f}%\n"
+                "Модель сохранена как исследовательский кандидат. Автоматического внедрения нет; "
+                "следующий этап — длительное теневое сравнение с базовой стратегией."
+            )
+        except Exception as exc:
+            log.error("ML research failed for %s: %s", symbol, type(exc).__name__)
+            await update.effective_message.reply_text(format_error(exc, f"/learn {symbol}", update.effective_user))
+
+    async def learning(update, context):
+        if not await authorized(update): return await deny(update)
+        def read_models():
+            from .db import get_state, get_shadow_metrics
+            rows = engine.db.execute(
+                "SELECT key FROM app_state WHERE key LIKE 'ml_candidate_%' ORDER BY updated_at DESC"
+            ).fetchall()
+            lines = ["🧠 ИССЛЕДОВАТЕЛЬСКИЕ МОДЕЛИ (не торгуют):"]
+            for row in rows[:15]:
+                item = get_state(engine.db, row["key"], {})
+                metric = item.get("out_of_sample", {})
+                symbol = item.get("symbol", row["key"].replace("ml_candidate_", ""))
+                shadow = get_shadow_metrics(engine.db, symbol, item.get("model_version", ""))
+                lines.append(
+                    f"{symbol}: {'PASS' if item.get('research_pass') else 'NOT PASS'} | "
+                    f"{metric.get('net_return_pct', 0):+.2f}% OOS | "
+                    f"PF {metric.get('profit_factor', 0)} | "
+                    f"SHADOW {shadow['shadow_trades']} trades / {shadow['resolved_predictions']} resolved | "
+                    f"{shadow['net_return_pct']:+.2f}% | SHADOW ONLY"
+                )
+            return lines
+        lines = await context.application.bot_data["run_blocking"].run(read_models)
+        if len(lines) == 1:
+            return await update.effective_message.reply_text("Исследовательских моделей пока нет. Запусти /learn XBTEUR.")
+        await update.effective_message.reply_text("\n".join(lines)[:3900])
+
+    async def paperreport(update, context):
+        if not await authorized(update): return await deny(update)
+        from .db import get_paper_metrics
+        try:
+            hours = int(context.args[0]) if context.args else 24
+            metrics = await context.application.bot_data["run_blocking"].run(
+                lambda: get_paper_metrics(engine.db, hours)
+            )
+            if not metrics["samples"]:
+                return await update.effective_message.reply_text(
+                    f"За последние {hours} ч. нет сохранённых PAPER-измерений. "
+                    "Запусти /run и оставь PAPER работать для сбора статистики."
+                )
+            await update.effective_message.reply_text(
+                f"📈 PAPER FORWARD-TEST — {hours} ч.\n"
+                f"Измерений: {metrics['samples']}\n"
+                f"Капитал: {metrics['start_equity_eur']:.4f} → {metrics['end_equity_eur']:.4f} EUR\n"
+                f"Изменение: {metrics['change_eur']:+.4f} EUR ({metrics['change_pct']:+.2f}%)\n"
+                f"Макс. наблюдаемая просадка: {metrics['max_observed_drawdown_pct']:.2f}%\n"
+                f"Среднее число позиций: {metrics['avg_open_positions']:.2f}\n"
+                f"Сигналов BUY: {metrics['buy_signals']}\n"
+                f"Среднее число анализируемых рынков за цикл: {metrics['avg_analyzed_markets']:.1f}\n"
+                f"Период: {metrics['first_ts']} — {metrics['last_ts']} UTC\n"
+                "Это изменение стоимости PAPER-портфеля, а не доказательство будущей доходности."
+            )
+        except Exception as exc:
+            await update.effective_message.reply_text(f"Ошибка отчёта: {safe_error_message(exc)}")
 
     async def interval(update, context):
         if not await authorized(update): return await deny(update)
         allowed = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "24h": 86400}
         if not context.args or context.args[0] not in allowed:
             return await update.effective_message.reply_text("Использование: /interval 1m|5m|15m|30m|1h|4h|24h\nСканер Render проверяет рынок по заданному интервалу.")
-        engine.scan_interval_seconds = allowed[context.args[0]]
+        await context.application.bot_data["run_blocking"].run(
+            lambda: setattr(engine, "scan_interval_seconds", allowed[context.args[0]])
+        )
         await update.effective_message.reply_text(f"Интервал установлен: {context.args[0]}. Изменение действует до перезапуска сервиса.")
 
     async def portfolio(update, context):
         if not await authorized(update): return await deny(update)
-        if not engine.paper.positions: return await update.effective_message.reply_text(f"Открытых позиций нет. PAPER cash: {engine.paper.cash:.2f} EUR")
-        lines = [f"{sym}: {p['qty']:.8f} @ avg {p['avg_price']:.6f}" for sym, p in engine.paper.positions.items()]
-        await update.effective_message.reply_text(f"Cash: {engine.paper.cash:.2f} EUR\n" + "\n".join(lines))
+        def read_portfolio():
+            balances = [f"{currency}: {amount:.8f}" for currency, amount in sorted(engine.paper.cash_by_currency.items())]
+            fx_rates = engine._fx_rates(engine.last_prices)
+            lines = []
+            for sym, p in engine.paper.positions.items():
+                quote = p.get("quote_currency", "EUR")
+                mark = engine.last_prices.get(sym, p["avg_price"])
+                pnl_quote = (mark - p["avg_price"]) * p["qty"]
+                pnl_eur = pnl_quote * fx_rates.get(quote, 0.0)
+                peak = p.get("peak_price", p["avg_price"])
+                lines.append(
+                    f"{sym}: {p['qty']:.8f} | вход {p['avg_price']:.8g} {quote} | "
+                    f"цена {mark:.8g} | пик {peak:.8g} | P/L {pnl_eur:+.4f} EUR"
+                )
+            return "PAPER-кошелёк:\n" + ("\n".join(balances) or "Нет свободных средств.") + "\n\nПозиции:\n" + ("\n".join(lines) or "Нет открытых позиций.")
+        message = await context.application.bot_data["run_blocking"].run(read_portfolio)
+        await update.effective_message.reply_text(message)
 
     async def run(update, context):
         if not await authorized(update): return await deny(update)
-        engine.start()
+        await context.application.bot_data["run_blocking"].run(engine.start)
         await update.effective_message.reply_text("▶️ PAPER-торговля запущена. Автосканирование включено.")
 
     async def pause(update, context):
         if not await authorized(update): return await deny(update)
-        engine.stop("Paused by owner")
-        await update.effective_message.reply_text("⏸ Новые сделки остановлены. Открытые PAPER-позиции сохраняются.")
+        await context.application.bot_data["run_blocking"].run(lambda: engine.stop("Paused by owner"))
+        await update.effective_message.reply_text("⏸ Новые сделки остановлены. Открытые PAPER-позиции сохраняются; мониторинг рынка продолжается.")
 
     async def stop(update, context):
         if not await authorized(update): return await deny(update)
-        engine.stop("Emergency stop via Telegram")
+        await context.application.bot_data["run_blocking"].run(lambda: engine.stop("Emergency stop via Telegram"))
         await update.effective_message.reply_text("⛔ STOP: автоматические сделки остановлены.")
 
     async def topicid(update, context):
@@ -190,14 +500,23 @@ def build_app(s, engine, exchange):
                 await send_topic(context, thread_id, f"✅ Проверка связи: тема «{title}» настроена.")
                 results.append(f"✅ {title}: сообщение отправлено")
             except Exception as exc:
-                log.exception("Telegram topic test failed: %s", title)
+                log.error("Telegram topic test failed: %s (%s)", title, type(exc).__name__)
                 results.append(format_error(exc, f"/testtopics — {title}", update.effective_user))
 
         await message.reply_text("Результат проверки:\n" + "\n".join(results))
 
     async def help_cmd(update, context):
         if not await authorized(update): return await deny(update)
-        await update.effective_message.reply_text("/start — меню\n/status — состояние и P/L\n/scan — сканирование\n/backtest [PAIR] — исторический бэктест (по умолчанию ZECEUR)\n/account — баланс Kraken (только чтение)\n/portfolio — PAPER-позиции\n/interval 1m|5m|15m|30m|1h|4h|24h — интервал\n/run — запуск PAPER\n/pause — пауза\n/stop — аварийная остановка\n/topicid — ID группы и темы\n/testtopics или /test_topics — проверка тем")
+        await update.effective_message.reply_text(
+            "/start — меню\n/status — состояние и P/L\n/scan — сканирование\n"
+            "/account — виртуальные остатки PAPER\n/realbalance — реальные остатки Kraken (только чтение)\n"
+            "/portfolio — PAPER-позиции\n/paperreport [часы] — статистика автономного PAPER-теста\n"
+            "/learn XBTEUR — обучение/проверка ML-кандидата без торговли\n/learning — результаты walk-forward и shadow-теста\n"
+            "/backtest XBTEUR — тест одного рынка; /backtest portfolio — до 5 рынков\n"
+            "/interval 1m|5m|15m|30m|1h|4h|24h — интервал\n"
+            "/run — запуск PAPER\n/pause — пауза\n/stop — аварийная остановка\n"
+            "/topicid — ID группы и темы\n/testtopics или /test_topics — проверка тем"
+        )
 
     async def callback(update, context):
         q = update.callback_query
@@ -208,6 +527,94 @@ def build_app(s, engine, exchange):
         fn = handlers.get(q.data)
         if fn: await fn(update, context)
 
+    async def ml_research_job(context):
+        """Hourly, bounded, rotating model research across all eligible markets."""
+        try:
+            def research_top_markets():
+                from datetime import datetime, timezone, timedelta
+                from .db import get_state, set_state
+                from .learning import research_candidate
+                now_utc = datetime.now(timezone.utc)
+                previous = get_state(engine.db, "ml_auto_research_date", {})
+                if isinstance(previous, dict) and previous.get("at_utc"):
+                    try:
+                        last_run = datetime.fromisoformat(previous["at_utc"])
+                        if last_run.tzinfo is None:
+                            last_run = last_run.replace(tzinfo=timezone.utc)
+                        if now_utc - last_run < timedelta(hours=1):
+                            return []
+                    except (TypeError, ValueError):
+                        log.warning("Ignoring malformed automatic ML research timestamp")
+                pairs = exchange.discover_pairs()
+                tickers = exchange.tickers()
+                engine.market_pairs = pairs
+                prices = {
+                    item["symbol"]: float(item.get("lastPrice") or 0)
+                    for item in tickers if float(item.get("lastPrice") or 0) > 0
+                }
+                rates = engine._fresh_fx_rates(prices)
+                by_symbol = {item["symbol"]: item for item in tickers}
+                eligible = []
+                for pair in pairs:
+                    ticker = by_symbol.get(pair["symbol"])
+                    quote = str(pair.get("quote") or "").upper()
+                    rate = rates.get(quote, 0.0)
+                    if not ticker or rate <= 0:
+                        continue
+                    bid, ask = float(ticker.get("bid1Price") or 0), float(ticker.get("ask1Price") or 0)
+                    spread = (ask - bid) / ((ask + bid) / 2) * 10000 if bid > 0 and ask > 0 else 999999
+                    turnover_eur = float(ticker.get("turnover24h") or 0) * rate
+                    if spread <= s.max_spread_bps and turnover_eur >= s.min_turnover:
+                        eligible.append((turnover_eur, pair["symbol"]))
+                eligible.sort(reverse=True)
+                from .learning import rotate_research_batch
+                cursor = get_state(engine.db, "ml_auto_research_cursor", 0)
+                selected, next_cursor = rotate_research_batch(
+                    eligible, cursor, s.ml_auto_research_markets
+                )
+                if selected:
+                    set_state(engine.db, "ml_auto_research_cursor", next_cursor)
+                trained = []
+                for _, symbol in selected:
+                    try:
+                        candles = exchange.candles(symbol, interval="60", limit=720)
+                        candidate = research_candidate(candles, fee_rate=s.fee_rate, slippage_bps=5.0)
+                        version_time = datetime.now(timezone.utc)
+                        candidate["symbol"] = symbol
+                        candidate["model_version"] = version_time.strftime("%Y%m%dT%H%M%S")
+                        candidate["trained_at_utc"] = version_time.isoformat()
+                        set_state(engine.db, "ml_candidate_" + symbol, candidate)
+                        trained.append({
+                            "symbol": symbol,
+                            "pass": bool(candidate["research_pass"]),
+                            "samples": candidate["samples"],
+                            "version": candidate["model_version"],
+                        })
+                    except Exception as market_exc:
+                        log.warning("Automatic model research skipped %s: %s", symbol, market_exc)
+                if trained:
+                    set_state(engine.db, "ml_auto_research_date", {
+                        "at_utc": now_utc.isoformat(),
+                        "markets": trained,
+                        "cadence_hours": 1,
+                    })
+                return trained
+
+            trained = await context.application.bot_data["run_blocking"].run(research_top_markets)
+            if trained:
+                summary = "\n".join(
+                    f"{item['symbol']}: {'research PASS' if item['pass'] else 'not passed'} "
+                    f"({item['samples']} samples; shadow only)"
+                    for item in trained
+                )
+                await send_topic(context, s.topic_general_id, "🧠 Плановое исследование моделей завершено.\n" + summary)
+        except Exception as exc:
+            log.error("Automatic periodic ML research failed: %s", type(exc).__name__)
+            try:
+                await send_topic(context, s.topic_errors_id, f"Ошибка планового ML-исследования: {safe_error_message(exc)}")
+            except Exception:
+                log.error("Could not send ML research error to Telegram")
+
     async def cycle_job(context):
         import time
         now = time.monotonic()
@@ -215,28 +622,57 @@ def build_app(s, engine, exchange):
         if now - last < engine.scan_interval_seconds:
             return
         context.application.bot_data["last_cycle_at"] = now
-        try:
-            actions = await context.application.bot_data["run_blocking"].run(engine.cycle)
+        runner = context.application.bot_data["run_blocking"]
 
-            # Send a compact heartbeat to General every 15 minutes, but only
-            # after a successful automatic market scan while PAPER is running.
+        # An unexpected engine/database exception is a safety fault: pause
+        # PAPER before reporting it. Telegram notification failures alone do
+        # not stop an otherwise healthy trading engine.
+        try:
+            actions = await runner.run(engine.cycle)
+        except Exception as exc:
+            try:
+                await runner.run(lambda: engine.stop("Unexpected trading cycle exception"))
+            except Exception as stop_exc:
+                log.error("Could not pause after cycle failure: %s", type(stop_exc).__name__)
+            log.error("Trading cycle failed: %s", type(exc).__name__)
+            try:
+                await send_topic(context, s.topic_errors_id, format_error(exc, "автоматический торговый цикл"))
+            except Exception:
+                log.error("Could not send error notification to Telegram topic")
+            return
+
+        def read_cycle_state():
+            return {
+                "paused": engine.paused,
+                "last_scan_at": engine.last_scan_at,
+                "last_signals": list(engine.last_signals),
+                "cash": dict(engine.paper.cash_by_currency),
+                "positions": {symbol: dict(position) for symbol, position in engine.paper.positions.items()},
+                "daily_pnl": engine.daily_pnl(engine.last_prices),
+            }
+
+        try:
+            state = await runner.run(read_cycle_state)
+
+            # Send a compact heartbeat to General every 15 minutes after a
+            # successful scan while PAPER is actively trading.
             last_report = context.application.bot_data.get("last_general_report_at", 0.0)
-            if engine.last_scan_at and not engine.paused and now - last_report >= 900:
-                scan_time = engine.last_scan_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+            if state["last_scan_at"] and not state["paused"] and now - last_report >= 900:
+                scan_time = state["last_scan_at"].strftime("%Y-%m-%d %H:%M:%S UTC")
                 signal_lines = [
                     f"{item['symbol']}: {item.get('signal', 'N/A')} ({item.get('score', 0)}/5) — {float(item.get('price') or 0):,.6g}"
-                    for item in sorted(engine.last_signals, key=lambda item: item.get("score", 0), reverse=True)[:15]
+                    for item in sorted(state["last_signals"], key=lambda item: item.get("score", 0), reverse=True)[:15]
                 ]
                 position_lines = [
-                    f"{symbol}: {position['qty']:.8f} @ {position['avg_price']:.2f}"
-                    for symbol, position in engine.paper.positions.items()
+                    f"{symbol}: {position['qty']:.8f} @ {position['avg_price']:.8g} {position.get('quote_currency', 'EUR')} | peak {position.get('peak_price', position['avg_price']):.8g}"
+                    for symbol, position in state["positions"].items()
                 ]
                 report = (
                     "🟢 PAPER — автоматический отчёт\n"
                     f"Последнее успешное сканирование: {scan_time}\n"
-                    f"Виртуальный баланс: {engine.paper.cash:.2f} EUR\n"
-                    f"Открытые позиции: {len(engine.paper.positions)}/{s.max_positions}\n"
-                    f"P/L сегодня: {engine.daily_pnl(engine.last_prices):.2f} EUR\n"
+                    f"Виртуальные средства: {state['cash']}\n"
+                    f"Открытые позиции: {len(state['positions'])}/{s.max_positions}\n"
+                    f"P/L сегодня: {state['daily_pnl']:.2f} EUR\n"
                     "Рыночные сигналы:\n" + ("\n".join(signal_lines) or "Нет данных") +
                     "\nПозиции:\n" + ("\n".join(position_lines) or "Нет открытых позиций")
                 )
@@ -244,23 +680,22 @@ def build_app(s, engine, exchange):
                 context.application.bot_data["last_general_report_at"] = now
 
             if actions:
-                error_actions = [item for item in actions if "SCAN_FAILED" in item or "ERROR" in item]
+                error_actions = [item for item in actions if "SCAN_FAILED" in item or "ERROR" in item or "FX_ROUTE_MISSING" in item]
                 trade_actions = [item for item in actions if " BUY " in item or " SELL " in item]
-                profit_actions = [item for item in actions if any(token in item for token in (" SELL ", "STOP_LOSS", "TAKE_PROFIT", "DAILY LOSS"))]
+                profit_actions = [item for item in actions if any(token in item for token in (" SELL ", "STOP_LOSS", "TAKE_PROFIT", "TRAILING_STOP", "DAILY LOSS"))]
 
                 if error_actions:
-                    await send_topic(context, s.topic_errors_id, "⚠️ Ошибка рыночного сканирования:\n" + "\n".join(error_actions))
-                    await send_topic(context, s.topic_general_id, "⏸ PAPER автоматически приостановлен из-за ошибки рыночных данных.")
+                    await send_topic(context, s.topic_errors_id, "⚠️ Ошибка рыночного сканирования/оценки:\n" + "\n".join(error_actions))
+                    await send_topic(context, s.topic_general_id, "⏸ PAPER автоматически приостановлен из-за ошибки рыночных данных или валютной оценки.")
 
                 if trade_actions:
                     trade_message = "📈 PAPER — сделки:\n" + "\n".join(trade_actions)
                     await send_topic(context, s.topic_trades_id, trade_message)
-                    positions = len(engine.paper.positions)
                     portfolio_message = (
                         "💼 PAPER — обновление портфеля\n"
-                        f"Доступно: {engine.paper.cash:.2f} EUR\n"
-                        f"Открытых позиций: {positions}/{s.max_positions}\n"
-                        f"P/L сегодня: {engine.daily_pnl():.2f} EUR"
+                        f"Доступно: {state['cash']}\n"
+                        f"Открытых позиций: {len(state['positions'])}/{s.max_positions}\n"
+                        f"P/L сегодня: {state['daily_pnl']:.2f} EUR"
                     )
                     await send_topic(context, s.topic_portfolio_id, portfolio_message)
 
@@ -270,39 +705,41 @@ def build_app(s, engine, exchange):
                 if any("DAILY LOSS" in item for item in actions):
                     await send_topic(context, s.topic_general_id, "⏸ Достигнут дневной лимит убытка. PAPER остановлен.")
         except Exception as exc:
-            log.exception("Trading cycle failed")
+            # A Telegram outage must not convert a successful PAPER cycle into
+            # an engine fault. Report the notification error without stopping.
+            log.error("Trading cycle notification failed: %s", type(exc).__name__)
             try:
-                await send_topic(context, s.topic_errors_id, format_error(exc, "автоматический торговый цикл"))
+                await send_topic(context, s.topic_errors_id, f"Ошибка уведомления: {safe_error_message(exc)}")
             except Exception:
-                log.exception("Could not send error notification to Telegram topic")
+                log.error("Could not send notification failure to Telegram topic")
 
     app = Application.builder().token(s.bot_token).build()
-    # Run synchronous exchange/SQLite work in a worker thread to keep Telegram responsive.
-    import asyncio
-    class Runner:
-        @staticmethod
-        async def run(fn): return await asyncio.to_thread(fn)
-    app.bot_data["run_blocking"] = Runner
-    for name, fn in [("start", start), ("status", status), ("scan", scan), ("backtest", backtest), ("account", account), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
+    # Serialize all exchange/SQLite work: cycle jobs, scans and backtests share
+    # one requests.Session, engine state and SQLite connection.
+    from .worker import SerializedRunner
+    app.bot_data["run_blocking"] = SerializedRunner()
+    for name, fn in [("start", start), ("status", status), ("scan", scan), ("account", account), ("realbalance", realbalance), ("paperreport", paperreport), ("learn", learn), ("learning", learning), ("backtest", backtest), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
                      ("run", run), ("pause", pause), ("stop", stop), ("help", help_cmd)]:
         app.add_handler(CommandHandler(name, fn))
     app.add_handler(CallbackQueryHandler(callback))
 
     async def application_error_handler(update, context):
         error = context.error
-        log.error("Unhandled Telegram application error: %s: %s",
-                  type(error).__name__ if error else "UnknownError",
-                  str(error)[:500] if error else "No exception details")
+        # Do not log exception strings: HTTP request exceptions can contain
+        # credential-bearing request URLs. Keep only the exception class.
+        error_name = type(error).__name__ if error else "UnknownError"
+        log.error("Unhandled Telegram application error: %s", error_name)
         try:
             await send_topic(
                 context, s.topic_errors_id,
-                f"🚨 Ошибка Telegram: {type(error).__name__ if error else 'UnknownError'}"
+                f"🚨 Ошибка Telegram: {error_name}"
             )
         except Exception:
-            log.exception("Could not notify Telegram error topic")
+            log.error("Could not notify Telegram error topic")
 
     app.add_error_handler(application_error_handler)
-    # The configured scan interval has a one-minute minimum. Wake the
-    # scheduler once per minute instead of creating overlapping skipped jobs.
+    # Match the scheduler cadence to the default 1-minute scan interval.
+    # /interval may lengthen the effective cadence; cycle_job enforces it.
     app.job_queue.run_repeating(cycle_job, interval=60, first=10, name="paper-cycle")
+    app.job_queue.run_repeating(ml_research_job, interval=3600, first=60, name="hourly-ml-research")
     return app

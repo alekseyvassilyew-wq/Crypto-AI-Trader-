@@ -1,117 +1,229 @@
-"""Conservative, fee-aware walk-forward backtest for the current indicator strategy."""
+"""Fee-aware, no-lookahead historical PAPER backtesting for one Kraken Spot market.
+
+Signals are computed only from candles closed before the simulated order. Orders
+fill at the following candle's open with configurable adverse slippage.
+"""
+import math
+
 from .indicators import analyze
 
 
-def run_backtest(rows, fee_rate=0.0026, slippage_bps=5.0, stop_loss_pct=2.0, take_profit_pct=4.0,
-                 initial_cash=1000.0):
-    """Replay closed candles without look-ahead; enter at next candle open.
+def _number(value, name, *, minimum=0.0, strict=False):
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be numeric, not boolean")
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{name} must be numeric") from exc
+    if not math.isfinite(result) or (result <= minimum if strict else result < minimum):
+        op = "greater than" if strict else "at least"
+        raise ValueError(f"{name} must be {op} {minimum}")
+    return result
 
-    If both stop and target are touched inside one candle, assume the stop is hit
-    first. This is deliberately conservative. Results are research only.
+
+def run_backtest(
+    candles, *, initial_cash=1000.0, max_trade=100.0, fee_rate=0.0026,
+    slippage_bps=5.0, stop_loss_pct=2.0, take_profit_pct=4.0,
+    trailing_stop_pct=1.5, risk_per_trade_pct=0.5, signal_fn=None,
+):
+    """Simulate long-only spot trading on [timestamp, open, high, low, close, volume].
+
+    max_trade is gross quote notional before fees. Entry and exit fees are
+    charged separately on gross traded notional. Stops win ambiguous intrabar
+    stop/target collisions.
     """
-    if not 0 <= fee_rate < 0.1:
-        raise ValueError("fee_rate must be between 0 and 0.1")
-    if slippage_bps < 0 or initial_cash <= 0 or stop_loss_pct <= 0 or take_profit_pct <= 0:
-        raise ValueError("Invalid backtest parameters")
-    candles = list(rows)
-    if len(candles) < 61:
-        raise ValueError("At least 61 closed candles are required")
-    slip = slippage_bps / 10000.0
-    cash = float(initial_cash)
-    position = None
-    trades = []
-    equity_curve = [cash]
+    cash0 = _number(initial_cash, "initial_cash", strict=True)
+    budget = _number(max_trade, "max_trade", strict=True)
+    fee = _number(fee_rate, "fee_rate")
+    if fee >= 0.1:
+        raise ValueError("fee_rate must be below 0.1")
+    slip_bps = _number(slippage_bps, "slippage_bps")
+    slip = slip_bps / 10000.0
+    if slip >= 0.1:
+        raise ValueError("slippage_bps must be below 1000")
+    stop_pct = _number(stop_loss_pct, "stop_loss_pct", strict=True) / 100.0
+    target_pct = _number(take_profit_pct, "take_profit_pct", strict=True) / 100.0
+    trail_pct = _number(trailing_stop_pct, "trailing_stop_pct", strict=True) / 100.0
+    risk_pct = _number(risk_per_trade_pct, "risk_per_trade_pct", strict=True)
+    if risk_pct > 2.0:
+        raise ValueError("risk_per_trade_pct must not exceed 2.0%")
+    if not isinstance(candles, (list, tuple)) or len(candles) < 62:
+        raise ValueError("At least 62 closed candles are required")
 
-    def close_position(raw_price, reason):
-        nonlocal cash, position
-        exit_price = raw_price * (1 - slip)
-        proceeds = position["qty"] * exit_price
-        exit_fee = proceeds * fee_rate
-        cash = proceeds - exit_fee
-        pnl = cash - position["capital_before"]
+    rows, previous_ts = [], None
+    for index, row in enumerate(candles):
+        if not isinstance(row, (list, tuple)) or len(row) < 6:
+            raise ValueError(f"Invalid candle at index {index}")
+        ts = _number(row[0], "timestamp")
+        op = _number(row[1], "open", strict=True)
+        high = _number(row[2], "high", strict=True)
+        low = _number(row[3], "low", strict=True)
+        close = _number(row[4], "close", strict=True)
+        volume = _number(row[5], "volume")
+        if low > min(op, close) or high < max(op, close) or low > high:
+            raise ValueError(f"Inconsistent OHLC values at index {index}")
+        if previous_ts is not None and ts <= previous_ts:
+            raise ValueError("Candles must be strictly chronological")
+        previous_ts = ts
+        rows.append((ts, op, high, low, close, volume))
+
+    signal_fn = signal_fn or analyze
+    cash, qty, entry, entry_notional, peak, entry_fee, entry_time = cash0, 0.0, 0.0, 0.0, 0.0, 0.0, None
+    trades, equity_curve = [], [cash0]
+    entry_fees = exit_fees = gross_entry_notional = gross_exit_notional = 0.0
+    wins, losses = [], []
+    max_equity, max_drawdown = cash0, 0.0
+
+    def close_position(price, timestamp, reason):
+        nonlocal cash, qty, entry, entry_notional, peak, entry_fee, entry_time
+        nonlocal exit_fees, gross_exit_notional
+        fill = price * (1.0 - slip)
+        gross = qty * fill
+        exit_fee = gross * fee
+        cash += gross - exit_fee
+        exit_fees += exit_fee
+        gross_exit_notional += gross
+        net_pnl = gross - exit_fee - (entry_notional + entry_fee)
         trades.append({
-            "entry": position["entry_price"], "exit": exit_price,
-            "reason": reason, "pnl": pnl,
-            "return_pct": pnl / position["capital_before"] * 100,
-            "fees": position["entry_fee"] + exit_fee,
+            "entry_time": entry_time, "exit_time": timestamp,
+            "entry_price": entry, "exit_price": fill, "quantity": qty,
+            "gross_entry_notional": entry_notional, "gross_exit_notional": gross,
+            "net_pnl": net_pnl,
+            "return_pct": net_pnl / (entry_notional + entry_fee) * 100.0,
+            "reason": reason, "entry_fee": entry_fee, "exit_fee": exit_fee,
+            "fees": entry_fee + exit_fee,
         })
-        position = None
+        (wins if net_pnl > 0 else losses).append(net_pnl)
+        qty = entry = entry_notional = peak = entry_fee = 0.0
+        entry_time = None
 
-    for index in range(60, len(candles)):
-        candle = candles[index]
-        open_price, high, low, close = map(float, (candle[1], candle[2], candle[3], candle[4]))
-        exited = False
-        opened = False
+    for i in range(60, len(rows) - 1):
+        current, next_candle = rows[i], rows[i + 1]
+        ts, op, high, low, close, volume = current
+        next_ts, next_open = next_candle[0], next_candle[1]
 
-        if position is not None:
-            stop = position["entry_price"] * (1 - stop_loss_pct / 100)
-            target = position["entry_price"] * (1 + take_profit_pct / 100)
-            # Conservative intrabar assumption: stop wins if both levels touched.
-            if low <= stop:
-                close_position(stop, "STOP_LOSS")
-                exited = True
-            elif high >= target:
-                close_position(target, "TAKE_PROFIT")
-                exited = True
+        if qty:
+            stop_price = entry * (1.0 - stop_pct)
+            trail_price = peak * (1.0 - trail_pct) if peak > entry else 0.0
+            active_stop = max(stop_price, trail_price)
+            target_price = entry * (1.0 + target_pct)
+            exit_reason = exit_at = None
+            if op <= active_stop:
+                exit_reason, exit_at = ("STOP_LOSS" if active_stop == stop_price else "TRAILING_STOP"), op
+            elif op >= target_price:
+                exit_reason, exit_at = "TAKE_PROFIT", op
+            elif low <= active_stop:
+                exit_reason = "STOP_LOSS" if active_stop == stop_price else "TRAILING_STOP"
+                exit_at = active_stop
+            elif high >= target_price:
+                exit_reason, exit_at = "TAKE_PROFIT", target_price
+            if exit_reason:
+                close_position(exit_at, ts, exit_reason)
+            else:
+                peak = max(peak, high)
 
-        if position is None and not exited:
-            signal = analyze(candles[:index])
-            if signal.get("signal") == "BUY" and cash > 0:
-                entry_price = open_price * (1 + slip)
-                capital_before = cash
-                entry_fee = capital_before * fee_rate
-                qty = (capital_before - entry_fee) / entry_price
-                position = {
-                    "qty": qty, "entry_price": entry_price,
-                    "capital_before": capital_before, "entry_fee": entry_fee,
-                }
-                cash = 0.0
-                opened = True
+        # Measure worst-case intrabar equity only for positions that survived
+        # this candle; stop-first handling above avoids assuming a later high
+        # after an ambiguous stop/target collision.
+        if qty:
+            intrabar_high_equity = cash + qty * high
+            intrabar_low_equity = cash + qty * low
+            max_equity = max(max_equity, intrabar_high_equity)
+            if max_equity > 0:
+                max_drawdown = max(max_drawdown, (max_equity - intrabar_low_equity) / max_equity)
 
-        # Check the entry candle after the simulated open fill.
-        if opened and position is not None:
-            stop = position["entry_price"] * (1 - stop_loss_pct / 100)
-            target = position["entry_price"] * (1 + take_profit_pct / 100)
-            if low <= stop:
-                close_position(stop, "STOP_LOSS")
-            elif high >= target:
-                close_position(target, "TAKE_PROFIT")
+        if not qty and cash > 0:
+            signal = signal_fn([list(x) for x in rows[:i + 1]])
+            if signal.get("signal") == "BUY":
+                atr_percent = _number(signal.get("atr_percent") or 0.0, "atr_percent")
+                stop_distance_pct = max(stop_loss_pct, atr_percent * 1.5, 0.5)
+                risk_budget = cash * risk_pct / 100.0
+                risk_limited_budget = risk_budget / (stop_distance_pct / 100.0)
+                spend = min(budget, risk_limited_budget, cash / (1.0 + fee))
+                if spend <= 0:
+                    continue
+                fill = next_open * (1.0 + slip)
+                entry_fee = spend * fee
+                qty = spend / fill
+                cash -= spend + entry_fee
+                entry_fees += entry_fee
+                gross_entry_notional += spend
+                entry_notional, entry, peak, entry_time = spend, fill, fill, next_ts
 
-        marked_equity = cash
-        if position is not None:
-            marked_equity = position["qty"] * close * (1 - slip) * (1 - fee_rate)
-        equity_curve.append(marked_equity)
+        mark = next_open
+        equity = cash + (qty * mark if qty else 0.0)
+        equity_curve.append(equity)
+        max_equity = max(max_equity, equity)
+        max_drawdown = max(max_drawdown, (max_equity - equity) / max_equity if max_equity else 0.0)
 
-    if position is not None:
-        close_position(float(candles[-1][4]), "END_OF_DATA")
+    if qty:
+        # The final candle can be the entry candle (e.g. a signal on the
+        # penultimate candle). Apply its stop/target before forced liquidation.
+        last_ts, last_open, last_high, last_low, last_close, _ = rows[-1]
+        stop_price = entry * (1.0 - stop_pct)
+        trail_price = peak * (1.0 - trail_pct) if peak > entry else 0.0
+        active_stop = max(stop_price, trail_price)
+        target_price = entry * (1.0 + target_pct)
+        if last_open <= active_stop:
+            reason, exit_price = ("STOP_LOSS" if active_stop == stop_price else "TRAILING_STOP"), last_open
+        elif last_open >= target_price:
+            reason, exit_price = "TAKE_PROFIT", last_open
+        elif last_low <= active_stop:
+            reason, exit_price = ("STOP_LOSS" if active_stop == stop_price else "TRAILING_STOP"), active_stop
+        elif last_high >= target_price:
+            reason, exit_price = "TAKE_PROFIT", target_price
+        else:
+            # No protective exit was touched, but include the final candle's
+            # high/low in worst-case drawdown before the forced close.
+            intrabar_high_equity = cash + qty * last_high
+            intrabar_low_equity = cash + qty * last_low
+            max_equity = max(max_equity, intrabar_high_equity)
+            if max_equity > 0:
+                max_drawdown = max(max_drawdown, (max_equity - intrabar_low_equity) / max_equity)
+            reason, exit_price = "END_OF_DATA", last_close
+        close_position(exit_price, last_ts, reason)
         equity_curve.append(cash)
+        max_equity = max(max_equity, cash)
+        max_drawdown = max(max_drawdown, (max_equity - cash) / max_equity if max_equity else 0.0)
 
-    peak = initial_cash
-    max_drawdown = 0.0
-    for value in equity_curve:
-        peak = max(peak, value)
-        if peak:
-            max_drawdown = max(max_drawdown, (peak - value) / peak * 100)
+    net_pnl = cash - cash0
+    gross_profit, gross_loss = sum(wins), abs(sum(losses))
+    fees_paid = entry_fees + exit_fees
 
-    wins = sum(1 for trade in trades if trade["pnl"] > 0)
-    total_return = (cash / initial_cash - 1) * 100
-    first_open = float(candles[0][1])
-    last_close = float(candles[-1][4])
-    benchmark = ((last_close * (1 - slip) * (1 - fee_rate)) /
-                 (first_open * (1 + slip) * (1 + fee_rate)) - 1) * 100
+    # Benchmark begins at the first strategy entry when one exists; with
+    # no trades, use the first executable candle so the window is explicit.
+    benchmark_entry_time = trades[0]["entry_time"] if trades else rows[61][0]
+    benchmark_entry_index = next(
+        (index for index, row in enumerate(rows) if row[0] >= benchmark_entry_time),
+        61,
+    )
+    benchmark_entry_fill = rows[benchmark_entry_index][1] * (1.0 + slip)
+    benchmark_notional = cash0 / (1.0 + fee)
+    benchmark_qty = benchmark_notional / benchmark_entry_fill
+    benchmark_exit_fill = rows[-1][4] * (1.0 - slip)
+    benchmark_gross_exit = benchmark_qty * benchmark_exit_fill
+    benchmark_final = benchmark_gross_exit * (1.0 - fee)
 
     return {
-        "initial_cash": initial_cash,
-        "final_equity": cash,
-        "return_pct": total_return,
-        "buy_hold_pct": benchmark,
-        "max_drawdown_pct": max_drawdown,
-        "trades": len(trades),
-        "wins": wins,
-        "win_rate_pct": (wins / len(trades) * 100) if trades else 0.0,
-        "fees_total": sum(trade["fees"] for trade in trades),
-        "trade_details": trades,
-        "candles": len(candles),
-        "fee_rate": fee_rate,
-        "slippage_bps": slippage_bps,
+        "initial_cash": cash0, "final_equity": cash, "net_pnl": net_pnl,
+        "return_pct": net_pnl / cash0 * 100.0,
+        "buy_hold_final_equity": benchmark_final,
+        "buy_hold_return_pct": (benchmark_final / cash0 - 1.0) * 100.0,
+        "trades": len(trades), "wins": len(wins), "losses": len(losses),
+        "win_rate_pct": len(wins) / len(trades) * 100.0 if trades else 0.0,
+        "profit_factor": gross_profit / gross_loss if gross_loss else (float("inf") if gross_profit else 0.0),
+        "max_drawdown_pct": max_drawdown * 100.0,
+        "fees_paid": fees_paid, "entry_fees_paid": entry_fees,
+        "exit_fees_paid": exit_fees, "gross_entry_notional": gross_entry_notional,
+        "gross_exit_notional": gross_exit_notional,
+        "gross_turnover": gross_entry_notional + gross_exit_notional,
+        "fee_rate": fee, "trades_detail": trades, "candles": len(rows),
+        "assumptions": {
+            "fee_rate_pct_per_side": fee * 100.0,
+            "slippage_bps_per_side": slip_bps,
+            "execution": "next candle open",
+            "intrabar_priority": "stop before take-profit",
+            "risk_per_trade_pct": risk_pct,
+            "buy_hold_window": "first strategy entry (or first executable candle if no trades) through final close",
+        },
     }
