@@ -23,7 +23,7 @@ class Engine:
         day = datetime.now(timezone.utc).date().isoformat()
         state = get_state(self.db, "daily", {})
         if state.get("date") != day:
-            set_state(self.db, "daily", {"date": day, "start_equity": self.paper.equity({}), "realized": 0.0})
+            set_state(self.db, "daily", {"date": day, "start_equity": self.paper.equity(self.last_prices, self._fx_rates(self.last_prices)), "realized": 0.0})
 
     def start(self):
         self.paused = False
