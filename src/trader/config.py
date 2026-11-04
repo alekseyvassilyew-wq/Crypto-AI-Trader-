@@ -104,8 +104,6 @@ def load_settings():
         raise ValueError("RISK_PER_TRADE_PERCENT must not exceed 2.0%.")
     if s.stop_loss_pct > 25 or s.trailing_stop_pct > 25 or s.take_profit_pct > 100:
         raise ValueError("Stop-loss/trailing-stop must not exceed 25% and take-profit must not exceed 100%.")
-    if bool(s.kraken_api_key) != bool(s.kraken_api_secret):
-        raise ValueError("Set both KRAKEN_API_KEY and KRAKEN_API_SECRET, or leave both empty.")
     if not str(s.db_path).strip():
         raise ValueError("DATABASE_PATH must not be empty.")
     if not 0 <= s.fee_rate < 0.1:
