@@ -14,7 +14,7 @@ def make_engine(tmp_path):
     settings = SimpleNamespace(
         scan_interval=60, max_trade=5, max_daily_loss=2, max_positions=2,
         max_spread_bps=25, min_turnover=10000, watchlist=("XBTEUR",),
-        stop_loss_pct=2, take_profit_pct=4,
+        stop_loss_pct=2, take_profit_pct=4, paper_slippage_bps=5,
     )
     db = connect(tmp_path / "engine.sqlite3")
     paper = PaperBroker(20, .0026, db=db)
@@ -41,7 +41,7 @@ def test_new_day_start_equity_includes_open_positions(tmp_path):
     fresh_prices = {"XBTEUR": 12.0}
     engine._ensure_day(fresh_prices)
     daily = get_state(db, "daily")
-    assert daily["start_equity"] == engine.paper.equity(fresh_prices, engine._fx_rates(fresh_prices))
+    assert daily["start_equity"] == engine._equity_after_liquidation(fresh_prices, engine._fx_rates(fresh_prices))
     db.close()
 
 
@@ -780,3 +780,34 @@ def test_priority_market_selection_rotates_remaining_markets_without_duplicates(
     assert ("COIN0EUR", "EUR") in second
     assert len((first - {("COIN0EUR", "EUR")}) | (second - {("COIN0EUR", "EUR")})) >= 5
     assert next_cursor == 8
+
+def test_paper_execution_prices_include_configured_slippage(tmp_path):
+    engine, db = make_engine(tmp_path)
+    assert engine._paper_buy_price(100.0) == pytest.approx(100.05)
+    assert engine._paper_sell_price(100.0) == pytest.approx(99.95)
+    db.close()
+
+
+def test_paper_liquidation_equity_reserves_exit_fee_and_slippage(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.paper.buy("XBTEUR", 5, 100.0)
+    value = engine._equity_after_liquidation({"XBTEUR": 100.0}, {"EUR": 1.0})
+    expected = engine.paper.balance("EUR") + 0.05 * 100.0 * (1 - 0.0005) * (1 - engine.paper.fee_rate)
+    assert value == pytest.approx(expected)
+    db.close()
+
+
+def test_paper_sell_fill_applies_slippage_to_executable_bid(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.paper.buy("XBTEUR", 5, 100.0)
+    engine.scan = lambda **kwargs: [{
+        "symbol": "XBTEUR", "quote": "EUR", "signal": "SELL", "score": 0,
+        "price": 100.0, "bid": 100.0, "ask": 100.1,
+        "spread_bps": 10, "turnover": 50000, "turnover_eur": 50000, "reasons": [],
+    }]
+    engine.start()
+    actions = engine.cycle()
+    row = db.execute("SELECT price FROM trades WHERE side='Sell' ORDER BY id DESC LIMIT 1").fetchone()
+    assert any("SELL SIGNAL_SELL" in action for action in actions)
+    assert row["price"] == pytest.approx(99.95)
+    db.close()
