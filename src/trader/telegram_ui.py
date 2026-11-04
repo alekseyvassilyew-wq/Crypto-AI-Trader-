@@ -386,19 +386,52 @@ def build_app(s, engine, exchange):
             )
         await update.effective_message.reply_text("Запрашиваю реальные остатки Kraken (только чтение)…")
         try:
-            balances = await context.application.bot_data["run_blocking"].run(exchange.balance)
+            runner = context.application.bot_data["run_blocking"]
+            balances = await runner.run(exchange.balance)
+
+            # Value real assets only against recent, fresh EUR market marks.
+            # Old or unavailable rates are shown as unknown, never as zero.
+            rates, scanned_at = await runner.run(
+                lambda: (engine._fresh_fx_rates(engine.last_prices), engine.last_scan_at)
+            )
+            from datetime import datetime, timezone
+            if scanned_at is None:
+                rates = {"EUR": 1.0}
+            else:
+                age = (datetime.now(timezone.utc) - scanned_at).total_seconds()
+                if age < 0 or age > max(120, 2 * int(engine.scan_interval_seconds)):
+                    rates = {"EUR": 1.0}
+
+            from .wallet import build_wallet_inventory
+            inventory = build_wallet_inventory(balances, rates)
             lines = []
-            for asset, raw_amount in sorted(balances.items()):
-                try:
-                    amount = float(raw_amount)
-                except (TypeError, ValueError, OverflowError):
-                    continue
-                if amount > 0:
-                    lines.append(f"{asset}: {amount:.10f}")
+            for item in inventory["assets"]:
+                amount_text = f'{item["amount"]:.12g}'
+                if item["value_eur"] is None:
+                    value_text = "оценка EUR недоступна"
+                else:
+                    value_text = f'{item["value_eur"]:.2f} EUR'
+                lines.append(f'{item["asset"]}: {amount_text} — {value_text}')
+
+            if inventory["asset_count"] == 0:
+                body = "Положительных остатков не найдено. Баланс: 0 активов / 0.00 EUR."
+            else:
+                body = "\n".join(lines)
+                if inventory["total_complete"]:
+                    body += f'\n\nИТОГО: {inventory["total_eur"]:.2f} EUR'
+                else:
+                    body += (
+                        "\n\nПолная оценка в EUR пока невозможна. "
+                        "Нет свежего прямого EUR-курса для: "
+                        + ", ".join(inventory["unknown_assets"])
+                        + f'. Известная часть: {inventory["known_total_eur"]:.2f} EUR.'
+                    )
+
             await update.effective_message.reply_text(
                 "🏦 РЕАЛЬНЫЙ БАЛАНС KRAKEN\n"
-                + ("\n".join(lines) if lines else "Положительных остатков не найдено.")
-                + "\n\nТолько чтение. Реальные средства не импортируются в виртуальный PAPER-кошелёк."
+                + body
+                + "\n\nТолько чтение. Реальные средства не импортируются в виртуальный PAPER-кошелёк. "
+                "Реальные ордера отключены."
             )
         except Exception as exc:
             log.error("Read-only Kraken balance request failed: %s", type(exc).__name__)
