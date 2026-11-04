@@ -1274,6 +1274,7 @@ def build_app(s, engine, exchange):
     async def backup_health_job(context):
         """Alert only on backup-health state transitions; avoid repeated noise."""
         from .db import get_backup_status, get_state, set_state
+        from .monitoring import backup_health_transition
 
         backup_dir = Path(s.db_path).expanduser().parent / "backups"
         try:
@@ -1287,7 +1288,8 @@ def build_app(s, engine, exchange):
             old_status = previous.get("status")
             new_status = current["status"]
 
-            if new_status != old_status:
+            transition = backup_health_transition(old_status, new_status)
+            if transition == "failure":
                 if new_status in {"missing", "stale"}:
                     detail = (
                         "Резервная копия SQLite не найдена на постоянном диске."
@@ -1301,7 +1303,7 @@ def build_app(s, engine, exchange):
                         f"⚠️ {html.escape(detail)}",
                         parse_mode="HTML",
                     )
-                elif new_status == "fresh" and old_status in {"missing", "stale"}:
+            elif transition == "recovered":
                     await send_topic(
                         context, s.topic_general_id,
                         "🟢 <b>РЕЗЕРВНОЕ КОПИРОВАНИЕ ВОССТАНОВЛЕНО</b>\\n"
