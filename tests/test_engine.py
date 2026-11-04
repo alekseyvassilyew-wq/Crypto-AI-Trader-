@@ -170,7 +170,7 @@ def test_non_eur_trade_spends_existing_quote_currency_without_converting_eur(tmp
     ]
     engine.exchange = DummyExchange()
     engine.last_prices = {"USDZEUR": 0.9, "ETHUSD": 3000}
-    engine.scan = lambda: [
+    engine.scan = lambda **kwargs: [
         {"symbol": "USDZEUR", "quote": "EUR", "signal": "HOLD", "score": 0,
          "price": 0.9, "spread_bps": 10, "turnover": 50000, "turnover_eur": 45000, "reasons": []},
         {"symbol": "ETHUSD", "quote": "USD", "signal": "BUY", "score": 10,
@@ -194,7 +194,7 @@ def test_non_eur_signal_can_convert_eur_to_fund_quote_wallet(tmp_path):
         {"symbol": "ETHUSD", "base": "ETH", "quote": "USD"},
     ]
     engine.last_prices = {"USDZEUR": 0.9, "ETHUSD": 3000}
-    engine.scan = lambda: [
+    engine.scan = lambda **kwargs: [
         {"symbol": "USDZEUR", "quote": "EUR", "signal": "HOLD", "score": 0,
          "price": 0.9, "spread_bps": 10, "turnover": 50000, "turnover_eur": 45000, "reasons": []},
         {"symbol": "ETHUSD", "quote": "USD", "signal": "BUY", "score": 10,
