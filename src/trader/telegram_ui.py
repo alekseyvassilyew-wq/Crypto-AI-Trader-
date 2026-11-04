@@ -1126,6 +1126,7 @@ def build_app(s, engine, exchange):
     for name, fn in [("start", start), ("status", status), ("monitorstatus", monitorstatus), ("scan", scan), ("account", account), ("realbalance", realbalance), ("walletcheck", walletcheck), ("paperreport", paperreport), ("learn", learn), ("learning", learning), ("research", research_history_cmd), ("backtest", backtest), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
                      ("run", run), ("pause", pause), ("stop", stop), ("help", help_cmd)]:
         app.add_handler(CommandHandler(name, fn))
+    app.add_handler(CommandHandler("test_topics", testtopics))  # Backwards-compatible alias shown in /help.
     app.add_handler(CallbackQueryHandler(callback))
 
     async def external_monitor_job(context):

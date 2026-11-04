@@ -68,7 +68,7 @@ def backup_database(db, backup_dir, keep=7):
         raise ValueError("Backup retention must be a positive integer")
     directory = Path(backup_dir).expanduser()
     directory.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     destination = directory / f"crypto_ai_trader_{timestamp}.sqlite3"
     temporary = destination.with_suffix(destination.suffix + ".tmp")
 

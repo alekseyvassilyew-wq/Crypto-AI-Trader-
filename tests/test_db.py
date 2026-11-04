@@ -108,3 +108,22 @@ def test_legacy_trades_table_gets_additive_accounting_migration(tmp_path):
     columns = {row["name"] for row in db.execute("PRAGMA table_info(trades)")}
     assert {"fee_eur", "realized_pnl_eur"}.issubset(columns)
     db.close()
+
+
+def test_sqlite_backup_versions_are_unique_and_retention_is_enforced(tmp_path):
+    from src.trader.db import backup_database, set_state
+
+    db = connect(tmp_path / "live.sqlite3")
+    backup_dir = tmp_path / "backups"
+    paths = []
+    for index in range(3):
+        set_state(db, "backup_generation", {"value": index})
+        paths.append(backup_database(db, backup_dir, keep=2))
+
+    assert len(set(paths)) == 3
+    from pathlib import Path
+    assert not Path(paths[0]).exists()  # Retention prunes the oldest generation.
+    assert all(Path(path).exists() for path in paths[1:])
+    retained = list(backup_dir.glob("crypto_ai_trader_*.sqlite3"))
+    assert len(retained) == 2
+    db.close()
