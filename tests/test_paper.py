@@ -175,3 +175,17 @@ def test_conversion_rejects_target_balance_overflow():
     broker.cash_by_currency["USD"] = 1e308
     with pytest.raises(ValueError, match="invalid wallet balance"):
         broker.convert("EUR", "USD", 1.0, 1e308)
+
+
+
+def test_eur_cost_basis_and_entry_fees_follow_partial_sells():
+    broker = PaperBroker(balance=100, fee_rate=0.01)
+    broker.buy("ETHUSD", 20, 10, currency="USD", quote_to_eur_rate=0.9)
+    position = broker.positions["ETHUSD"]
+    assert position["cost_basis_eur"] == pytest.approx(18.0)
+    assert position["entry_fees_eur"] == pytest.approx(0.18)
+    broker.sell("ETHUSD", 1, 12)
+    remaining = broker.positions["ETHUSD"]
+    assert remaining["qty"] == pytest.approx(1.0)
+    assert remaining["cost_basis_eur"] == pytest.approx(9.0)
+    assert remaining["entry_fees_eur"] == pytest.approx(0.09)
