@@ -211,12 +211,18 @@ def research_candidate(rows, *, horizon=3, fee_rate=0.0026, slippage_bps=5.0,
         future_returns.append(net_return)
     if len(samples) < min_train + 3 * min_validation + int(horizon):
         raise ValueError("Not enough usable samples for three walk-forward validation folds")
-    first_test = max(min_train + int(horizon), int(len(samples) * 0.55))
-    fold_size = (len(samples) - first_test) // 3
+    # Keep the final 15% completely untouched until the independent holdout.
+    holdout_start = max(
+        min_train + 3 * min_validation + 2 * int(horizon),
+        int(len(samples) * 0.85),
+    )
+    validation_end = holdout_start
+    first_test = max(min_train + int(horizon), int(validation_end * 0.55))
+    fold_size = (validation_end - first_test) // 3
     folds, all_oos = [], []
     for fold in range(3):
         start = first_test + fold * fold_size
-        end = len(samples) if fold == 2 else start + fold_size
+        end = validation_end if fold == 2 else start + fold_size
         train_end = start - int(horizon)
         if train_end < min_train or end - start < min_validation:
             continue
@@ -230,15 +236,93 @@ def research_candidate(rows, *, horizon=3, fee_rate=0.0026, slippage_bps=5.0,
         folds.append(metrics)
         all_oos.extend(predictions)
     if len(folds) != 3:
-        raise ValueError("Could not construct three valid walk-forward folds")
+        raise ValueError("Could not construct three valid walk-forward validation folds")
+
+    # A separate final holdout is never used to fit the model evaluated on it.
+    holdout_train_end = holdout_start - int(horizon)
+    if holdout_train_end < min_train or len(samples) - holdout_start < min_validation:
+        raise ValueError("Not enough untouched samples for the independent holdout")
+    holdout_model = _fit(samples[:holdout_train_end], labels[:holdout_train_end])
+    holdout_predictions = [
+        (i, predict_probability(holdout_model, samples[i]), future_returns[i])
+        for i in range(holdout_start, len(samples))
+    ]
     aggregate = _performance(all_oos, threshold, int(horizon))
-    final_model = _fit(samples, labels)
+    independent_holdout = _performance(holdout_predictions, threshold, int(horizon))
+
+    def regime_for(features):
+        momentum_24 = float(features[2])
+        if momentum_24 >= 0.03:
+            return "BULL"
+        if momentum_24 <= -0.03:
+            return "BEAR"
+        return "SIDEWAYS"
+
+    def by_regime(predictions):
+        grouped = {"BULL": [], "BEAR": [], "SIDEWAYS": []}
+        for prediction in predictions:
+            grouped[regime_for(samples[prediction[0]])].append(prediction)
+        return {
+            regime: {
+                "observations": len(grouped[regime]),
+                **_performance(grouped[regime], threshold, int(horizon)),
+            }
+            for regime in ("BULL", "BEAR", "SIDEWAYS")
+        }
+
+    regime_metrics = by_regime(all_oos)
+    holdout_regime_metrics = by_regime(holdout_predictions)
+    final_model = _fit(samples, labels)  # Shadow artifact only; never controls entries.
     positive_folds = sum(1 for item in folds if item["net_return_pct"] > 0)
-    research_pass = (
-        aggregate["trades"] >= 20 and aggregate["net_return_pct"] > 0
-        and (aggregate["profit_factor"] == "INF" or aggregate["profit_factor"] >= 1.15)
-        and aggregate["max_drawdown_pct"] <= 15.0 and positive_folds >= 2
-    )
+    rejection_reasons = []
+    reason_codes = []
+    if aggregate["trades"] < 20:
+        reason_codes.append("INSUFFICIENT_OOS_TRADES")
+        rejection_reasons.append(f"Недостаточно вневыборочных сделок: {aggregate['trades']} из 20")
+    if aggregate["net_return_pct"] <= 0:
+        reason_codes.append("NON_POSITIVE_OOS_RETURN")
+        rejection_reasons.append("Отрицательная или нулевая доходность walk-forward после издержек")
+    pf = aggregate["profit_factor"]
+    if pf != "INF" and float(pf) < 1.15:
+        reason_codes.append("LOW_OOS_PROFIT_FACTOR")
+        rejection_reasons.append(f"Profit Factor ниже 1.15: {pf}")
+    if aggregate["max_drawdown_pct"] > 15.0:
+        reason_codes.append("OOS_DRAWDOWN_TOO_HIGH")
+        rejection_reasons.append(f"Просадка выше 15%: {aggregate['max_drawdown_pct']:.2f}%")
+    if positive_folds < 2:
+        reason_codes.append("UNSTABLE_WALK_FORWARD")
+        rejection_reasons.append(f"Нестабильные фолды: положительных {positive_folds} из 3")
+
+    if independent_holdout["trades"] < 5:
+        reason_codes.append("INSUFFICIENT_HOLDOUT_TRADES")
+        rejection_reasons.append(
+            f"Недостаточно сделок на независимом отложенном периоде: {independent_holdout['trades']} из 5"
+        )
+    if independent_holdout["net_return_pct"] <= 0:
+        reason_codes.append("HOLDOUT_NON_POSITIVE_RETURN")
+        rejection_reasons.append("Независимый holdout не подтвердил положительную доходность")
+    holdout_pf = independent_holdout["profit_factor"]
+    if holdout_pf != "INF" and float(holdout_pf) < 1.0:
+        reason_codes.append("HOLDOUT_PROFIT_FACTOR_TOO_LOW")
+        rejection_reasons.append(f"Profit Factor независимого holdout ниже 1.00: {holdout_pf}")
+
+    for regime in ("BULL", "BEAR", "SIDEWAYS"):
+        metrics = regime_metrics[regime]
+        if metrics["observations"] < 10:
+            reason_codes.append(f"INSUFFICIENT_{regime}_DATA")
+            rejection_reasons.append(
+                f"Недостаточно независимых наблюдений для режима {regime}: {metrics['observations']} из 10"
+            )
+        elif metrics["trades"] < 2:
+            reason_codes.append(f"INSUFFICIENT_{regime}_TRADES")
+            rejection_reasons.append(f"Недостаточно сделок для оценки режима {regime}")
+        elif metrics["net_return_pct"] <= 0:
+            reason_codes.append(f"WEAK_{regime}_PERFORMANCE")
+            rejection_reasons.append(
+                f"Стратегия не показала положительный результат в режиме {regime}"
+            )
+
+    research_pass = not rejection_reasons
     return {
         "status": "SHADOW_ONLY", "research_pass": research_pass, "samples": len(samples),
         "positive_labels_pct": sum(labels) / len(labels) * 100,
@@ -249,8 +333,23 @@ def research_candidate(rows, *, horizon=3, fee_rate=0.0026, slippage_bps=5.0,
             "signal": "after signal candle close",
             "entry": "next candle open with adverse slippage",
             "exit": "close of horizon candle with adverse slippage",
+            "validation": "3 expanding-window folds with purged label horizon",
+            "independent_holdout": "final 15% chronological block; not used for fitting its evaluator",
+            "regime_definition": "24-candle return >= +3% bull; <= -3% bear; otherwise sideways",
         },
-        "walk_forward": folds, "out_of_sample": aggregate,
+        "walk_forward": folds,
+        "out_of_sample": aggregate,
+        "independent_holdout": independent_holdout,
+        "regime_metrics": regime_metrics,
+        "independent_holdout_by_regime": holdout_regime_metrics,
+        "diagnostics": {
+            "reason_codes": reason_codes,
+            "rejection_reasons": rejection_reasons,
+            "positive_walk_forward_folds": positive_folds,
+            "walk_forward_folds": len(folds),
+            "independent_holdout_samples": len(holdout_predictions),
+        },
+        "rejection_reasons": rejection_reasons,
         "model": {"feature_names": list(FEATURE_NAMES), **final_model},
         "warning": "Research only. Candidate is not connected to PAPER order decisions and is never auto-promoted.",
     }

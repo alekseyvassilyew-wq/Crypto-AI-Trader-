@@ -26,6 +26,10 @@ def test_research_candidate_is_walk_forward_and_shadow_only():
     assert result["model"]["architecture"] == "7-8-1"
     assert "warning" in result
     assert "research_pass" in result
+    assert len(result["independent_holdout"]) > 0
+    assert set(result["regime_metrics"]) == {"BULL", "BEAR", "SIDEWAYS"}
+    assert result["diagnostics"]["walk_forward_folds"] == 3
+    assert isinstance(result["rejection_reasons"], list)
     assert 0 <= predict_probability(result["model"], [0.01] * len(FEATURE_NAMES)) <= 1
 
 
