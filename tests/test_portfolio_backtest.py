@@ -68,3 +68,28 @@ def test_portfolio_backtest_rejects_unknown_quote_fx_rate():
             quote_currencies={"ETHUSD": "USD"},
             fx_rates={"EUR": 1.0},
         )
+
+
+
+def test_portfolio_backtest_uses_entry_and_exit_fx_rates():
+    candles = flat_candles(count=64, price=100)
+    result = run_portfolio_backtest(
+        {"ETHUSD": candles},
+        quote_currencies={"ETHUSD": "USD"},
+        fx_rates={"EUR": 1.0, "USD": 0.9},
+        fx_rates_by_timestamp={
+            61.0: {"USD": 0.9},
+            63.0: {"USD": 0.8},
+        },
+        initial_cash_eur=100,
+        max_trade_eur=50,
+        max_positions=1,
+        fee_rate=0,
+        slippage_bps=0,
+        signal_fn=buy_on_first_eligible_close,
+    )
+
+    assert result["trades"] == 1
+    assert result["trades_detail"][0]["net_pnl_eur"] < 0
+    assert result["final_equity_eur"] < 100
+    assert result["assumptions"]["dated_fx_rate_timestamps"] == 2
