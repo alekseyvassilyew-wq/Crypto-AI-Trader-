@@ -437,6 +437,74 @@ def build_app(s, engine, exchange):
             log.error("Read-only Kraken balance request failed: %s", type(exc).__name__)
             await update.effective_message.reply_text(format_error(exc, "/realbalance", update.effective_user))
 
+    async def walletcheck(update, context):
+        if not await authorized(update): return await deny(update)
+        if not s.kraken_api_key or not s.kraken_api_secret:
+            return await update.effective_message.reply_text(
+                "Проверка Kraken недоступна: не заданы API-ключи. Нужны только права Query Funds."
+            )
+        await update.effective_message.reply_text("Проверяю остатки и торговые ограничения Kraken (только чтение)…")
+        try:
+            runner = context.application.bot_data["run_blocking"]
+            balances, pairs, market_state = await runner.run(
+                lambda: (exchange.balance(), exchange.discover_pairs(), (
+                    engine._fresh_fx_rates(engine.last_prices), engine.last_scan_at
+                ))
+            )
+            rates, scanned_at = market_state
+            from datetime import datetime, timezone
+            if scanned_at is None:
+                rates = {"EUR": 1.0}
+            else:
+                age = (datetime.now(timezone.utc) - scanned_at).total_seconds()
+                if age < 0 or age > max(120, 2 * int(engine.scan_interval_seconds)):
+                    rates = {"EUR": 1.0}
+            from .wallet import build_wallet_inventory, build_asset_pair_routes
+            inventory = build_wallet_inventory(balances, rates)
+            routes = build_asset_pair_routes(
+                [item["asset"] for item in inventory["assets"]], pairs
+            )
+            lines = ["🏦 ПРЕДТОРГОВАЯ ПРОВЕРКА KRAKEN", 
+                     f"Активов с положительным остатком: {inventory['asset_count']}"]
+            if inventory["asset_count"] == 0:
+                lines.append("Кошелёк пуст. Проверка торговых маршрутов будет доступна после пополнения.")
+            else:
+                for item in inventory["assets"]:
+                    asset = item["asset"]
+                    value = (f'{item["value_eur"]:.2f} EUR'
+                             if item["value_eur"] is not None else "оценка EUR недоступна")
+                    lines.append(f"\n{asset}: {item['amount']:.12g} — {value}")
+                    asset_routes = routes.get(asset, [])
+                    if not asset_routes:
+                        lines.append("  Торговые пары: не найдены среди онлайн spot-рынков")
+                        continue
+                    lines.append(f"  Доступных spot-пар: {len(asset_routes)}")
+                    for route in asset_routes[:12]:
+                        limits = []
+                        if route["ordermin"] not in (None, ""):
+                            limits.append(f'min qty {route["ordermin"]}')
+                        if route["costmin"] not in (None, ""):
+                            limits.append(f'min cost {route["costmin"]}')
+                        fee_rows = route["fees"] or []
+                        if isinstance(fee_rows, list) and fee_rows and isinstance(fee_rows[0], (list, tuple)) and len(fee_rows[0]) > 1:
+                            try:
+                                limits.append(f'fee {float(fee_rows[0][1]):g}%')
+                            except (TypeError, ValueError):
+                                pass
+                        suffix = "; ".join(limits) if limits else "ограничения не опубликованы в ответе API"
+                        lines.append(f'  • {route["symbol"]}: {suffix}')
+                    if len(asset_routes) > 12:
+                        lines.append(f"  …ещё {len(asset_routes) - 12} пар")
+            lines.append("\nПроверки риска PAPER: лимит сделки "
+                         f'{s.max_trade:.2f} EUR; дневной убыток не более {s.max_daily_loss:.2f} EUR; '
+                         f'максимум позиций {s.max_positions}; спред до {s.max_spread_bps:.1f} bps.')
+            lines.append("Минимумы и комиссии берутся из метаданных Kraken; отсутствующие значения не угадываются.")
+            lines.append("Только чтение: реальные ордера, переводы и импорт средств в PAPER отключены.")
+            await update.effective_message.reply_text("\n".join(lines)[:3900])
+        except Exception as exc:
+            log.error("Read-only Kraken wallet preflight failed: %s", type(exc).__name__)
+            await update.effective_message.reply_text(format_error(exc, "/walletcheck", update.effective_user))
+
     async def learn(update, context):
         if not await authorized(update): return await deny(update)
         if len(context.args) != 1:
@@ -1002,7 +1070,7 @@ def build_app(s, engine, exchange):
     app.bot_data["monitor_db"] = monitor_db
     app.bot_data["monitor_runner"] = monitor_runner
     app.bot_data["research_runner"] = research_runner
-    for name, fn in [("start", start), ("status", status), ("monitorstatus", monitorstatus), ("scan", scan), ("account", account), ("realbalance", realbalance), ("paperreport", paperreport), ("learn", learn), ("learning", learning), ("research", research_history_cmd), ("backtest", backtest), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
+    for name, fn in [("start", start), ("status", status), ("monitorstatus", monitorstatus), ("scan", scan), ("account", account), ("realbalance", realbalance), ("walletcheck", walletcheck), ("paperreport", paperreport), ("learn", learn), ("learning", learning), ("research", research_history_cmd), ("backtest", backtest), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
                      ("run", run), ("pause", pause), ("stop", stop), ("help", help_cmd)]:
         app.add_handler(CommandHandler(name, fn))
     app.add_handler(CallbackQueryHandler(callback))
