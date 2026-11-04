@@ -709,3 +709,27 @@ def test_non_eur_cross_conversion_charges_two_fee_legs(tmp_path):
     assert engine.paper.balance("EUR") >= 0
     assert engine.paper.balance("USD") >= 0
     db.close()
+
+
+
+def test_pure_fx_rate_builder_does_not_require_mutating_engine_state():
+    from src.trader.engine import fresh_fx_rates_from_market
+
+    settings = SimpleNamespace(max_spread_bps=25, min_turnover=10000)
+    pairs = [
+        {"symbol": "USDZEUR", "base": "USD", "quote": "EUR"},
+        {"symbol": "ZEURUSD", "base": "EUR", "quote": "USD"},
+        {"symbol": "XBTUSD", "base": "XBT", "quote": "USD"},
+    ]
+    tickers = {
+        "USDZEUR": {"bid1Price": 0.91, "ask1Price": 0.92, "turnover24h": 50000},
+        "ZEURUSD": {"bid1Price": 1.08, "ask1Price": 1.09, "turnover24h": 60000},
+        "XBTUSD": {"bid1Price": 60000, "ask1Price": 60010, "turnover24h": 1_000_000},
+    }
+    prices = {"USDZEUR": 0.915, "ZEURUSD": 1.085, "XBTUSD": 60005}
+
+    rates = fresh_fx_rates_from_market(settings, pairs, tickers, prices)
+
+    assert rates["EUR"] == 1.0
+    assert rates["USD"] == pytest.approx(1 / 1.09)
+    assert "XBT" not in rates
