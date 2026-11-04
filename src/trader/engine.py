@@ -55,9 +55,11 @@ class Engine:
             return {
                 "symbol": symbol, "signal": "HOLD", "score": 0,
                 "price": last, "spread_bps": spread, "turnover": turnover,
+                "ohlc_analyzed": False,
                 "reasons": [f"Candle data unavailable: {type(exc).__name__}"],
             }
-        result.update(symbol=symbol, price=last or result.get("price", 0), spread_bps=spread, turnover=turnover)
+        result.update(symbol=symbol, price=last or result.get("price", 0), spread_bps=spread, turnover=turnover,
+                      ohlc_analyzed=True)
         if spread > self.s.max_spread_bps:
             result["signal"] = "HOLD"
             result["reasons"].append("Spread too wide")
