@@ -10,13 +10,13 @@ TIMEOUT = (4, 10)
 
 RENDER_FAILURE_EVENTS = {
     "server_failed", "server_hardware_failure", "service_suspended",
-    "service_disk_usage_high", "build_ended", "image_pull_failed",
-    "artifact_fetch_failed", "initial_deploy_hook_ended",
+    "service_disk_usage_high", "image_pull_failed", "artifact_fetch_failed",
 }
 RENDER_RECOVERY_EVENTS = {
     "server_restarted", "server_available", "service_resumed",
     "service_disk_usage_recovered",
 }
+RENDER_TERMINAL_EVENTS = {"build_ended", "initial_deploy_hook_ended"}
 
 
 def _get_json(url: str, headers: dict[str, str], params=None):
@@ -62,13 +62,21 @@ def poll_external_events(settings, state: dict) -> list[dict[str, str]]:
                     continue
                 current.append(event_id)
                 event_type = str(event.get("type") or "").lower()
-                if seen is not None and event_id not in known and event_type in RENDER_FAILURE_EVENTS | RENDER_RECOVERY_EVENTS:
-                    failed = event_type in RENDER_FAILURE_EVENTS
+                details = event.get("details") if isinstance(event.get("details"), dict) else {}
+                is_terminal = event_type in RENDER_TERMINAL_EVENTS
+                if seen is not None and event_id not in known and (
+                    event_type in RENDER_FAILURE_EVENTS | RENDER_RECOVERY_EVENTS or is_terminal
+                ):
+                    if is_terminal:
+                        result = str(details.get("buildStatus") or details.get("status") or "").lower()
+                        failed = result not in {"succeeded", "success", "2"}
+                    else:
+                        failed = event_type in RENDER_FAILURE_EVENTS
                     events.append({
                         "source": "Render",
                         "status": "FAILED" if failed else "RECOVERED",
                         "title": event_type.replace("_", " ").upper(),
-                        "detail": _render_detail(event.get("details")),
+                        "detail": _render_detail(details),
                         "url": "",
                     })
             # First poll establishes a baseline and avoids replaying old history.
@@ -86,7 +94,7 @@ def poll_external_events(settings, state: dict) -> list[dict[str, str]]:
             )
             rows = payload.get("workflow_runs", []) if isinstance(payload, dict) else []
             previous = state.get("github_status")
-            current = dict(previous or {})
+            current = {}
             for run in rows if isinstance(rows, list) else []:
                 run_id = str(run.get("id") or "")
                 if not run_id:
@@ -103,8 +111,8 @@ def poll_external_events(settings, state: dict) -> list[dict[str, str]]:
                         "url": str(run.get("html_url") or ""),
                     })
                 current[run_id] = status
-            # Bound state size; recent workflows are returned newest first.
-            state["github_status"] = dict(list(current.items())[:300])
+            # The API returns newest runs first; retain only this bounded recent window.
+            state["github_status"] = current
         except Exception as exc:
             log.warning("GitHub event polling failed: %s", type(exc).__name__)
 
