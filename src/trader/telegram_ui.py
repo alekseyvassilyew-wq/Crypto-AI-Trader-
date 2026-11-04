@@ -99,6 +99,49 @@ def build_app(s, engine, exchange):
                 format_error(exc, "/scan", update.effective_user)
             )
 
+    async def backtest(update, context):
+        if not await authorized(update): return await deny(update)
+        if not context.args or len(context.args) != 1:
+            return await update.effective_message.reply_text("Использование: /backtest XBTEUR\nПроверяет стратегию на последних доступных закрытых часовых свечах Kraken. Ничего не покупает и не меняет PAPER-кошелёк.")
+        symbol = context.args[0].strip().upper().replace("/", "")
+        await update.effective_message.reply_text(f"Исторический тест {symbol}…")
+        try:
+            from .backtest import run_backtest
+            result = await context.application.bot_data["run_blocking"].run(
+                lambda: run_backtest(
+                    exchange.candles(symbol, interval="60", limit=720),
+                    initial_cash=s.paper_start,
+                    max_trade=s.max_trade,
+                    fee_rate=s.fee_rate,
+                    slippage_bps=5.0,
+                    stop_loss_pct=s.stop_loss_pct,
+                    take_profit_pct=s.take_profit_pct,
+                    trailing_stop_pct=s.trailing_stop_pct,
+                )
+            )
+            factor = result["profit_factor"]
+            factor_text = "∞" if factor == float("inf") else f"{factor:.2f}"
+            await update.effective_message.reply_text(
+                f"📉 ИСТОРИЧЕСКИЙ PAPER-ТЕСТ: {symbol}\n"
+                f"Свечей: {result['candles']} (часовые, закрытые)\n"
+                f"Начальный капитал: {result['initial_cash']:.2f}\n"
+                f"Итоговый капитал: {result['final_equity']:.2f}\n"
+                f"Чистый P/L: {result['net_pnl']:+.4f} ({result['return_pct']:+.2f}%)\n"
+                f"Сделок: {result['trades']} | прибыльных: {result['wins']} | убыточных: {result['losses']}\n"
+                f"Win rate: {result['win_rate_pct']:.1f}%\n"
+                f"Profit factor: {factor_text}\n"
+                f"Макс. просадка: {result['max_drawdown_pct']:.2f}%\n"
+                f"Комиссии: {result['fees_paid']:.4f}\n"
+                "Издержки: комиссия на вход/выход + проскальзывание 5 bps на сторону. "
+                "Исполнение моделируется по открытию следующей свечи. "
+                "Это тест одного рынка, не прогноз и не гарантия будущей прибыли."
+            )
+        except Exception as exc:
+            log.exception("Historical backtest failed for %s", symbol)
+            await update.effective_message.reply_text(
+                format_error(exc, f"/backtest {symbol}", update.effective_user)
+            )
+
     async def account(update, context):
         if not await authorized(update): return await deny(update)
         balances = [f"{currency}: {amount:.8f}" for currency, amount in sorted(engine.paper.cash_by_currency.items())]
@@ -272,7 +315,7 @@ def build_app(s, engine, exchange):
         @staticmethod
         async def run(fn): return await asyncio.to_thread(fn)
     app.bot_data["run_blocking"] = Runner
-    for name, fn in [("start", start), ("status", status), ("scan", scan), ("account", account), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
+    for name, fn in [("start", start), ("status", status), ("scan", scan), ("account", account), ("backtest", backtest), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
                      ("run", run), ("pause", pause), ("stop", stop), ("help", help_cmd)]:
         app.add_handler(CommandHandler(name, fn))
     app.add_handler(CallbackQueryHandler(callback))
