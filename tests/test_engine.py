@@ -584,10 +584,11 @@ def test_open_position_equity_uses_bid_not_last_trade(tmp_path):
     engine.cycle()
 
     assert "XBTEUR" in engine.paper.positions
-    assert engine.daily_pnl({"XBTEUR": 99.0}) == pytest.approx(
-        engine.paper.equity({"XBTEUR": 99.0}, engine._fx_rates({"XBTEUR": 99.0}))
-        - get_state(db, "daily")["start_equity"]
-    )
+    snapshot = db.execute(
+        "SELECT equity_eur FROM paper_snapshots ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    assert snapshot is not None
+    assert snapshot["equity_eur"] == pytest.approx(14.987 + 0.05 * 99.0)
     db.close()
 
 
