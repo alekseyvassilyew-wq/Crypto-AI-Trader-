@@ -119,8 +119,13 @@ def run_portfolio_backtest(
         return current
 
     def buy_rates_at(timestamp):
+        key = float(timestamp)
         current = dict(buy_rates)
-        current.update(dated_buy_rates.get(float(timestamp), {}))
+        # If only dated valuation FX is available for a candle, use its
+        # reciprocal as a neutral fallback; explicit dated buy-side rates win.
+        current.update({currency: 1.0 / rate for currency, rate in dated_rates.get(key, {}).items()})
+        current.update(dated_buy_rates.get(key, {}))
+        current["EUR"] = 1.0
         return current
 
     markets = {}
