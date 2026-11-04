@@ -103,7 +103,7 @@ def build_app(s, engine, exchange):
         if not await authorized(update): return await deny(update)
         if not context.args or len(context.args) != 1:
             return await update.effective_message.reply_text(
-                "Использование: /backtest XBTEUR или /backtest portfolio\\n"
+                "Использование: /backtest XBTEUR или /backtest portfolio\n"
                 "Проверяет закрытые часовые свечи Kraken. Ничего не покупает и не меняет PAPER-кошелёк."
             )
         symbol = context.args[0].strip().upper().replace("/", "")
@@ -176,7 +176,7 @@ def build_app(s, engine, exchange):
                 ]
                 if failures:
                     lines.append("Рынки, пропущенные при загрузке: " + ", ".join(failures))
-                await update.effective_message.reply_text("\\n".join(lines)[:3900])
+                await update.effective_message.reply_text("\n".join(lines)[:3900])
             except Exception as exc:
                 log.exception("Portfolio historical backtest failed")
                 await update.effective_message.reply_text(format_error(exc, "/backtest portfolio", update.effective_user))
@@ -199,16 +199,16 @@ def build_app(s, engine, exchange):
             factor = result["profit_factor"]
             factor_text = "∞" if factor == float("inf") else f"{factor:.2f}"
             await update.effective_message.reply_text(
-                f"📉 ИСТОРИЧЕСКИЙ PAPER-ТЕСТ: {symbol}\\n"
-                f"Свечей: {result['candles']} (часовые, закрытые)\\n"
-                f"Начальный капитал: {result['initial_cash']:.2f}\\n"
-                f"Итоговый капитал: {result['final_equity']:.2f}\\n"
-                f"Чистый P/L: {result['net_pnl']:+.4f} ({result['return_pct']:+.2f}%)\\n"
-                f"Сделок: {result['trades']} | прибыльных: {result['wins']} | убыточных: {result['losses']}\\n"
-                f"Win rate: {result['win_rate_pct']:.1f}%\\n"
-                f"Profit factor: {factor_text}\\n"
-                f"Макс. просадка: {result['max_drawdown_pct']:.2f}%\\n"
-                f"Комиссии: {result['fees_paid']:.4f}\\n"
+                f"📉 ИСТОРИЧЕСКИЙ PAPER-ТЕСТ: {symbol}\n"
+                f"Свечей: {result['candles']} (часовые, закрытые)\n"
+                f"Начальный капитал: {result['initial_cash']:.2f}\n"
+                f"Итоговый капитал: {result['final_equity']:.2f}\n"
+                f"Чистый P/L: {result['net_pnl']:+.4f} ({result['return_pct']:+.2f}%)\n"
+                f"Сделок: {result['trades']} | прибыльных: {result['wins']} | убыточных: {result['losses']}\n"
+                f"Win rate: {result['win_rate_pct']:.1f}%\n"
+                f"Profit factor: {factor_text}\n"
+                f"Макс. просадка: {result['max_drawdown_pct']:.2f}%\n"
+                f"Комиссии: {result['fees_paid']:.4f}\n"
                 "Издержки: комиссия на вход/выход + проскальзывание 5 bps на сторону. "
                 "Исполнение моделируется по открытию следующей свечи. "
                 "Это тест одного рынка, не прогноз и не гарантия будущей прибыли."
