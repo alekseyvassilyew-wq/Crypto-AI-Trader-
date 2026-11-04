@@ -229,3 +229,33 @@ def test_fx_rates_convert_quote_currencies_to_eur(tmp_path):
     assert rates["USD"] == 0.9
     assert rates["ETH"] == 2700
     db.close()
+
+def test_manual_market_scan_does_not_rebalance_paper_wallet(tmp_path):
+    engine, db = make_engine(tmp_path)
+
+    class FxExchange:
+        def discover_pairs(self):
+            return [
+                {"symbol": "USDZEUR", "base": "USD", "quote": "EUR"},
+                {"symbol": "USDTZEUR", "base": "USDT", "quote": "EUR"},
+            ]
+
+        def tickers(self):
+            return [
+                {"symbol": "USDZEUR", "bid1Price": 0.89, "ask1Price": 0.90, "lastPrice": 0.895, "turnover24h": 50000},
+                {"symbol": "USDTZEUR", "bid1Price": 0.89, "ask1Price": 0.90, "lastPrice": 0.895, "turnover24h": 50000},
+            ]
+
+    engine.exchange = FxExchange()
+    engine.scan_one = lambda symbol, tickers=None, **kwargs: {
+        "symbol": symbol, "signal": "HOLD", "score": 0, "price": 1,
+        "spread_bps": 10, "turnover": 50000, "reasons": [],
+    }
+    before = dict(engine.paper.cash_by_currency)
+
+    engine.scan()
+
+    assert engine.paper.cash_by_currency == before
+    assert engine.paper.balance("USD") == 0
+    assert engine.paper.balance("USDT") == 0
+    db.close()
