@@ -57,7 +57,8 @@ def _sigmoid(value):
     return 1.0 / (1.0 + math.exp(-value))
 
 
-def _fit(samples, labels, epochs=350, learning_rate=0.12, l2=0.02):
+def _fit(samples, labels, epochs=450, learning_rate=0.05, l2=0.01, hidden_units=8):
+    """Train a small deterministic 7-8-1 tanh/sigmoid neural network."""
     width = len(samples[0])
     means = [sum(row[j] for row in samples) / len(samples) for j in range(width)]
     scales = []
@@ -65,24 +66,66 @@ def _fit(samples, labels, epochs=350, learning_rate=0.12, l2=0.02):
         variance = sum((row[j] - means[j]) ** 2 for row in samples) / len(samples)
         scales.append(math.sqrt(variance) or 1.0)
     normalized = [[(row[j] - means[j]) / scales[j] for j in range(width)] for row in samples]
-    weights, bias = [0.0] * width, 0.0
+    # Deterministic low-amplitude initialization makes training reproducible.
+    w1 = [[0.08 * math.sin((i + 1) * (j + 1)) for j in range(hidden_units)] for i in range(width)]
+    b1 = [0.0] * hidden_units
+    w2 = [0.08 * math.cos(j + 1) for j in range(hidden_units)]
+    b2 = 0.0
+    count = len(normalized)
     for _ in range(epochs):
-        grad, bias_grad = [0.0] * width, 0.0
+        gw1 = [[0.0] * hidden_units for _ in range(width)]
+        gb1 = [0.0] * hidden_units
+        gw2 = [0.0] * hidden_units
+        gb2 = 0.0
         for row, label in zip(normalized, labels):
-            error = _sigmoid(sum(w * x for w, x in zip(weights, row)) + bias) - label
-            bias_grad += error
-            for j, value in enumerate(row):
-                grad[j] += error * value
-        count = len(normalized)
-        bias -= learning_rate * bias_grad / count
-        for j in range(width):
-            weights[j] -= learning_rate * (grad[j] / count + l2 * weights[j])
-    return {"means": means, "scales": scales, "weights": weights, "bias": bias}
+            hidden = [
+                math.tanh(b1[j] + sum(w1[i][j] * row[i] for i in range(width)))
+                for j in range(hidden_units)
+            ]
+            probability = _sigmoid(b2 + sum(w2[j] * hidden[j] for j in range(hidden_units)))
+            output_delta = probability - label
+            gb2 += output_delta
+            hidden_deltas = [
+                output_delta * w2[j] * (1.0 - hidden[j] * hidden[j])
+                for j in range(hidden_units)
+            ]
+            for j in range(hidden_units):
+                gw2[j] += output_delta * hidden[j]
+                gb1[j] += hidden_deltas[j]
+                for i in range(width):
+                    gw1[i][j] += hidden_deltas[j] * row[i]
+        b2 -= learning_rate * gb2 / count
+        for j in range(hidden_units):
+            w2[j] -= learning_rate * (gw2[j] / count + l2 * w2[j])
+            b1[j] -= learning_rate * gb1[j] / count
+        for i in range(width):
+            for j in range(hidden_units):
+                w1[i][j] -= learning_rate * (gw1[i][j] / count + l2 * w1[i][j])
+    return {
+        "architecture": f"{width}-{hidden_units}-1",
+        "means": means, "scales": scales,
+        "weights_input_hidden": w1, "bias_hidden": b1,
+        "weights_hidden_output": w2, "bias_output": b2,
+    }
 
 
 def predict_probability(model, features):
-    normalized = [(float(value) - model["means"][i]) / model["scales"][i] for i, value in enumerate(features)]
-    return _sigmoid(sum(w * x for w, x in zip(model["weights"], normalized)) + model["bias"])
+    normalized = [
+        (float(value) - model["means"][index]) / model["scales"][index]
+        for index, value in enumerate(features)
+    ]
+    hidden = [
+        math.tanh(
+            model["bias_hidden"][j]
+            + sum(model["weights_input_hidden"][i][j] * normalized[i]
+                  for i in range(len(normalized)))
+        )
+        for j in range(len(model["bias_hidden"]))
+    ]
+    return _sigmoid(
+        model["bias_output"]
+        + sum(model["weights_hidden_output"][j] * hidden[j] for j in range(len(hidden)))
+    )
 
 
 def _performance(trades, threshold, horizon=1):
