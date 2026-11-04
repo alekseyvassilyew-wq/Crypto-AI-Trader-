@@ -306,10 +306,11 @@ def build_app(s, engine, exchange):
                 from .db import set_state
                 candles = exchange.candles(symbol, interval="60", limit=720)
                 candidate = research_candidate(candles, fee_rate=s.fee_rate, slippage_bps=5.0)
+                from datetime import datetime, timezone
+                trained_at = datetime.now(timezone.utc)
                 candidate["symbol"] = symbol
-                candidate["trained_at_utc"] = __import__("datetime").datetime.now(
-                    __import__("datetime").timezone.utc
-                ).isoformat()
+                candidate["model_version"] = trained_at.strftime("%Y%m%dT%H%M%S")
+                candidate["trained_at_utc"] = trained_at.isoformat()
                 set_state(engine.db, "ml_candidate_" + symbol, candidate)
                 return candidate
             candidate = await context.application.bot_data["run_blocking"].run(run_research)
@@ -345,7 +346,7 @@ def build_app(s, engine, exchange):
                 item = get_state(engine.db, row["key"], {})
                 metric = item.get("out_of_sample", {})
                 symbol = item.get("symbol", row["key"].replace("ml_candidate_", ""))
-                shadow = get_shadow_metrics(engine.db, symbol)
+                shadow = get_shadow_metrics(engine.db, symbol, item.get("model_version", ""))
                 lines.append(
                     f"{symbol}: {'PASS' if item.get('research_pass') else 'NOT PASS'} | "
                     f"{metric.get('net_return_pct', 0):+.2f}% OOS | "
