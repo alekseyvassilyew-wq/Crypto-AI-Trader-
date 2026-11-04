@@ -213,7 +213,7 @@ def test_monitor_status_reports_missing_configuration_without_secrets():
     )
     report = format_monitor_status(settings, {})
     assert "Render API: НЕ НАСТРОЕН" in report
-    assert "GitHub Actions: ПОДКЛЮЧЁН" in report
+    assert "GitHub Actions: НАСТРОЕН" in report
     assert "Telegram-группа: НЕ НАСТРОЕНА" in report
     assert "API-ключи не отображаются" in report
 
@@ -238,7 +238,7 @@ def test_monitor_status_reports_last_success_and_errors():
     assert "Timeout" in report
     assert "отслеживается запусков — 1" in report
     assert "Новых событий в последнем цикле: 2" in report
-    assert "Последняя отправка уведомления" in report
+    assert "Последняя подтверждённая отправка Telegram" in report
     assert "secret-value" not in report
 
 
@@ -280,3 +280,25 @@ def test_health_state_keeps_api_error_and_previous_success():
 
     assert merged["github_last_success_at"] == "yesterday"
     assert merged["github_last_error"] == "Timeout"
+
+
+
+def test_monitor_status_shows_last_success_and_latest_api_error_together():
+    settings = SimpleNamespace(
+        render_api_key="key",
+        render_service_id="service",
+        github_repository="owner/repo",
+        telegram_group_chat_id=-100123,
+    )
+    report = format_monitor_status(settings, {
+        "render_last_success_at": "2026-11-04T15:00:00+00:00",
+        "render_last_error": "Timeout",
+        "github_last_success_at": "2026-11-04T15:00:01+00:00",
+        "last_alert_delivery_at": "2026-11-04T15:00:02+00:00",
+    })
+
+    assert "Render API: НАСТРОЕН" in report
+    assert "Последняя успешная проверка Render: 2026-11-04T15:00:00+00:00" in report
+    assert "Последняя ошибка Render API: Timeout" in report
+    assert "Последняя успешная проверка GitHub: 2026-11-04T15:00:01+00:00" in report
+    assert "Последняя подтверждённая отправка Telegram: 2026-11-04T15:00:02+00:00" in report
