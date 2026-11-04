@@ -702,6 +702,9 @@ def build_app(s, engine, exchange):
                 f"Среднее число позиций: {metrics['avg_open_positions']:.2f}\n"
                 f"Сигналов BUY: {metrics['buy_signals']}\n"
                 f"Среднее число анализируемых рынков за цикл: {metrics['avg_analyzed_markets']:.1f}\n"
+                f"Закрытых сделок: {metrics['closed_trades']} | прибыльных: {metrics['winning_trades']} | убыточных: {metrics['losing_trades']}\n"
+                f"Win rate: {metrics['win_rate_pct']:.1f}% | Profit factor: {metrics['profit_factor']}\n"
+                f"Реализованный P/L: {metrics['realized_pnl_eur']:+.4f} EUR | комиссии: {metrics['total_fees_eur']:.4f} EUR\n"
                 f"Период: {metrics['first_ts']} — {metrics['last_ts']} UTC\n"
                 "Это изменение стоимости PAPER-портфеля, а не доказательство будущей доходности."
             )
