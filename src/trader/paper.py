@@ -79,6 +79,28 @@ class PaperBroker:
                 "positions": self.positions,
             })
 
+    def convert(self, from_currency, to_currency, amount, rate):
+        """Convert virtual cash only; rate is destination units per source unit."""
+        source = str(from_currency).upper()
+        target = str(to_currency).upper()
+        if not source or not target or source == target:
+            raise ValueError("Currency conversion requires two different currencies")
+        amount = _finite_number(amount, "conversion amount", minimum=0, strict_minimum=True)
+        rate = _finite_number(rate, "conversion rate", minimum=0, strict_minimum=True)
+        if amount > self.balance(source) + 1e-12:
+            raise ValueError("Insufficient PAPER balance for currency conversion")
+        gross = amount * rate
+        fee = gross * self.fee_rate
+        received = gross - fee
+        if not all(math.isfinite(x) for x in (gross, fee, received)) or received <= 0:
+            raise ValueError("Invalid PAPER currency conversion")
+        self.cash_by_currency[source] = max(0.0, self.balance(source) - amount)
+        self.cash_by_currency[target] = self.balance(target) + received
+        self._sync_cash()
+        self._persist()
+        return {"from": source, "to": target, "spent": amount, "received": received,
+                "fee": fee, "rate": rate}
+
     def buy(self, symbol, quote, price, currency="EUR"):
         symbol = self._validate_symbol(symbol)
         currency = str(currency).upper()
