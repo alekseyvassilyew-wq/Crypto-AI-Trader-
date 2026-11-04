@@ -46,7 +46,7 @@ def _ensure_schema(db):
 
 def store_candles(db, symbol, candles, interval="60"):
     """Upsert validated, closed OHLCV candles; retain up to two years."""
-    symbol = str(symbol).strip().upper()
+    symbol = str(symbol).strip().upper().replace("/", "")
     if not symbol:
         raise ValueError("Research candle symbol must not be empty")
     normalized = []
@@ -148,7 +148,7 @@ def save_research_failure(db, symbol, source, error):
             """INSERT INTO ml_research_runs
                (created_at,symbol,source,outcome,reasons_json,report_json)
                VALUES(?,?,?,?,?,?)""",
-            (now, str(symbol).strip().upper(), str(source), "INSUFFICIENT_DATA",
+            (now, str(symbol).strip().upper().replace("/", ""), str(source), "INSUFFICIENT_DATA",
              json.dumps(reasons), json.dumps({"error": reasons[0]})),
         )
 
