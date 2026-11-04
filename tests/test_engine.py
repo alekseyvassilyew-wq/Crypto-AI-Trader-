@@ -112,7 +112,7 @@ def test_full_market_scan_monitors_all_pairs_but_analyzes_only_eur_budget(tmp_pa
 
     def fake_scan_one(symbol, tickers=None):
         analyzed.append(symbol)
-        return {"symbol": symbol, "signal": "HOLD", "score": 1, "price": 99, "spread_bps": 10, "turnover": 50000, "reasons": []}
+        return {"symbol": symbol, "signal": "HOLD", "score": 1, "price": 99, "spread_bps": 10, "turnover": 50000, "ohlc_analyzed": True, "reasons": []}
 
     engine.scan_one = fake_scan_one
     rows = engine.scan()
@@ -124,4 +124,9 @@ def test_full_market_scan_monitors_all_pairs_but_analyzes_only_eur_budget(tmp_pa
     assert by_symbol["ETHUSD"]["signal"] == "HOLD"
     assert "Monitored only" in by_symbol["ETHUSD"]["reasons"][0]
     assert "deferred" in by_symbol["ETHEUR"]["reasons"][0]
+
+    # The next scan rotates to the next eligible EUR pair instead of
+    # repeatedly analyzing the highest-turnover pair.
+    engine.scan()
+    assert analyzed == ["XBTEUR", "ETHEUR"]
     db.close()
