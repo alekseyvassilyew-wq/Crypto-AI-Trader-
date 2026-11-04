@@ -23,6 +23,7 @@ def test_research_candidate_is_walk_forward_and_shadow_only():
     assert len(result["walk_forward"]) == 3
     assert result["samples"] > 300
     assert result["model"]["feature_names"] == list(FEATURE_NAMES)
+    assert result["model"]["architecture"] == "7-8-1"
     assert "warning" in result
     assert "research_pass" in result
     assert 0 <= predict_probability(result["model"], [0.01] * len(FEATURE_NAMES)) <= 1
