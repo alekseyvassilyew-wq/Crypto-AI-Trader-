@@ -398,6 +398,10 @@ def research_candidate(rows, *, horizon=3, fee_rate=0.0026, slippage_bps=5.0,
     if aggregate["net_return_pct"] <= always_long_oos["net_return_pct"]:
         reason_codes.append("DOES_NOT_BEAT_ALWAYS_LONG")
         rejection_reasons.append("Модель не превзошла базовый benchmark BUY-AND-HOLD на walk-forward OOS")
+    always_long_holdout = benchmarks["independent_holdout"]["always_long"]
+    if independent_holdout["net_return_pct"] <= always_long_holdout["net_return_pct"]:
+        reason_codes.append("DOES_NOT_BEAT_ALWAYS_LONG_HOLDOUT")
+        rejection_reasons.append("Модель не превзошла BUY-AND-HOLD на независимом holdout")
     if positive_folds < 2:
         reason_codes.append("UNSTABLE_WALK_FORWARD")
         rejection_reasons.append(f"Нестабильные фолды: положительных {positive_folds} из 3")
