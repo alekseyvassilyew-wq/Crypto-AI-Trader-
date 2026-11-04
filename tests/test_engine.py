@@ -81,10 +81,14 @@ def test_daily_loss_limit_pauses_engine(tmp_path):
     db.close()
 
 
-def test_engine_starts_paused_after_restart(tmp_path):
+def test_engine_starts_paused_but_keeps_read_only_market_monitoring(tmp_path):
     engine, db = make_engine(tmp_path)
     assert engine.paused is True
     assert engine.cycle() == []
+    assert engine.last_scan_at is not None
+    assert engine.last_signals
+    assert engine.paper.cash == 20
+    assert engine.paper.positions == {}
     db.close()
 
 
