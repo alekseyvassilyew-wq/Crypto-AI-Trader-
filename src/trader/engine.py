@@ -40,13 +40,14 @@ def select_ohlc_markets(eligible, analysis_limit, cursor=0, priority_symbols=())
             selected.add(match)
             if len(selected) >= limit:
                 break
+    priority_count = len(selected)
     ordered = markets[cursor:] + markets[:cursor]
     for _, symbol, quote in ordered:
         if len(selected) >= limit:
             break
         selected.add((symbol, quote))
     next_cursor = (cursor + limit) % len(markets)
-    return selected, next_cursor, len(selected.intersection(set(by_symbol.values())))
+    return selected, next_cursor, priority_count
 
 
 def fresh_fx_rates_from_market(settings, market_pairs, ticker_data, prices):
