@@ -121,7 +121,7 @@ class Engine:
                 "price": last, "spread_bps": spread, "turnover": turnover, "turnover_eur": turnover_eur,
                 "reasons": [f"Candle data unavailable: {type(exc).__name__}"],
             }
-        result.update(symbol=symbol, price=last or result.get("price", 0), spread_bps=spread, turnover=turnover, turnover_eur=turnover_eur, quote=quote_currency)
+        result.update(symbol=symbol, price=last or result.get("price", 0), bid=bid, ask=ask, spread_bps=spread, turnover=turnover, turnover_eur=turnover_eur, quote=quote_currency)
         if spread > self.s.max_spread_bps:
             result["signal"] = "HOLD"
             result["reasons"].append("Spread too wide")
@@ -175,6 +175,7 @@ class Engine:
                     results_by_symbol[symbol] = {
                         "symbol": symbol, "signal": "HOLD", "score": 0,
                         "price": float(ticker.get("lastPrice") or 0),
+                        "bid": bid, "ask": ask,
                         "spread_bps": spread, "turnover": turnover, "turnover_eur": 0.0, "quote": quote,
                         "reasons": [f"Monitored only; no EUR conversion route for {quote}"],
                     }
@@ -256,13 +257,16 @@ class Engine:
             if not price:
                 continue
             entry = pos["avg_price"]
+            quote_row = next((item for item in results if item.get("symbol") == symbol), {})
+            # Stops and exits must use the executable bid, not the last-traded price.
+            exit_price = float(quote_row.get("bid") or price)
             peak = self.paper.update_peak(symbol, price)
-            change_pct = (price / entry - 1) * 100
+            change_pct = (exit_price / entry - 1) * 100
             peak_gain_pct = (peak / entry - 1) * 100
             trailing_pct = float(getattr(self.s, "trailing_stop_pct", 1.5))
             trailing_trigger = (
                 peak_gain_pct > 0
-                and price <= peak * (1.0 - trailing_pct / 100.0)
+                and exit_price <= peak * (1.0 - trailing_pct / 100.0)
             )
             reason = (
                 "STOP_LOSS" if change_pct <= -self.s.stop_loss_pct
@@ -271,10 +275,9 @@ class Engine:
                 else None
             )
             if reason:
-                fill = self.paper.sell(symbol, pos["qty"], price)
-                save_trade(self.db, "PAPER", symbol, "Sell", fill["qty"], fill["quote"], fill["fee"], price, "FILLED")
-                gross_cost = pos["qty"] * entry
-                realized_pct = (price / entry - 1) * 100
+                fill = self.paper.sell(symbol, pos["qty"], exit_price)
+                save_trade(self.db, "PAPER", symbol, "Sell", fill["qty"], fill["quote"], fill["fee"], fill["price"], "FILLED")
+                realized_pct = (exit_price / entry - 1) * 100
                 audit(
                     self.db, reason,
                     f"{symbol} entry={entry:.10g} peak={peak:.10g} "
@@ -351,7 +354,9 @@ class Engine:
                 if allocation <= 0:
                     audit(self.db, "ENTRY_SKIPPED", f"{signal['symbol']}: no PAPER funds in {quote_currency}")
                     continue
-                fill = self.paper.buy(signal["symbol"], allocation, signal["price"], currency=quote_currency)
+                # A PAPER buy crosses the spread and therefore fills at ask.
+                entry_price = float(signal.get("ask") or signal["price"])
+                fill = self.paper.buy(signal["symbol"], allocation, entry_price, currency=quote_currency)
                 save_trade(self.db, "PAPER", signal["symbol"], "Buy", fill["qty"], fill["quote"], fill["fee"], fill["price"], "FILLED")
                 actions.append(f"{signal['symbol']} BUY {fill['qty']:.8f} @ {fill['price']}")
             except (ValueError, PermissionError) as exc:
