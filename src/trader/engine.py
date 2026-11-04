@@ -23,7 +23,14 @@ class Engine:
         day = datetime.now(timezone.utc).date().isoformat()
         state = get_state(self.db, "daily", {})
         if state.get("date") != day:
-            set_state(self.db, "daily", {"date": day, "start_equity": self.paper.equity(self.last_prices, self._fx_rates(self.last_prices)), "realized": 0.0})
+            saved_rates = get_state(self.db, "paper_fx_rates", {"EUR": 1.0})
+            if not isinstance(saved_rates, dict):
+                saved_rates = {"EUR": 1.0}
+            set_state(self.db, "daily", {
+                "date": day,
+                "start_equity": self.paper.equity(self.last_prices, saved_rates),
+                "realized": 0.0,
+            })
 
     def start(self):
         self.paused = False
@@ -101,6 +108,11 @@ class Engine:
             ticker_by_symbol = {item["symbol"]: item for item in tickers}
             analysis_limit = max(1, int(getattr(self.s, "max_candle_pairs", 10)))
 
+            snapshot_prices = {
+                item["symbol"]: float(item.get("lastPrice") or 0)
+                for item in tickers if float(item.get("lastPrice") or 0) > 0
+            }
+            fx_rates = self._fx_rates(snapshot_prices)
             eligible = []
             results_by_symbol = {}
             for pair in pairs:
@@ -118,11 +130,12 @@ class Engine:
                 bid, ask = float(ticker.get("bid1Price") or 0), float(ticker.get("ask1Price") or 0)
                 spread = (ask - bid) / ((ask + bid) / 2) * 10000 if bid > 0 and ask > 0 else 999999
                 turnover = float(ticker.get("turnover24h") or 0)
+                turnover_eur = turnover * fx_rates.get(quote, 0.0)
                 if self.paper.balance(quote) <= 0:
                     results_by_symbol[symbol] = {
                         "symbol": symbol, "signal": "HOLD", "score": 0,
                         "price": float(ticker.get("lastPrice") or 0),
-                        "spread_bps": spread, "turnover": turnover, "quote": quote,
+                        "spread_bps": spread, "turnover": turnover, "turnover_eur": turnover_eur, "quote": quote,
                         "reasons": [f"Monitored only; no free PAPER {quote} balance"],
                     }
                 elif spread > self.s.max_spread_bps:
@@ -132,15 +145,15 @@ class Engine:
                         "spread_bps": spread, "turnover": turnover, "quote": quote,
                         "reasons": ["Spread too wide"],
                     }
-                elif turnover < self.s.min_turnover:
+                elif turnover_eur < self.s.min_turnover:
                     results_by_symbol[symbol] = {
                         "symbol": symbol, "signal": "HOLD", "score": 0,
                         "price": float(ticker.get("lastPrice") or 0),
                         "spread_bps": spread, "turnover": turnover, "quote": quote,
-                        "reasons": ["Turnover too low"],
+                        "reasons": ["Turnover too low or no EUR conversion rate"],
                     }
                 else:
-                    eligible.append((turnover, symbol, quote))
+                    eligible.append((turnover_eur, symbol, quote))
 
             # Monitor every Kraken spot market through tickers. Rotate the
             # limited OHLC budget across all funded quote currencies.
@@ -154,6 +167,7 @@ class Engine:
                 if (symbol, quote) in selected:
                     result = self.scan_one(symbol, [ticker_by_symbol[symbol]])
                     result["quote"] = quote
+                    result["turnover_eur"] = float(result.get("turnover") or 0) * fx_rates.get(quote, 0.0)
                     results_by_symbol[symbol] = result
                 else:
                     ticker = ticker_by_symbol[symbol]
@@ -166,6 +180,7 @@ class Engine:
                         "price": float(ticker.get("lastPrice") or 0),
                         "spread_bps": spread,
                         "turnover": float(ticker.get("turnover24h") or 0),
+                        "turnover_eur": float(ticker.get("turnover24h") or 0) * fx_rates.get(quote, 0.0),
                         "quote": quote,
                         "reasons": ["Ticker monitored; OHLC analysis deferred by rotating scan budget"],
                     }
@@ -187,6 +202,7 @@ class Engine:
             self.last_scan_at = datetime.now(timezone.utc)
             self.last_prices = {x["symbol"]: float(x.get("price") or 0) for x in results if float(x.get("price") or 0) > 0}
             self.last_signals = results
+            set_state(self.db, "paper_fx_rates", self._fx_rates(self.last_prices))
         except Exception as exc:
             # Never trade on partial or stale market data after an exchange failure.
             audit(self.db, "SCAN_FAILED", f"{type(exc).__name__}: {exc}")
@@ -220,7 +236,7 @@ class Engine:
             if len(self.paper.positions) >= self.s.max_positions:
                 break
             try:
-                check_order(self.s.max_trade, signal["spread_bps"], signal["turnover"], len(self.paper.positions),
+                check_order(self.s.max_trade, signal["spread_bps"], signal.get("turnover_eur", signal["turnover"]), len(self.paper.positions),
                             self.daily_pnl(prices), self.limits)
                 quote_to_eur = self._fx_rates(prices).get(quote_currency)
                 if not quote_to_eur or quote_to_eur <= 0:
