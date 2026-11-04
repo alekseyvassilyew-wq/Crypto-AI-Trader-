@@ -101,6 +101,7 @@ def test_engine_starts_paused_but_keeps_monitoring_without_seed_or_trading(tmp_p
 
 def test_full_market_scan_monitors_all_pairs_and_can_analyze_non_eur_markets(tmp_path):
     engine, db = make_engine(tmp_path)
+    engine.s.watchlist = ()
     engine.s.trade_quote_currency = "EUR"
     engine.s.max_candle_pairs = 1
 
@@ -144,6 +145,7 @@ def test_full_market_scan_monitors_all_pairs_and_can_analyze_non_eur_markets(tmp
 
 def test_rotating_scan_covers_multiple_funded_quote_currencies(tmp_path):
     engine, db = make_engine(tmp_path)
+    engine.s.watchlist = ()
     engine.paper.cash_by_currency["USD"] = 20
     engine.s.max_candle_pairs = 1
     class MultiQuoteExchange:
