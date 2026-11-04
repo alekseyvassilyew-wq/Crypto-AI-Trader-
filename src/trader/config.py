@@ -57,7 +57,7 @@ def load_settings():
         fee_rate=float(os.getenv("PAPER_FEE_RATE", "0.0026")),
         watchlist=tuple(x.strip().upper().replace("/", "") for x in os.getenv("WATCHLIST", "").split(",") if x.strip()),
         trade_quote_currency=os.getenv("TRADE_QUOTE_CURRENCY", "EUR").strip().upper(),
-        max_candle_pairs=int(os.getenv("MAX_CANDLE_PAIRS", "10")),
+        max_candle_pairs=int(os.getenv("MAX_CANDLE_PAIRS", "20")),
         enable_multi_timeframe=os.getenv("ENABLE_MULTI_TIMEFRAME", "true").strip().lower() in ("1", "true", "yes", "on"),
         ml_auto_research_markets=int(os.getenv("ML_AUTO_RESEARCH_MARKETS", "3")),
         scan_interval=int(os.getenv("SCAN_INTERVAL_SECONDS", "60")),
