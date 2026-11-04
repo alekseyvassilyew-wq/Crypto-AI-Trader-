@@ -118,7 +118,7 @@ class Engine:
         except Exception as exc:
             return {
                 "symbol": symbol, "signal": "HOLD", "score": 0,
-                "price": last, "spread_bps": spread, "turnover": turnover, "turnover_eur": turnover_eur,
+                "price": last, "bid": bid, "ask": ask, "spread_bps": spread, "turnover": turnover, "turnover_eur": turnover_eur,
                 "reasons": [f"Candle data unavailable: {type(exc).__name__}"],
             }
         result.update(symbol=symbol, price=last or result.get("price", 0), bid=bid, ask=ask, spread_bps=spread, turnover=turnover, turnover_eur=turnover_eur, quote=quote_currency)
@@ -183,6 +183,7 @@ class Engine:
                     results_by_symbol[symbol] = {
                         "symbol": symbol, "signal": "HOLD", "score": 0,
                         "price": float(ticker.get("lastPrice") or 0),
+                        "bid": bid, "ask": ask,
                         "spread_bps": spread, "turnover": turnover, "quote": quote,
                         "reasons": ["Spread too wide"],
                     }
@@ -219,6 +220,7 @@ class Engine:
                     results_by_symbol[symbol] = {
                         "symbol": symbol, "signal": "HOLD", "score": 0,
                         "price": float(ticker.get("lastPrice") or 0),
+                        "bid": bid, "ask": ask,
                         "spread_bps": spread,
                         "turnover": float(ticker.get("turnover24h") or 0),
                         "turnover_eur": float(ticker.get("turnover24h") or 0) * fx_rates.get(quote, 0.0),
