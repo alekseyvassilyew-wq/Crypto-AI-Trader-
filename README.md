@@ -69,7 +69,7 @@ python -m src.trader.main
 - Max daily simulated equity loss: €2
 - Max open positions: 2
 - Market monitoring: all online Kraken Spot pairs (auto-discovered hourly)
-- Indicator/OHLC analysis: up to 10 liquid markets per scan with a valid EUR valuation route; the rotating cursor spreads coverage across the universe
+- Indicator/OHLC analysis: up to 20 liquid markets per scan with a valid EUR valuation route; the rotating cursor spreads coverage across the universe
 - PAPER entries: markets with an available EUR valuation route; quote cash may be funded through simulated FX conversions. Initial USD/USDT balances are virtual allocations, not copies of the real Kraken wallet
 - Scan interval: 60 seconds
 - Simulated fee estimate: 0.26%
@@ -94,6 +94,6 @@ These are configurable simulation assumptions, not recommendations. Verify Krake
 
 - No LIVE mode, order placement, or demo-order execution is implemented in this ZIP. Do not change the mode variable expecting real trades.
 - The production entry strategy remains deterministic technical-indicator logic; the trained neural network is research-only and shadow-only, not an active trading strategy. Neither has been demonstrated profitable. The private Kraken balance check is read-only and does not import real holdings into PAPER. The PAPER wallet is a separate simulation. `/backtest SYMBOL` evaluates up to 720 available closed 1-hour candles for one market. `/backtest portfolio` evaluates at most five liquid markets on shared timestamps; it uses aligned Kraken EUR FX candles when a direct EUR pair exists; if historical FX data is unavailable, it falls back to the current rate and identifies that currency in the report. Neither command is evidence of future profitability.
-- Kraken market tickers are fetched for the complete online Spot universe. To keep REST usage controlled, OHLC indicators are calculated for at most `MAX_CANDLE_PAIRS` (default 10) eligible liquid pairs per cycle; the scan cursor rotates this budget. Markets without a valid EUR valuation route are monitored but cannot be considered for entries. A passing unit test suite does not verify live connectivity or permissions on your Kraken account.
+- Kraken market tickers are fetched for the complete online Spot universe. To keep REST usage controlled, OHLC indicators are calculated for at most `MAX_CANDLE_PAIRS` (default 20) eligible liquid pairs per cycle; the scan cursor rotates this budget. Markets without a valid EUR valuation route are monitored but cannot be considered for entries. A passing unit test suite does not verify live connectivity or permissions on your Kraken account.
 - `/interval` changes the in-memory scan interval until service restart; it does not reconfigure Render scheduling.
 - A single SQLite-backed worker is intended. Do not scale to multiple instances.
