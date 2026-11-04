@@ -178,6 +178,7 @@ def build_app(s, engine, exchange):
                     engine.last_ticker_data = by_symbol
                     prices = {x["symbol"]: float(x.get("lastPrice") or 0) for x in tickers if float(x.get("lastPrice") or 0) > 0}
                     fx_rates = engine._fresh_fx_rates(prices)
+                    fx_buy_rates = engine._fresh_fx_buy_rates(prices)
                     eligible = []
                     for pair in pairs:
                         ticker = by_symbol.get(pair["symbol"])
@@ -218,6 +219,7 @@ def build_app(s, engine, exchange):
                     # If Kraken has no direct EUR market, the backtester explicitly
                     # falls back to the current snapshot rate for that currency.
                     dated_fx_by_timestamp = {}
+                    dated_fx_buy_by_timestamp = {}
                     fx_fallback = []
                     for currency in sorted(set(quote_currencies.values()) - {"EUR"}):
                         fx_pair = next(
@@ -239,6 +241,9 @@ def build_app(s, engine, exchange):
                                 dated_fx_by_timestamp.setdefault(row[0], {"EUR": 1.0})[currency] = (
                                     row[4] if direct else 1.0 / row[4]
                                 )
+                                dated_fx_buy_by_timestamp.setdefault(row[0], {"EUR": 1.0})[currency] = (
+                                    1.0 / row[4] if direct else row[4]
+                                )
                                 matched_fx_timestamps.add(row[0])
                             if len(matched_fx_timestamps) < len(common):
                                 fx_fallback.append(currency)
@@ -250,6 +255,8 @@ def build_app(s, engine, exchange):
                         quote_currencies=quote_currencies,
                         fx_rates=fx_rates,
                         fx_rates_by_timestamp=dated_fx_by_timestamp,
+                        fx_buy_rates=fx_buy_rates,
+                        fx_buy_rates_by_timestamp=dated_fx_buy_by_timestamp,
                         initial_cash_eur=s.paper_start,
                         max_trade_eur=s.max_trade,
                         max_positions=s.max_positions,
