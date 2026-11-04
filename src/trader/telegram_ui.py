@@ -416,21 +416,21 @@ def build_app(s, engine, exchange):
             if inventory["asset_count"] == 0:
                 body = "Положительных остатков не найдено. Баланс: 0 активов / 0.00 EUR."
             else:
-                body = "\\n".join(lines)
+                body = "\n".join(lines)
                 if inventory["total_complete"]:
-                    body += f'\\n\\nИТОГО: {inventory["total_eur"]:.2f} EUR'
+                    body += f'\n\nИТОГО: {inventory["total_eur"]:.2f} EUR'
                 else:
                     body += (
-                        "\\n\\nПолная оценка в EUR пока невозможна. "
+                        "\n\nПолная оценка в EUR пока невозможна. "
                         "Нет свежего прямого EUR-курса для: "
                         + ", ".join(inventory["unknown_assets"])
                         + f'. Известная часть: {inventory["known_total_eur"]:.2f} EUR.'
                     )
 
             await update.effective_message.reply_text(
-                "🏦 РЕАЛЬНЫЙ БАЛАНС KRAKEN\\n"
+                "🏦 РЕАЛЬНЫЙ БАЛАНС KRAKEN\n"
                 + body
-                + "\\n\\nТолько чтение. Реальные средства не импортируются в виртуальный PAPER-кошелёк. "
+                + "\n\nТолько чтение. Реальные средства не импортируются в виртуальный PAPER-кошелёк. "
                 "Реальные ордера отключены."
             )
         except Exception as exc:
