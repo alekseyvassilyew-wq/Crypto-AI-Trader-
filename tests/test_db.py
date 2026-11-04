@@ -1,3 +1,4 @@
+import pytest
 from datetime import datetime, timedelta, timezone
 
 from src.trader.db import connect, get_paper_metrics, save_paper_snapshot
