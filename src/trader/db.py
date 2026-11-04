@@ -1,7 +1,9 @@
 import json
 import math
+import os
 import sqlite3
 from pathlib import Path
+from datetime import datetime, timezone
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY, ts TEXT DEFAULT CURRENT_TIMESTAMP, event TEXT NOT NULL, details TEXT);
@@ -53,6 +55,50 @@ def connect(path):
     if "model_version" not in columns:
         db.execute("ALTER TABLE ml_shadow_predictions ADD COLUMN model_version TEXT NOT NULL DEFAULT ''")
     return db
+
+
+def backup_database(db, backup_dir, keep=7):
+    """Create and verify an atomic SQLite backup, retaining the newest backups."""
+    if isinstance(keep, bool) or not isinstance(keep, int) or keep < 1:
+        raise ValueError("Backup retention must be a positive integer")
+    directory = Path(backup_dir).expanduser()
+    directory.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    destination = directory / f"crypto_ai_trader_{timestamp}.sqlite3"
+    temporary = destination.with_suffix(destination.suffix + ".tmp")
+
+    source_check = db.execute("PRAGMA quick_check").fetchone()
+    if not source_check or source_check[0] != "ok":
+        raise RuntimeError("Source SQLite database failed quick_check")
+
+    target = None
+    try:
+        target = sqlite3.connect(str(temporary), timeout=30)
+        db.backup(target)
+        target_check = target.execute("PRAGMA integrity_check").fetchone()
+        if not target_check or target_check[0] != "ok":
+            raise RuntimeError("SQLite backup failed integrity_check")
+        target.close()
+        target = None
+        os.replace(temporary, destination)
+    except Exception:
+        if target is not None:
+            target.close()
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+    backups = sorted(
+        directory.glob("crypto_ai_trader_*.sqlite3"),
+        key=lambda item: item.stat().st_mtime,
+        reverse=True,
+    )
+    for obsolete in backups[keep:]:
+        obsolete.unlink(missing_ok=True)
+    return str(destination)
+
 
 def audit(db, event, details=""):
     with db:
