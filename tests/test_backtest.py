@@ -170,7 +170,7 @@ def test_buy_and_hold_benchmark_starts_at_first_strategy_entry():
 
 def test_final_candle_high_activates_trailing_stop_before_intrabar_low():
     rows = candles(62)
-    rows[61] = [61.0, 100.0, 110.0, 104.0, 105.0, 1000.0]
+    rows[61] = [61.0, 100.0, 110.0, 100.0, 105.0, 1000.0]
     result = run_backtest(
         rows, initial_cash=100, max_trade=20, fee_rate=0,
         slippage_bps=0, stop_loss_pct=20, take_profit_pct=50,
