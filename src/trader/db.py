@@ -176,6 +176,13 @@ def record_shadow_prediction(db, *, symbol, model_version='', signal_ts, target_
             "VALUES(?,?,?,?,?,?,?)",
             (symbol, str(model_version), signal_ts, target_ts, probability, threshold, entry_price),
         )
+        # Keep 90 days of settled model telemetry; preserve unresolved rows so
+        # a temporarily unavailable market feed cannot erase pending outcomes.
+        db.execute(
+            "DELETE FROM ml_shadow_predictions "
+            "WHERE realized_return IS NOT NULL "
+            "AND signal_ts < CAST(strftime('%s','now') AS REAL) - 7776000"
+        )
     return True
 
 
