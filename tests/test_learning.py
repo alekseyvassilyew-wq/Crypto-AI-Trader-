@@ -178,6 +178,17 @@ def test_research_reports_unfitted_baselines_and_oos_ranking_metrics():
     assert ranking["independent_holdout_roc_auc"] is None or 0 <= ranking["independent_holdout_roc_auc"] <= 1
     assert "benchmark_metrics" in result
     reason_codes = set(result["diagnostics"]["reason_codes"])
+    assert ("DOES_NOT_BEAT_MOMENTUM_OOS" in reason_codes) == (
+        result["out_of_sample"]["net_return_pct"]
+        <= benchmarks["walk_forward_oos"]["positive_24h_momentum"]["net_return_pct"]
+    )
+    assert ("DOES_NOT_BEAT_MOMENTUM_HOLDOUT" in reason_codes) == (
+        result["independent_holdout"]["net_return_pct"]
+        <= benchmarks["independent_holdout"]["positive_24h_momentum"]["net_return_pct"]
+    )
+    assert ("HOLDOUT_DRAWDOWN_TOO_HIGH" in reason_codes) == (
+        result["independent_holdout"]["max_drawdown_pct"] > 15.0
+    )
     assert ("DOES_NOT_BEAT_ALWAYS_LONG" in reason_codes) == (
         result["out_of_sample"]["net_return_pct"]
         <= benchmarks["walk_forward_oos"]["always_long"]["net_return_pct"]
