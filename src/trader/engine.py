@@ -43,16 +43,19 @@ class Engine:
         self.scan_interval_seconds = self.s.scan_interval
         audit(self.db, "PAPER_STOPPED", reason)
 
-    def _fx_rates(self, prices=None):
-        """Build quote-currency to EUR conversion rates from discovered spot markets."""
+    def _fresh_fx_rates(self, prices=None):
+        """Build EUR conversion routes using only the current market snapshot."""
         prices = prices or self.last_prices
         graph = {}
         for pair in self.market_pairs:
             base = str(pair.get("base") or "").upper()
             quote = str(pair.get("quote") or "").upper()
             symbol = pair.get("symbol")
-            price = float(prices.get(symbol) or 0) if symbol else 0
-            if not base or not quote or price <= 0:
+            try:
+                price = float(prices.get(symbol) or 0) if symbol else 0.0
+            except (TypeError, ValueError, OverflowError):
+                price = 0.0
+            if not base or not quote or not math.isfinite(price) or price <= 0:
                 continue
             graph.setdefault(base, {})[quote] = price
             graph.setdefault(quote, {})[base] = 1.0 / price
@@ -65,8 +68,15 @@ class Engine:
                     continue
                 rates[source] = edges[target] * rates[target]
                 queue.append(source)
-        # After a restart the exchange universe has not been scanned yet.
-        # Retain the last validated FX snapshot until fresh ticker routes exist.
+        return rates
+
+    def _fx_rates(self, prices=None):
+        """Build valuation rates; saved rates are valuation-only fallbacks.
+
+        New PAPER conversions must use _fresh_fx_rates so an old cached rate
+        can never authorize a new trade.
+        """
+        rates = self._fresh_fx_rates(prices)
         saved_rates = get_state(self.db, "paper_fx_rates", {})
         if isinstance(saved_rates, dict):
             for currency, raw_rate in saved_rates.items():
@@ -78,6 +88,28 @@ class Engine:
                     rates.setdefault(str(currency).upper(), rate)
         rates["EUR"] = 1.0
         return rates
+
+    def _save_cycle_snapshot(self, results, prices):
+        """Persist successful PAPER telemetry after positions and cash are updated."""
+        try:
+            deferred = "Ticker monitored; OHLC analysis deferred by rotating scan budget"
+            unavailable = "Ticker unavailable"
+            analyzed = sum(
+                1 for item in results
+                if not any(deferred in str(reason) or unavailable in str(reason)
+                           for reason in item.get("reasons", []))
+            )
+            save_paper_snapshot(
+                self.db,
+                ts=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                equity_eur=self.paper.equity(prices, self._fx_rates(prices)),
+                cash=self.paper.cash_by_currency,
+                open_positions=len(self.paper.positions),
+                analyzed_markets=analyzed,
+                buy_signals=sum(1 for item in results if item.get("signal") == "BUY"),
+            )
+        except Exception as exc:
+            audit(self.db, "PAPER_SNAPSHOT_FAILED", f"{type(exc).__name__}: {exc}")
 
     def _seed_multicurrency_wallet(self, fx_rates):
         """Seed USD and USDT PAPER balances once, using virtual EUR conversions."""
@@ -346,6 +378,7 @@ class Engine:
                 )
                 actions.append(f"{symbol} SELL {reason} {realized_pct:.2f}%")
         if self.daily_pnl(prices) <= -self.s.max_daily_loss:
+            self._save_cycle_snapshot(results, prices)
             self.stop("Daily loss limit reached")
             return actions + ["DAILY LOSS LIMIT — paused"]
         # Rank BUY candidates by strategy score first, then liquidity in EUR.
@@ -366,6 +399,7 @@ class Engine:
                 break
             try:
                 rates = self._fx_rates(prices)
+                fresh_rates = self._fresh_fx_rates(prices)
                 equity_eur = self.paper.equity(prices, rates)
                 atr_percent = max(0.0, float(signal.get("atr_percent") or 0.0))
                 stop_distance_pct = max(float(self.s.stop_loss_pct), atr_percent * 1.5, 0.5)
@@ -373,9 +407,10 @@ class Engine:
                 trade_budget_eur = min(float(self.s.max_trade), risk_budget_eur / (stop_distance_pct / 100.0))
                 check_order(trade_budget_eur, signal["spread_bps"], signal.get("turnover_eur", signal["turnover"]), len(self.paper.positions),
                             self.daily_pnl(prices), self.limits)
-                quote_to_eur = rates.get(quote_currency)
+                # Cached rates may value the portfolio but must never fund a new trade.
+                quote_to_eur = fresh_rates.get(quote_currency)
                 if not quote_to_eur or quote_to_eur <= 0:
-                    audit(self.db, "ENTRY_SKIPPED", f"{signal['symbol']}: no EUR valuation rate for {quote_currency}")
+                    audit(self.db, "ENTRY_SKIPPED", f"{signal['symbol']}: no fresh EUR conversion route for {quote_currency}")
                     continue
                 # Autonomously route existing PAPER cash into the market's
                 # quote currency when needed. Convert only enough to reach the
@@ -389,7 +424,7 @@ class Engine:
                          if currency != quote_currency and amount > 1e-12),
                         key=lambda currency: (currency != "EUR", currency),
                     ):
-                        source_to_eur = rates.get(source_currency)
+                        source_to_eur = fresh_rates.get(source_currency)
                         if not source_to_eur or source_to_eur <= 0:
                             continue
                         # Conversion fee is charged in the destination currency.
@@ -427,4 +462,5 @@ class Engine:
                 actions.append(f"{signal['symbol']} BUY {fill['qty']:.8f} @ {fill['price']}")
             except (ValueError, PermissionError) as exc:
                 audit(self.db, "ENTRY_SKIPPED", f"{signal['symbol']}: {exc}")
+        self._save_cycle_snapshot(results, prices)
         return actions
