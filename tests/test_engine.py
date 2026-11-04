@@ -588,3 +588,15 @@ def test_open_position_equity_uses_bid_not_last_trade(tmp_path):
         - get_state(db, "daily")["start_equity"]
     )
     db.close()
+
+
+def test_fresh_fx_does_not_route_through_an_unstable_crypto_bridge(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.market_pairs = [
+        {"symbol": "XBTEUR", "base": "XBT", "quote": "EUR"},
+        {"symbol": "XBTUSD", "base": "XBT", "quote": "USD"},
+    ]
+    rates = engine._fresh_fx_rates({"XBTEUR": 60000, "XBTUSD": 65000})
+    assert rates["XBT"] == pytest.approx(60000)
+    assert "USD" not in rates
+    db.close()
