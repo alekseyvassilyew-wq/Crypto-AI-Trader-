@@ -600,3 +600,25 @@ def test_fresh_fx_does_not_route_through_an_unstable_crypto_bridge(tmp_path):
     assert rates["XBT"] == pytest.approx(60000)
     assert "USD" not in rates
     db.close()
+
+
+def test_fresh_fx_rejects_wide_spread_direct_eur_market(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.market_pairs = [{"symbol": "USDZEUR", "base": "USD", "quote": "EUR"}]
+    engine.last_ticker_data = {
+        "USDZEUR": {"bid1Price": 0.89, "ask1Price": 0.90, "turnover24h": 100000}
+    }
+    rates = engine._fresh_fx_rates({"USDZEUR": 0.895})
+    assert "USD" not in rates
+    db.close()
+
+
+def test_fresh_fx_rejects_illiquid_direct_eur_market(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.market_pairs = [{"symbol": "USDZEUR", "base": "USD", "quote": "EUR"}]
+    engine.last_ticker_data = {
+        "USDZEUR": {"bid1Price": 0.8999, "ask1Price": 0.9001, "turnover24h": 500}
+    }
+    rates = engine._fresh_fx_rates({"USDZEUR": 0.9})
+    assert "USD" not in rates
+    db.close()
