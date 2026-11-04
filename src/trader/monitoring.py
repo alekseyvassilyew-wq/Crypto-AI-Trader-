@@ -95,8 +95,6 @@ def format_monitor_status(settings, state: dict) -> str:
     if state.get("last_poll_at"):
         lines.append(f"Последний завершённый цикл мониторинга: {state['last_poll_at']}")
         lines.append(f"Новых событий в последнем цикле: {int(state.get('last_events_count') or 0)}")
-    if state.get("last_alert_delivery_at"):
-        lines.append(f"Последняя отправка уведомления: {state['last_alert_delivery_at']}")
     lines.append("API-ключи не отображаются. Доставка считается успешной только после ответа Telegram.")
     return "\n".join(lines)
 
