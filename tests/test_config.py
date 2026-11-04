@@ -46,6 +46,7 @@ def test_mtf_and_conservative_risk_budget_are_enabled_by_default(monkeypatch):
     settings = load_settings()
     assert settings.enable_multi_timeframe is True
     assert settings.risk_per_trade_pct == 0.5
+    assert settings.ml_auto_research_markets == 3
 
 
 def test_excessive_per_trade_risk_budget_is_rejected(monkeypatch):
@@ -53,4 +54,12 @@ def test_excessive_per_trade_risk_budget_is_rejected(monkeypatch):
     monkeypatch.setenv("ADMIN_ID", "123")
     monkeypatch.setenv("RISK_PER_TRADE_PERCENT", "3")
     with pytest.raises(ValueError, match="must not exceed"):
+        load_settings()
+
+
+def test_automatic_research_market_limit_is_bounded(monkeypatch):
+    monkeypatch.setenv("BOT_TOKEN", "token")
+    monkeypatch.setenv("ADMIN_ID", "123")
+    monkeypatch.setenv("ML_AUTO_RESEARCH_MARKETS", "6")
+    with pytest.raises(ValueError, match="must not exceed 5"):
         load_settings()
