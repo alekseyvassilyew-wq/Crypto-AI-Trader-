@@ -542,8 +542,22 @@ class Engine:
             self.stop(reason)
             return actions + ["FX_ROUTE_MISSING — PAPER paused"]
         if self.daily_pnl(prices) <= -self.s.max_daily_loss:
+            # A daily-loss kill switch must not leave underwater positions
+            # unmanaged. Liquidate remaining PAPER holdings at executable bid,
+            # then pause all further entries.
+            for symbol, pos in list(self.paper.positions.items()):
+                quote_row = result_by_symbol[str(symbol).upper()]
+                exit_price = float(quote_row["bid"])
+                fill = self.paper.sell(symbol, pos["qty"], exit_price)
+                save_trade(self.db, "PAPER", symbol, "Sell", fill["qty"], fill["quote"], fill["fee"], fill["price"], "FILLED")
+                realized_pct = (exit_price / pos["avg_price"] - 1.0) * 100.0
+                audit(
+                    self.db, "DAILY_LOSS_LIQUIDATION",
+                    f"{symbol} qty={fill['qty']:.10g} bid={exit_price:.10g} change={realized_pct:.3f}%",
+                )
+                actions.append(f"{symbol} SELL DAILY_LOSS_LIMIT {realized_pct:.2f}%")
             self._save_cycle_snapshot(results, prices)
-            self.stop("Daily loss limit reached")
+            self.stop("Daily loss limit reached; remaining PAPER positions liquidated")
             return actions + ["DAILY LOSS LIMIT — paused"]
         # Rank BUY candidates by strategy score first, then liquidity in EUR.
         # This prevents exchange pair ordering from deciding capital allocation.
