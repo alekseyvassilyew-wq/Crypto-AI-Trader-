@@ -274,6 +274,13 @@ def run_portfolio_backtest(
         close(symbol, markets[symbol]["rows"][-1][4], last_timestamp, "END_OF_DATA")
     final_rates = rates_at(last_timestamp)
     final_equity = sum(amount * final_rates.get(currency, 0.0) for currency, amount in cash.items())
+    # Include final forced liquidation costs in both the equity curve and drawdown.
+    equity_curve.append({"timestamp": last_timestamp, "equity_eur": final_equity})
+    max_equity = max(max_equity, final_equity)
+    max_drawdown = max(
+        max_drawdown,
+        (max_equity - final_equity) / max_equity if max_equity else 0.0,
+    )
     net_pnl = final_equity - initial
     wins = [t for t in trades if t["net_pnl_eur"] > 0]
     losses = [t for t in trades if t["net_pnl_eur"] <= 0]
