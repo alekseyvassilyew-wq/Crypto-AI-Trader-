@@ -36,3 +36,5 @@ services:
         value: "10"
       - key: ENABLE_MULTI_TIMEFRAME
         value: "true"
+      - key: RISK_PER_TRADE_PERCENT
+        value: "0.5"
