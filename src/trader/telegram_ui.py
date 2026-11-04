@@ -335,7 +335,7 @@ def build_app(s, engine, exchange):
 
     async def learning(update, context):
         if not await authorized(update): return await deny(update)
-        from .db import get_state
+        from .db import get_state, get_shadow_metrics
         rows = engine.db.execute(
             "SELECT key FROM app_state WHERE key LIKE 'ml_candidate_%' ORDER BY updated_at DESC"
         ).fetchall()
@@ -345,11 +345,14 @@ def build_app(s, engine, exchange):
         for row in rows[:15]:
             item = get_state(engine.db, row["key"], {})
             metric = item.get("out_of_sample", {})
+            symbol = item.get("symbol", row["key"].replace("ml_candidate_", ""))
+            shadow = get_shadow_metrics(engine.db, symbol)
             lines.append(
-                f"{item.get('symbol', row['key'].replace('ml_candidate_', ''))}: "
-                f"{'PASS' if item.get('research_pass') else 'NOT PASS'} | "
+                f"{symbol}: {'PASS' if item.get('research_pass') else 'NOT PASS'} | "
                 f"{metric.get('net_return_pct', 0):+.2f}% OOS | "
-                f"PF {metric.get('profit_factor', 0)} | SHADOW ONLY"
+                f"PF {metric.get('profit_factor', 0)} | "
+                f"SHADOW {shadow['shadow_trades']} trades / {shadow['resolved_predictions']} resolved | "
+                f"{shadow['net_return_pct']:+.2f}% | SHADOW ONLY"
             )
         await update.effective_message.reply_text("\n".join(lines)[:3900])
 
