@@ -426,12 +426,10 @@ def build_app(s, engine, exchange):
                 log.exception("Could not send error notification to Telegram topic")
 
     app = Application.builder().token(s.bot_token).build()
-    # Run synchronous exchange/SQLite work in a worker thread to keep Telegram responsive.
-    import asyncio
-    class Runner:
-        @staticmethod
-        async def run(fn): return await asyncio.to_thread(fn)
-    app.bot_data["run_blocking"] = Runner
+    # Serialize all exchange/SQLite work: cycle jobs, scans and backtests share
+    # one requests.Session, engine state and SQLite connection.
+    from .worker import SerializedRunner
+    app.bot_data["run_blocking"] = SerializedRunner()
     for name, fn in [("start", start), ("status", status), ("scan", scan), ("account", account), ("backtest", backtest), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
                      ("run", run), ("pause", pause), ("stop", stop), ("help", help_cmd)]:
         app.add_handler(CommandHandler(name, fn))
