@@ -133,12 +133,12 @@ class Engine:
                 spread = (ask - bid) / ((ask + bid) / 2) * 10000 if bid > 0 and ask > 0 else 999999
                 turnover = float(ticker.get("turnover24h") or 0)
                 turnover_eur = turnover * fx_rates.get(quote, 0.0)
-                if self.paper.balance(quote) <= 0:
+                if self.paper.balance(quote) <= 0 and (self.paper.balance("EUR") <= 0 or fx_rates.get(quote, 0) <= 0):
                     results_by_symbol[symbol] = {
                         "symbol": symbol, "signal": "HOLD", "score": 0,
                         "price": float(ticker.get("lastPrice") or 0),
                         "spread_bps": spread, "turnover": turnover, "turnover_eur": turnover_eur, "quote": quote,
-                        "reasons": [f"Monitored only; no free PAPER {quote} balance"],
+                        "reasons": [f"Monitored only; no PAPER funds or EUR conversion rate for {quote}"],
                     }
                 elif spread > self.s.max_spread_bps:
                     results_by_symbol[symbol] = {
@@ -229,10 +229,7 @@ class Engine:
             self.stop("Daily loss limit reached")
             return actions + ["DAILY LOSS LIMIT — paused"]
         for signal in results:
-            # Only trade pairs funded by free cash in their quote currency.
             quote_currency = str(signal.get("quote", "EUR")).upper()
-            if self.paper.balance(quote_currency) <= 0:
-                continue
             if signal.get("signal") != "BUY" or signal["symbol"] in self.paper.positions:
                 continue
             if len(self.paper.positions) >= self.s.max_positions:
@@ -244,8 +241,18 @@ class Engine:
                 if not quote_to_eur or quote_to_eur <= 0:
                     audit(self.db, "ENTRY_SKIPPED", f"{signal['symbol']}: no EUR conversion rate for {quote_currency}")
                     continue
-                max_quote_allocation = float(self.s.max_trade) / quote_to_eur
-                allocation = min(max_quote_allocation, self.paper.balance(quote_currency) / 2.0)
+                if quote_currency == "EUR":
+                    allocation = min(float(self.s.max_trade), self.paper.balance("EUR") / 2.0)
+                else:
+                    # Convert only virtual PAPER cash at the live Kraken FX mark.
+                    # Keep at least half of the remaining EUR wallet uncommitted.
+                    eur_to_spend = min(float(self.s.max_trade), self.paper.balance("EUR") / 2.0)
+                    if eur_to_spend <= 0:
+                        continue
+                    conversion = self.paper.convert("EUR", quote_currency, eur_to_spend, 1.0 / quote_to_eur)
+                    audit(self.db, "PAPER_FX_CONVERSION",
+                          f"{conversion['from']}->{conversion['to']} spent={conversion['spent']:.8f} received={conversion['received']:.8f}")
+                    allocation = conversion["received"]
                 if allocation <= 0:
                     continue
                 fill = self.paper.buy(signal["symbol"], allocation, signal["price"], currency=quote_currency)
