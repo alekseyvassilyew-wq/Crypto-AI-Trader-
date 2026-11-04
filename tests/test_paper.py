@@ -99,6 +99,16 @@ def test_multi_currency_wallet_debits_and_credits_matching_quote_currency():
     assert broker.balance("USD") == pytest.approx(41.68)
     assert broker.cash == pytest.approx(20)
 
+ 
+ 
+def test_paper_currency_conversion_moves_virtual_cash_and_charges_fee():
+    broker = PaperBroker(balance=20, fee_rate=0.01)
+    converted = broker.convert("EUR", "USD", 10, 1.1)
+    assert converted["spent"] == pytest.approx(10)
+    assert converted["received"] == pytest.approx(10.89)
+    assert broker.balance("EUR") == pytest.approx(10)
+    assert broker.balance("USD") == pytest.approx(10.89)
+
 
 def test_multi_currency_equity_uses_fx_rates():
     broker = PaperBroker(balance=20)
