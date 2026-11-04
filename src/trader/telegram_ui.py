@@ -389,7 +389,7 @@ def build_app(s, engine, exchange):
             return await update.effective_message.reply_text("Использование: /learn XBTEUR — исследование модели на закрытых часовых свечах.")
         symbol = context.args[0].strip().upper().replace("/", "")
         await update.effective_message.reply_text(
-            f"🧠 Исследую {symbol}: обучаю модель и провожу 3 хронологических walk-forward проверки. "
+            f"🧠 Исследую {symbol}: 3 хронологических walk-forward проверки, независимый holdout и оценка bull/bear/sideways. "
             "Это не запускает и не меняет торговлю."
         )
         try:
