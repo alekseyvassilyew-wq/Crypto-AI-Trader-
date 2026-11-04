@@ -165,18 +165,22 @@ def run_backtest(
         # penultimate candle). Apply its stop/target before forced liquidation.
         last_ts, last_open, last_high, last_low, last_close, _ = rows[-1]
         stop_price = entry * (1.0 - stop_pct)
-        trail_price = peak * (1.0 - trail_pct) if peak > entry else 0.0
-        active_stop = max(stop_price, trail_price)
+        prior_trail = peak * (1.0 - trail_pct) if peak > entry else 0.0
+        prior_stop = max(stop_price, prior_trail)
         target_price = entry * (1.0 + target_pct)
-        if last_open <= active_stop:
-            reason, exit_price = ("STOP_LOSS" if active_stop == stop_price else "TRAILING_STOP"), last_open
+        if last_open <= prior_stop:
+            reason, exit_price = ("STOP_LOSS" if prior_stop == stop_price else "TRAILING_STOP"), last_open
         elif last_open >= target_price:
             reason, exit_price = "TAKE_PROFIT", last_open
-        elif last_low <= active_stop:
-            reason, exit_price = ("STOP_LOSS" if active_stop == stop_price else "TRAILING_STOP"), active_stop
-        elif last_high >= target_price:
-            reason, exit_price = "TAKE_PROFIT", target_price
         else:
+            peak = max(peak, last_high)
+            trail_price = peak * (1.0 - trail_pct) if peak > entry else 0.0
+            active_stop = max(stop_price, trail_price)
+            if last_low <= active_stop:
+                reason, exit_price = ("STOP_LOSS" if active_stop == stop_price else "TRAILING_STOP"), active_stop
+            elif last_high >= target_price:
+                reason, exit_price = "TAKE_PROFIT", target_price
+            else:
             # No protective exit was touched, but include the final candle's
             # high/low in worst-case drawdown before the forced close.
             intrabar_high_equity = cash + qty * last_high
