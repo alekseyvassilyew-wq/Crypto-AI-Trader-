@@ -573,10 +573,10 @@ def test_invalid_bid_ask_for_open_position_fails_closed(tmp_path):
 
 def test_strategy_sell_signal_closes_position_at_bid(tmp_path):
     engine, db = make_engine(tmp_path)
-    engine.paper.buy("XBTEUR", 5, 100.0)
+    engine.paper.buy("XBTEUR", 5, 100.0, quote_to_eur_rate=1.0)
     engine.scan = lambda **kwargs: [{
         "symbol": "XBTEUR", "quote": "EUR", "signal": "SELL", "score": 0,
-        "price": 101.0, "bid": 100.5, "ask": 100.6,
+        "price": 102.0, "bid": 102.0, "ask": 102.1,
         "spread_bps": 10, "turnover": 50000, "turnover_eur": 50000,
         "reasons": ["strategy exit"],
     }]
@@ -588,7 +588,30 @@ def test_strategy_sell_signal_closes_position_at_bid(tmp_path):
     assert "XBTEUR" not in engine.paper.positions
     trade = db.execute("SELECT side,price FROM trades WHERE side='Sell' ORDER BY id DESC LIMIT 1").fetchone()
     assert trade["side"] == "Sell"
-    assert trade["price"] == pytest.approx(100.5 * 0.9995)
+    assert trade["price"] == pytest.approx(102.0 * 0.9995)
+    db.close()
+
+
+
+def test_strategy_sell_is_deferred_until_net_profit_after_all_costs(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.paper.buy("XBTEUR", 5, 100.0, quote_to_eur_rate=1.0)
+    engine.scan = lambda **kwargs: [{
+        "symbol": "XBTEUR", "quote": "EUR", "signal": "SELL", "score": 0,
+        "price": 100.1, "bid": 100.1, "ask": 100.2,
+        "spread_bps": 10, "turnover": 50000, "turnover_eur": 50000,
+        "reasons": ["strategy exit"],
+    }]
+    engine.start()
+
+    actions = engine.cycle()
+
+    assert "XBTEUR" in engine.paper.positions
+    assert any("sale deferred" in action for action in actions)
+    assert db.execute("SELECT COUNT(*) FROM trades WHERE side='Sell'").fetchone()[0] == 0
+    assert db.execute(
+        "SELECT COUNT(*) FROM audit WHERE event='PAPER_SELL_DEFERRED_NON_PROFIT'"
+    ).fetchone()[0] == 1
     db.close()
 
 
@@ -824,17 +847,17 @@ def test_paper_liquidation_equity_reserves_exit_fee_and_slippage(tmp_path):
 
 def test_paper_sell_fill_applies_slippage_to_executable_bid(tmp_path):
     engine, db = make_engine(tmp_path)
-    engine.paper.buy("XBTEUR", 5, 100.0)
+    engine.paper.buy("XBTEUR", 5, 100.0, quote_to_eur_rate=1.0)
     engine.scan = lambda **kwargs: [{
         "symbol": "XBTEUR", "quote": "EUR", "signal": "SELL", "score": 0,
-        "price": 100.0, "bid": 100.0, "ask": 100.1,
+        "price": 101.0, "bid": 101.0, "ask": 101.1,
         "spread_bps": 10, "turnover": 50000, "turnover_eur": 50000, "reasons": [],
     }]
     engine.start()
     actions = engine.cycle()
     row = db.execute("SELECT price FROM trades WHERE side='Sell' ORDER BY id DESC LIMIT 1").fetchone()
     assert any("SELL SIGNAL_SELL" in action for action in actions)
-    assert row["price"] == pytest.approx(99.95)
+    assert row["price"] == pytest.approx(101.0 * 0.9995)
     db.close()
 
 
