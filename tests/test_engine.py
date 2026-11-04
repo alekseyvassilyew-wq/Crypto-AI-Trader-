@@ -392,3 +392,35 @@ def test_position_size_shrinks_when_atr_volatility_increases(tmp_path):
     # 0.5% of EUR20 risk budget / (1.5 * 10% ATR) = about EUR0.67.
     assert trade["quote"] == pytest.approx(20 * 0.005 / 0.15, rel=0.02)
     db.close()
+
+
+
+def test_successful_cycle_persists_paper_snapshot(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.scan = lambda **kwargs: [{
+        "symbol": "XBTEUR", "quote": "EUR", "signal": "HOLD", "score": 0,
+        "price": 10.0, "bid": 9.99, "ask": 10.01, "spread_bps": 10,
+        "turnover": 50000, "turnover_eur": 50000, "reasons": [],
+    }]
+    engine.start()
+
+    engine.cycle()
+
+    row = db.execute(
+        "SELECT equity_eur, analyzed_markets, buy_signals FROM paper_snapshots ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    assert row is not None
+    assert row["equity_eur"] > 0
+    assert row["analyzed_markets"] == 1
+    assert row["buy_signals"] == 0
+    db.close()
+
+
+def test_cached_fx_rate_cannot_authorize_new_conversion(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.market_pairs = [{"symbol": "USDZEUR", "base": "USD", "quote": "EUR"}]
+    set_state(db, "paper_fx_rates", {"EUR": 1.0, "USD": 0.9})
+
+    assert engine._fx_rates({})["USD"] == pytest.approx(0.9)
+    assert "USD" not in engine._fresh_fx_rates({})
+    db.close()
