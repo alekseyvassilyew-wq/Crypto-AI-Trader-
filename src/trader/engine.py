@@ -101,9 +101,11 @@ class Engine:
                     continue
 
             if quote == "EUR":
-                currency, rate = base, price
+                # Liquidating the base currency receives the executable bid.
+                currency, rate = base, (bid if ticker is not None else price)
             elif base == "EUR":
-                currency, rate = quote, 1.0 / price
+                # Liquidating quote currency requires buying EUR at the ask.
+                currency, rate = quote, (1.0 / ask if ticker is not None else 1.0 / price)
             else:
                 continue
             if not math.isfinite(rate) or rate <= 0:
@@ -112,6 +114,62 @@ class Engine:
             if previous is None or turnover_eur > previous[0]:
                 candidates[currency] = (turnover_eur, rate)
 
+        for currency, (_, rate) in candidates.items():
+            rates[currency] = rate
+        return rates
+
+    def _fresh_fx_buy_rates(self, prices=None):
+        """Return target-currency units obtainable per EUR at executable sides.
+
+        These rates are deliberately separate from valuation rates: buying a
+        currency crosses the ask on BASE/EUR and sells EUR at bid on EUR/QUOTE.
+        """
+        prices = self.last_prices if prices is None else prices
+        rates = {"EUR": 1.0}
+        candidates = {}
+        for pair in self.market_pairs:
+            symbol = pair.get("symbol")
+            base = str(pair.get("base") or "").upper()
+            quote = str(pair.get("quote") or "").upper()
+            raw_price = prices.get(symbol) if symbol else None
+            if not symbol or not base or not quote or raw_price is None:
+                continue
+            try:
+                price = float(raw_price)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if not math.isfinite(price) or price <= 0:
+                continue
+            ticker = self.last_ticker_data.get(symbol)
+            bid = ask = 0.0
+            turnover_eur = 0.0
+            if ticker is not None:
+                try:
+                    bid = float(ticker.get("bid1Price") or 0)
+                    ask = float(ticker.get("ask1Price") or 0)
+                    turnover = float(ticker.get("turnover24h") or 0)
+                except (TypeError, ValueError, OverflowError):
+                    continue
+                if (not all(math.isfinite(value) and value > 0 for value in (bid, ask, turnover))
+                        or ask < bid):
+                    continue
+                spread_bps = (ask - bid) / ((ask + bid) / 2.0) * 10000.0
+                if not math.isfinite(spread_bps) or spread_bps > self.s.max_spread_bps:
+                    continue
+                turnover_eur = turnover if quote == "EUR" else turnover / price if base == "EUR" else 0.0
+                if turnover_eur < max(1000.0, self.s.min_turnover * 0.1):
+                    continue
+            if quote == "EUR":
+                currency, rate = base, (1.0 / ask if ticker is not None else 1.0 / price)
+            elif base == "EUR":
+                currency, rate = quote, (bid if ticker is not None else price)
+            else:
+                continue
+            if not math.isfinite(rate) or rate <= 0:
+                continue
+            previous = candidates.get(currency)
+            if previous is None or turnover_eur > previous[0]:
+                candidates[currency] = (turnover_eur, rate)
         for currency, (_, rate) in candidates.items():
             rates[currency] = rate
         return rates
@@ -151,8 +209,8 @@ class Engine:
         except Exception as exc:
             audit(self.db, "PAPER_SNAPSHOT_FAILED", f"{type(exc).__name__}: {exc}")
 
-    def _seed_multicurrency_wallet(self, fx_rates):
-        """Seed USD and USDT PAPER balances once, using virtual EUR conversions."""
+    def _seed_multicurrency_wallet(self, fx_buy_rates):
+        """Seed USD and USDT PAPER balances once using executable FX buy sides."""
         seeded = get_state(self.db, "paper_seeded_currencies", {})
         if not isinstance(seeded, dict):
             seeded = {}
@@ -169,13 +227,13 @@ class Engine:
             if seeded.get(currency) or self.paper.balance(currency) > 0:
                 seeded[currency] = True
                 continue
-            currency_to_eur = float(fx_rates.get(currency) or 0)
-            if currency_to_eur <= 0:
+            currency_per_eur = float(fx_buy_rates.get(currency) or 0)
+            if currency_per_eur <= 0:
                 continue
             amount_eur = min(base_eur * 0.25, self.paper.balance("EUR"))
             if amount_eur <= 0:
                 continue
-            conversion = self.paper.convert("EUR", currency, amount_eur, 1.0 / currency_to_eur)
+            conversion = self.paper.convert("EUR", currency, amount_eur, currency_per_eur)
             audit(self.db, "PAPER_WALLET_SEED",
                   f"{conversion['from']}->{conversion['to']} spent={conversion['spent']:.8f} "
                   f"received={conversion['received']:.8f} fee={conversion['fee']:.8f}")
@@ -287,11 +345,12 @@ class Engine:
                 for item in tickers if float(item.get("lastPrice") or 0) > 0
             }
             fresh_fx_rates = self._fresh_fx_rates(snapshot_prices)
+            fresh_fx_buy_rates = self._fresh_fx_buy_rates(snapshot_prices)
             # Market inspection must be side-effect free. Seed the virtual
             # multi-currency portfolio only inside an active PAPER cycle and
-            # only from routes in this fresh ticker snapshot.
+            # only from executable ask/bid routes in this fresh ticker snapshot.
             if seed_wallet:
-                self._seed_multicurrency_wallet(fresh_fx_rates)
+                self._seed_multicurrency_wallet(fresh_fx_buy_rates)
             eligible = []
             results_by_symbol = {}
             for pair in pairs:
