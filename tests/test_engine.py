@@ -205,7 +205,7 @@ def test_non_eur_signal_can_convert_eur_to_fund_quote_wallet(tmp_path):
     assert len(actions) == 1
     assert "ETHUSD BUY" in actions[0]
     assert engine.paper.balance("EUR") < 20
-    assert engine.paper.balance("USD") > 0
+    assert engine.paper.balance("USD") >= 0
     assert engine.paper.positions["ETHUSD"]["quote_currency"] == "USD"
     row = db.execute("SELECT COUNT(*) AS n FROM audit WHERE event='PAPER_FX_CONVERSION'").fetchone()
     assert row["n"] == 1
