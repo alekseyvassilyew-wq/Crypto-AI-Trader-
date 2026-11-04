@@ -107,10 +107,10 @@ def test_full_market_scan_monitors_all_pairs_and_can_analyze_non_eur_markets(tmp
     class FullMarketExchange:
         def discover_pairs(self):
             return [
-                {"symbol": "XBTEUR", "quote": "EUR", "status": "online"},
-                {"symbol": "ETHEUR", "quote": "EUR", "status": "online"},
-                {"symbol": "ETHUSD", "quote": "USD", "status": "online"},
-                {"symbol": "USDZEUR", "quote": "EUR", "status": "online"},
+                {"symbol": "XBTEUR", "base": "XBT", "quote": "EUR", "status": "online"},
+                {"symbol": "ETHEUR", "base": "ETH", "quote": "EUR", "status": "online"},
+                {"symbol": "ETHUSD", "base": "ETH", "quote": "USD", "status": "online"},
+                {"symbol": "USDZEUR", "base": "USD", "quote": "EUR", "status": "online"},
             ]
 
         def tickers(self):
