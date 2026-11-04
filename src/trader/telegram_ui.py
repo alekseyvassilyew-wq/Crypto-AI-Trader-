@@ -264,6 +264,123 @@ def build_app(s, engine, exchange):
         balances = [f"{currency}: {amount:.8f}" for currency, amount in sorted(engine.paper.cash_by_currency.items())]
         await update.effective_message.reply_text("Виртуальные остатки PAPER:\n" + ("\n".join(balances) or "Нулевые остатки."))
 
+    async def realbalance(update, context):
+        if not await authorized(update): return await deny(update)
+        if not s.kraken_api_key or not s.kraken_api_secret:
+            return await update.effective_message.reply_text(
+                "Реальный баланс Kraken недоступен: не заданы API-ключи. "
+                "Нужны только права Query Funds. Это чтение не меняет PAPER-кошелёк."
+            )
+        await update.effective_message.reply_text("Запрашиваю реальные остатки Kraken (только чтение)…")
+        try:
+            balances = await context.application.bot_data["run_blocking"].run(exchange.balance)
+            lines = []
+            for asset, raw_amount in sorted(balances.items()):
+                try:
+                    amount = float(raw_amount)
+                except (TypeError, ValueError, OverflowError):
+                    continue
+                if amount > 0:
+                    lines.append(f"{asset}: {amount:.10f}")
+            await update.effective_message.reply_text(
+                "🏦 РЕАЛЬНЫЙ БАЛАНС KRAKEN\n"
+                + ("\n".join(lines) if lines else "Положительных остатков не найдено.")
+                + "\n\nТолько чтение. Реальные средства не импортируются в виртуальный PAPER-кошелёк."
+            )
+        except Exception as exc:
+            log.exception("Read-only Kraken balance request failed")
+            await update.effective_message.reply_text(format_error(exc, "/realbalance", update.effective_user))
+
+    async def learn(update, context):
+        if not await authorized(update): return await deny(update)
+        if len(context.args) != 1:
+            return await update.effective_message.reply_text("Использование: /learn XBTEUR — исследование модели на закрытых часовых свечах.")
+        symbol = context.args[0].strip().upper().replace("/", "")
+        await update.effective_message.reply_text(
+            f"🧠 Исследую {symbol}: обучаю модель и провожу 3 хронологических walk-forward проверки. "
+            "Это не запускает и не меняет торговлю."
+        )
+        try:
+            def run_research():
+                from .learning import research_candidate
+                from .db import set_state
+                candles = exchange.candles(symbol, interval="60", limit=720)
+                candidate = research_candidate(candles, fee_rate=s.fee_rate, slippage_bps=5.0)
+                candidate["symbol"] = symbol
+                candidate["trained_at_utc"] = __import__("datetime").datetime.now(
+                    __import__("datetime").timezone.utc
+                ).isoformat()
+                set_state(engine.db, "ml_candidate_" + symbol, candidate)
+                return candidate
+            candidate = await context.application.bot_data["run_blocking"].run(run_research)
+            metrics = candidate["out_of_sample"]
+            pf = metrics["profit_factor"]
+            pf_text = "∞" if pf == "INF" else f"{pf:.2f}"
+            gate = "ПРОШЛА исследовательский фильтр" if candidate["research_pass"] else "НЕ прошла исследовательский фильтр"
+            await update.effective_message.reply_text(
+                f"🧠 МОДЕЛЬ {symbol} — {gate}\n"
+                f"Статус: SHADOW ONLY (не торгует)\n"
+                f"Обучающих/тестовых выборок: {candidate['samples']}\n"
+                f"Walk-forward фолдов: {len(candidate['walk_forward'])}/3\n"
+                f"Вневыборочных сделок: {metrics['trades']}\n"
+                f"Доходность после издержек: {metrics['net_return_pct']:+.2f}%\n"
+                f"Win rate: {metrics['win_rate_pct']:.1f}% | Profit factor: {pf_text}\n"
+                f"Макс. просадка: {metrics['max_drawdown_pct']:.2f}%\n"
+                "Модель сохранена как исследовательский кандидат. Автоматического внедрения нет; "
+                "следующий этап — длительное теневое сравнение с базовой стратегией."
+            )
+        except Exception as exc:
+            log.exception("ML research failed for %s", symbol)
+            await update.effective_message.reply_text(format_error(exc, f"/learn {symbol}", update.effective_user))
+
+    async def learning(update, context):
+        if not await authorized(update): return await deny(update)
+        from .db import get_state
+        rows = engine.db.execute(
+            "SELECT key FROM app_state WHERE key LIKE 'ml_candidate_%' ORDER BY updated_at DESC"
+        ).fetchall()
+        if not rows:
+            return await update.effective_message.reply_text("Исследовательских моделей пока нет. Запусти /learn XBTEUR.")
+        lines = ["🧠 ИССЛЕДОВАТЕЛЬСКИЕ МОДЕЛИ (не торгуют):"]
+        for row in rows[:15]:
+            item = get_state(engine.db, row["key"], {})
+            metric = item.get("out_of_sample", {})
+            lines.append(
+                f"{item.get('symbol', row['key'].replace('ml_candidate_', ''))}: "
+                f"{'PASS' if item.get('research_pass') else 'NOT PASS'} | "
+                f"{metric.get('net_return_pct', 0):+.2f}% OOS | "
+                f"PF {metric.get('profit_factor', 0)} | SHADOW ONLY"
+            )
+        await update.effective_message.reply_text("\n".join(lines)[:3900])
+
+    async def paperreport(update, context):
+        if not await authorized(update): return await deny(update)
+        from .db import get_paper_metrics
+        try:
+            hours = int(context.args[0]) if context.args else 24
+            metrics = await context.application.bot_data["run_blocking"].run(
+                lambda: get_paper_metrics(engine.db, hours)
+            )
+            if not metrics["samples"]:
+                return await update.effective_message.reply_text(
+                    f"За последние {hours} ч. нет сохранённых PAPER-измерений. "
+                    "Запусти /run и оставь PAPER работать для сбора статистики."
+                )
+            await update.effective_message.reply_text(
+                f"📈 PAPER FORWARD-TEST — {hours} ч.\n"
+                f"Измерений: {metrics['samples']}\n"
+                f"Капитал: {metrics['start_equity_eur']:.4f} → {metrics['end_equity_eur']:.4f} EUR\n"
+                f"Изменение: {metrics['change_eur']:+.4f} EUR ({metrics['change_pct']:+.2f}%)\n"
+                f"Макс. наблюдаемая просадка: {metrics['max_observed_drawdown_pct']:.2f}%\n"
+                f"Среднее число позиций: {metrics['avg_open_positions']:.2f}\n"
+                f"Сигналов BUY: {metrics['buy_signals']}\n"
+                f"Среднее число анализируемых рынков за цикл: {metrics['avg_analyzed_markets']:.1f}\n"
+                f"Период: {metrics['first_ts']} — {metrics['last_ts']} UTC\n"
+                "Это изменение стоимости PAPER-портфеля, а не доказательство будущей доходности."
+            )
+        except Exception as exc:
+            await update.effective_message.reply_text(f"Ошибка отчёта: {type(exc).__name__}: {exc}")
+
     async def interval(update, context):
         if not await authorized(update): return await deny(update)
         allowed = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "24h": 86400}
@@ -430,7 +547,7 @@ def build_app(s, engine, exchange):
     # one requests.Session, engine state and SQLite connection.
     from .worker import SerializedRunner
     app.bot_data["run_blocking"] = SerializedRunner()
-    for name, fn in [("start", start), ("status", status), ("scan", scan), ("account", account), ("backtest", backtest), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
+    for name, fn in [("start", start), ("status", status), ("scan", scan), ("account", account), ("realbalance", realbalance), ("paperreport", paperreport), ("learn", learn), ("learning", learning), ("backtest", backtest), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
                      ("run", run), ("pause", pause), ("stop", stop), ("help", help_cmd)]:
         app.add_handler(CommandHandler(name, fn))
     app.add_handler(CallbackQueryHandler(callback))
