@@ -336,7 +336,27 @@ class Engine:
         try:
             results = self.scan(seed_wallet=True)
             self.last_scan_at = datetime.now(timezone.utc)
-            self.last_prices = {x["symbol"]: float(x.get("price") or 0) for x in results if float(x.get("price") or 0) > 0}
+            # Every open position must have a fresh, executable two-sided quote.
+            # Never silently skip a stop/exit or mark missing prices at cost basis.
+            result_by_symbol = {str(item.get("symbol", "")).upper(): item for item in results}
+            for held_symbol in self.paper.positions:
+                quote = result_by_symbol.get(str(held_symbol).upper())
+                if quote is None:
+                    raise RuntimeError(f"Missing fresh ticker for open position {held_symbol}")
+                try:
+                    bid = float(quote.get("bid") or 0)
+                    ask = float(quote.get("ask") or 0)
+                    last = float(quote.get("price") or 0)
+                except (TypeError, ValueError, OverflowError) as quote_exc:
+                    raise RuntimeError(f"Invalid ticker for open position {held_symbol}") from quote_exc
+                if (not all(math.isfinite(value) and value > 0 for value in (bid, ask, last))
+                        or ask < bid):
+                    raise RuntimeError(f"Invalid or non-executable bid/ask for open position {held_symbol}")
+            self.last_prices = {
+                str(item["symbol"]).upper(): float(item.get("price") or 0)
+                for item in results
+                if math.isfinite(float(item.get("price") or 0)) and float(item.get("price") or 0) > 0
+            }
             self.last_signals = results
             set_state(self.db, "paper_fx_rates", self._fx_rates(self.last_prices))
         except Exception as exc:
@@ -344,7 +364,11 @@ class Engine:
             audit(self.db, "SCAN_FAILED", f"{type(exc).__name__}: {exc}")
             self.stop("Market data scan failed")
             return ["SCAN_FAILED — paper trading paused"]
-        prices = {x["symbol"]: x.get("price", 0) for x in results if x.get("price", 0) > 0}
+        prices = {str(x["symbol"]).upper(): x.get("price", 0) for x in results if x.get("price", 0) > 0}
+        # Conservative portfolio marks for held spot assets use executable bid.
+        for held_symbol in self.paper.positions:
+            held_row = result_by_symbol[str(held_symbol).upper()]
+            prices[str(held_symbol).upper()] = float(held_row["bid"])
         actions = []
         # Risk exits are checked before new entries.
         for symbol, pos in list(self.paper.positions.items()):
@@ -400,6 +424,13 @@ class Engine:
             if len(self.paper.positions) >= self.s.max_positions:
                 break
             try:
+                bid = float(signal.get("bid") or 0)
+                ask = float(signal.get("ask") or 0)
+                mark = float(signal.get("price") or 0)
+                if (not all(math.isfinite(value) and value > 0 for value in (bid, ask, mark))
+                        or ask < bid):
+                    audit(self.db, "ENTRY_SKIPPED", f"{signal.get('symbol')}: invalid or non-executable ticker")
+                    continue
                 rates = self._fx_rates(prices)
                 fresh_rates = self._fresh_fx_rates(prices)
                 equity_eur = self.paper.equity(prices, rates)
