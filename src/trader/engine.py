@@ -92,8 +92,6 @@ class Engine:
     def _save_cycle_snapshot(self, results, prices):
         """Persist successful PAPER telemetry after positions and cash are updated."""
         try:
-            deferred = "Ticker monitored; OHLC analysis deferred by rotating scan budget"
-            unavailable = "Ticker unavailable"
             analyzed = sum(1 for item in results if item.get("ohlc_analyzed") is True)
             save_paper_snapshot(
                 self.db,
