@@ -495,7 +495,7 @@ def test_equity_and_daily_loss_mark_open_position_at_executable_bid(tmp_path):
     engine.paper.buy("XBTEUR", 5, 100.0)
     engine.scan = lambda **kwargs: [{
         "symbol": "XBTEUR", "quote": "EUR", "signal": "HOLD", "score": 0,
-        "price": 110.0, "bid": 90.0, "ask": 110.0,
+        "price": 110.0, "bid": 99.0, "ask": 110.0,
         "spread_bps": 10, "turnover": 50000, "turnover_eur": 50000,
         "reasons": [],
     }]
@@ -504,8 +504,9 @@ def test_equity_and_daily_loss_mark_open_position_at_executable_bid(tmp_path):
     engine.cycle()
 
     daily = get_state(db, "daily")
-    assert engine.daily_pnl({"XBTEUR": 90.0}) == pytest.approx(
-        engine.paper.equity({"XBTEUR": 90.0}, engine._fx_rates({"XBTEUR": 90.0}))
+    assert "XBTEUR" in engine.paper.positions
+    assert engine.daily_pnl({"XBTEUR": 99.0}) == pytest.approx(
+        engine.paper.equity({"XBTEUR": 99.0}, engine._fx_rates({"XBTEUR": 99.0}))
         - daily["start_equity"]
     )
     db.close()
