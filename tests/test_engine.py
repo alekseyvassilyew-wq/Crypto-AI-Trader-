@@ -146,7 +146,7 @@ def test_rotating_scan_covers_multiple_funded_quote_currencies(tmp_path):
             ]
     engine.exchange = MultiQuoteExchange()
     seen = []
-    def fake_scan_one(symbol, tickers=None):
+    def fake_scan_one(symbol, tickers=None, **kwargs):
         seen.append(symbol)
         return {"symbol": symbol, "signal": "HOLD", "score": 1, "price": 1, "spread_bps": 10, "turnover": 50000, "reasons": []}
     engine.scan_one = fake_scan_one
