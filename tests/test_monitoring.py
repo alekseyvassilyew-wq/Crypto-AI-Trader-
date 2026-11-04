@@ -302,3 +302,15 @@ def test_monitor_status_shows_last_success_and_latest_api_error_together():
     assert "Последняя ошибка Render API: Timeout" in report
     assert "Последняя успешная проверка GitHub: 2026-11-04T15:00:01+00:00" in report
     assert "Последняя подтверждённая отправка Telegram: 2026-11-04T15:00:02+00:00" in report
+
+
+
+def test_backup_health_transition_notifies_only_on_state_changes():
+    from src.trader.monitoring import backup_health_transition
+
+    assert backup_health_transition(None, "fresh") is None
+    assert backup_health_transition("fresh", "fresh") is None
+    assert backup_health_transition("fresh", "stale") == "failure"
+    assert backup_health_transition("stale", "stale") is None
+    assert backup_health_transition("stale", "fresh") == "recovered"
+    assert backup_health_transition(None, "missing") == "failure"
