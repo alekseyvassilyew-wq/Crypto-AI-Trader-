@@ -93,3 +93,24 @@ def test_portfolio_backtest_uses_entry_and_exit_fx_rates():
     assert result["trades_detail"][0]["net_pnl_eur"] < 0
     assert result["final_equity_eur"] < 100
     assert result["assumptions"]["dated_fx_rate_timestamps"] == 2
+
+
+
+def test_portfolio_drawdown_includes_final_liquidation_fees():
+    candles = flat_candles(count=64, price=100)
+    result = run_portfolio_backtest(
+        {"BTCEUR": candles},
+        quote_currencies={"BTCEUR": "EUR"},
+        fx_rates={"EUR": 1.0},
+        initial_cash_eur=100,
+        max_trade_eur=50,
+        max_positions=1,
+        fee_rate=0.01,
+        slippage_bps=0,
+        signal_fn=buy_on_first_eligible_close,
+    )
+
+    final_loss_pct = (100 - result["final_equity_eur"]) / 100 * 100
+    assert result["final_equity_eur"] == pytest.approx(99.25)
+    assert result["max_drawdown_pct"] >= final_loss_pct
+    assert result["equity_curve"][-1]["equity_eur"] == pytest.approx(result["final_equity_eur"])
