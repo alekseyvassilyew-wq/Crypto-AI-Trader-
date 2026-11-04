@@ -28,6 +28,7 @@ def run_portfolio_backtest(
     fx_rates,
     fx_rates_by_timestamp=None,
     fx_buy_rates=None,
+    fx_buy_rates_by_timestamp=None,
     initial_cash_eur=1000.0,
     max_trade_eur=100.0,
     max_positions=5,
@@ -98,13 +99,29 @@ def run_portfolio_backtest(
             parsed["EUR"] = 1.0
             dated_rates[timestamp] = parsed
 
+    dated_buy_rates = {}
+    if fx_buy_rates_by_timestamp is not None:
+        if not isinstance(fx_buy_rates_by_timestamp, dict):
+            raise ValueError("fx_buy_rates_by_timestamp must be a mapping")
+        for raw_timestamp, raw_values in fx_buy_rates_by_timestamp.items():
+            timestamp = _positive(raw_timestamp, "FX buy timestamp", allow_zero=True)
+            if not isinstance(raw_values, dict):
+                raise ValueError("Each dated FX buy-rate entry must be a mapping")
+            parsed = {str(k).upper(): _positive(v, f"dated FX buy rate {k}") for k, v in raw_values.items()}
+            if "EUR" in parsed and not math.isclose(parsed["EUR"], 1.0, rel_tol=0, abs_tol=1e-12):
+                raise ValueError("EUR FX buy rate must equal 1.0")
+            parsed["EUR"] = 1.0
+            dated_buy_rates[timestamp] = parsed
+
     def rates_at(timestamp):
         current = dict(rates)
         current.update(dated_rates.get(float(timestamp), {}))
         return current
 
     def buy_rates_at(timestamp):
-        return dict(buy_rates)
+        current = dict(buy_rates)
+        current.update(dated_buy_rates.get(float(timestamp), {}))
+        return current
 
     markets = {}
     common_timestamps = None
@@ -437,5 +454,6 @@ def run_portfolio_backtest(
             "fx_rates_fallback": rates,
             "fx_buy_rates": buy_rates,
             "dated_fx_rate_timestamps": len(dated_rates),
+            "dated_fx_buy_rate_timestamps": len(dated_buy_rates),
         },
     }
