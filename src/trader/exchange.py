@@ -39,6 +39,8 @@ class KrakenSpot:
         self._pair_cache = {}
         self._nonce_lock = threading.Lock()
         self._last_nonce = 0
+        self._ohlc_lock = threading.Lock()
+        self._last_ohlc_request_at = 0.0
 
     def _request(self, path, data=None, private=False):
         data = data or {}
@@ -208,7 +210,14 @@ class KrakenSpot:
         if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
             raise ValueError("Candle limit must be a positive integer")
         key, _ = self._pair_info(symbol)
-        result = self._request("/0/public/OHLC", {"pair": key, "interval": str(interval)})
+        # Kraken recommends no more than one public REST request per second.
+        # OHLC calls are serialized and spaced slightly above that threshold.
+        with self._ohlc_lock:
+            wait = 1.05 - (time.monotonic() - self._last_ohlc_request_at)
+            if wait > 0:
+                time.sleep(wait)
+            result = self._request("/0/public/OHLC", {"pair": key, "interval": str(interval)})
+            self._last_ohlc_request_at = time.monotonic()
         rows = result.get(key)
         if rows is None:
             rows = next((v for k, v in result.items() if k != "last"), [])
