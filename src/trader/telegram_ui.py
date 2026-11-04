@@ -675,11 +675,21 @@ def build_app(s, engine, exchange):
                 "last_signals": list(engine.last_signals),
                 "cash": dict(engine.paper.cash_by_currency),
                 "positions": {symbol: dict(position) for symbol, position in engine.paper.positions.items()},
-                "daily_pnl": engine.daily_pnl(engine.last_prices),
+                "fresh_rates": engine._fresh_fx_rates(engine.last_prices),
+                "required_currencies": {
+                    currency for currency, amount in engine.paper.cash_by_currency.items()
+                    if float(amount) > 1e-12
+                } | {
+                    str(position.get("quote_currency", "EUR")).upper()
+                    for position in engine.paper.positions.values()
+                },
             }
 
         try:
             state = await runner.run(read_cycle_state)
+            missing_fx = sorted(currency for currency in state["required_currencies"] if currency not in state["fresh_rates"])
+            state["daily_pnl"] = engine.daily_pnl(engine.last_prices) if not missing_fx else None
+            daily_text = f"{state['daily_pnl']:.2f} EUR" if state["daily_pnl"] is not None else "недоступен — нет свежего FX: " + ", ".join(missing_fx)
 
             # Send a compact heartbeat to General every 15 minutes after a
             # successful scan while PAPER is actively trading.
@@ -699,7 +709,7 @@ def build_app(s, engine, exchange):
                     f"Последнее успешное сканирование: {scan_time}\n"
                     f"Виртуальные средства: {state['cash']}\n"
                     f"Открытые позиции: {len(state['positions'])}/{s.max_positions}\n"
-                    f"P/L сегодня: {state['daily_pnl']:.2f} EUR\n"
+                    f"P/L сегодня: {daily_text}\n"
                     "Рыночные сигналы:\n" + ("\n".join(signal_lines) or "Нет данных") +
                     "\nПозиции:\n" + ("\n".join(position_lines) or "Нет открытых позиций")
                 )
@@ -722,7 +732,7 @@ def build_app(s, engine, exchange):
                         "💼 PAPER — обновление портфеля\n"
                         f"Доступно: {state['cash']}\n"
                         f"Открытых позиций: {len(state['positions'])}/{s.max_positions}\n"
-                        f"P/L сегодня: {state['daily_pnl']:.2f} EUR"
+                        f"P/L сегодня: {daily_text}"
                     )
                     await send_topic(context, s.topic_portfolio_id, portfolio_message)
 
