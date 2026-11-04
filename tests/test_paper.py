@@ -180,6 +180,8 @@ def test_conversion_rejects_target_balance_overflow():
 
 def test_eur_cost_basis_and_entry_fees_follow_partial_sells():
     broker = PaperBroker(balance=100, fee_rate=0.01)
+    broker.cash_by_currency["USD"] = 50
+    broker._persist()
     broker.buy("ETHUSD", 20, 10, currency="USD", quote_to_eur_rate=0.9)
     position = broker.positions["ETHUSD"]
     assert position["cost_basis_eur"] == pytest.approx(18.0)
@@ -197,6 +199,8 @@ def test_eur_cost_basis_survives_restart_and_partial_exit(tmp_path):
 
     db = connect(tmp_path / "eur-basis.sqlite3")
     broker = PaperBroker(balance=100, fee_rate=0.01, db=db)
+    broker.cash_by_currency["USD"] = 50
+    broker._persist()
     broker.buy("ETHUSD", 20, 10, currency="USD", quote_to_eur_rate=0.9)
     restored = PaperBroker(balance=100, fee_rate=0.01, db=db)
     assert restored.positions["ETHUSD"]["cost_basis_eur"] == pytest.approx(18.0)
