@@ -14,16 +14,18 @@ _KRAKEN_ASSET_ALIASES = {
 def normalize_kraken_asset_code(code, known_assets=None):
     """Normalize Kraken legacy codes, using discovered market symbols when available."""
     normalized = str(code or "").strip().upper()
-    if normalized in _KRAKEN_ASSET_ALIASES:
-        return _KRAKEN_ASSET_ALIASES[normalized]
     known = {str(asset).strip().upper() for asset in (known_assets or ()) if asset}
+    # An exact live-market symbol always wins over legacy aliases (for example XDG).
     if normalized in known:
         return normalized
+    alias = _KRAKEN_ASSET_ALIASES.get(normalized)
+    if alias and (not known or alias in known):
+        return alias
     # Kraken's legacy X/Z prefix convention is not limited to a fixed list.
     # Strip one prefix only when the remainder is an actual discovered market asset.
     if len(normalized) > 1 and normalized[0] in {"X", "Z"} and normalized[1:] in known:
         return normalized[1:]
-    return normalized
+    return alias if alias and not known else normalized
 
 
 def _market_asset_symbols(market_pairs):
