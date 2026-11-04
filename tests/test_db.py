@@ -241,3 +241,28 @@ def test_backup_health_flags_corrupt_latest_backup(tmp_path):
 
     assert health["healthy"] is False
     assert health["integrity"] != "ok"
+
+
+
+def test_latest_paper_snapshot_returns_newest_timestamp_and_equity():
+    from src.trader.db import get_latest_paper_snapshot
+
+    db = connect(":memory:")
+    first = datetime.now(timezone.utc) - timedelta(minutes=2)
+    second = datetime.now(timezone.utc)
+    save_paper_snapshot(
+        db, ts=first.isoformat(), equity_eur=19.9, cash={"EUR": 10.0},
+        open_positions=1, analyzed_markets=20, buy_signals=1,
+    )
+    save_paper_snapshot(
+        db, ts=second.isoformat(), equity_eur=19.8, cash={"EUR": 9.0},
+        open_positions=2, analyzed_markets=20, buy_signals=0,
+    )
+
+    snapshot = get_latest_paper_snapshot(db)
+
+    assert snapshot["ts"] == second.isoformat()
+    assert snapshot["equity_eur"] == pytest.approx(19.8)
+    assert snapshot["open_positions"] == 2
+    assert snapshot["cash"] == {"EUR": 9.0}
+    db.close()

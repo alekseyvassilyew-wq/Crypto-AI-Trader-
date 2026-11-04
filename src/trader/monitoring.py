@@ -99,6 +99,21 @@ def format_monitor_status(settings, state: dict) -> str:
     return "\n".join(lines)
 
 
+def backup_health_transition(previous_status: str | None, current_status: str) -> str | None:
+    """Return an alert class only when SQLite backup health changes."""
+    unhealthy = {"missing", "stale", "corrupt", "retention"}
+    allowed = unhealthy | {"fresh"}
+    if current_status not in allowed:
+        raise ValueError("Unknown SQLite backup health state")
+    if current_status == previous_status:
+        return None
+    if current_status in unhealthy:
+        return "failure"
+    if previous_status in unhealthy and current_status == "fresh":
+        return "recovered"
+    return None
+
+
 def poll_external_events(settings, state: dict) -> list[dict[str, str]]:
     """Return newly observed events; caller persists state to SQLite."""
     events: list[dict[str, str]] = []
