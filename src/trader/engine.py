@@ -191,6 +191,7 @@ class Engine:
                     results_by_symbol[symbol] = {
                         "symbol": symbol, "signal": "HOLD", "score": 0,
                         "price": float(ticker.get("lastPrice") or 0),
+                        "bid": bid, "ask": ask,
                         "spread_bps": spread, "turnover": turnover, "quote": quote,
                         "reasons": ["Turnover too low or no EUR conversion rate"],
                     }
