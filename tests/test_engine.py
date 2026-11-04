@@ -297,3 +297,29 @@ def test_buy_candidates_are_ranked_by_score(tmp_path):
     assert len(actions) == 1
     assert 'HIGHEUR BUY' in actions[0]
     db.close()
+
+
+def test_scan_analyzes_markets_with_fx_route_without_quote_cash(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.s.max_candle_pairs = 5
+    class FxRoutedExchange:
+        def discover_pairs(self):
+            return [
+                {'symbol': 'USDZEUR', 'base': 'USD', 'quote': 'EUR'},
+                {'symbol': 'ETHUSD', 'base': 'ETH', 'quote': 'USD'},
+            ]
+        def tickers(self):
+            return [
+                {'symbol': 'USDZEUR', 'bid1Price': 0.89, 'ask1Price': 0.90, 'lastPrice': 0.895, 'turnover24h': 50000},
+                {'symbol': 'ETHUSD', 'bid1Price': 2999, 'ask1Price': 3001, 'lastPrice': 3000, 'turnover24h': 50000},
+            ]
+    engine.exchange = FxRoutedExchange()
+    analyzed = []
+    def fake_scan_one(symbol, tickers=None, **kwargs):
+        analyzed.append(symbol)
+        return {'symbol': symbol, 'signal': 'HOLD', 'score': 1, 'price': 1, 'spread_bps': 10, 'turnover': 50000, 'reasons': []}
+    engine.scan_one = fake_scan_one
+    engine.scan()
+    assert 'ETHUSD' in analyzed
+    assert engine.paper.balance('USD') == 0
+    db.close()
