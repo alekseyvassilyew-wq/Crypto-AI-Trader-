@@ -125,3 +125,43 @@ def test_full_market_scan_monitors_all_pairs_but_analyzes_only_eur_budget(tmp_pa
     assert "Monitored only" in by_symbol["ETHUSD"]["reasons"][0]
     assert "deferred" in by_symbol["ETHEUR"]["reasons"][0]
     db.close()
+
+
+def test_rotating_scan_covers_multiple_funded_quote_currencies(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.paper.cash_by_currency["USD"] = 20
+    engine.s.max_candle_pairs = 1
+    class MultiQuoteExchange:
+        def discover_pairs(self):
+            return [
+                {"symbol": "XBTEUR", "base": "XBT", "quote": "EUR"},
+                {"symbol": "ETHUSD", "base": "ETH", "quote": "USD"},
+            ]
+        def tickers(self):
+            return [
+                {"symbol": "XBTEUR", "bid1Price": 99, "ask1Price": 100, "lastPrice": 99.5, "turnover24h": 50000},
+                {"symbol": "ETHUSD", "bid1Price": 2990, "ask1Price": 3000, "lastPrice": 2995, "turnover24h": 40000},
+            ]
+    engine.exchange = MultiQuoteExchange()
+    seen = []
+    def fake_scan_one(symbol, tickers=None):
+        seen.append(symbol)
+        return {"symbol": symbol, "signal": "HOLD", "score": 1, "price": 1, "spread_bps": 10, "turnover": 50000, "reasons": []}
+    engine.scan_one = fake_scan_one
+    first = engine.scan()
+    second = engine.scan()
+    assert seen == ["XBTEUR", "ETHUSD"]
+    assert {row["quote"] for row in first + second} == {"EUR", "USD"}
+    db.close()
+
+
+def test_fx_rates_convert_quote_currencies_to_eur(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.market_pairs = [
+        {"symbol": "USDZEUR", "base": "USD", "quote": "EUR"},
+        {"symbol": "ETHUSD", "base": "ETH", "quote": "USD"},
+    ]
+    rates = engine._fx_rates({"USDZEUR": 0.9, "ETHUSD": 3000})
+    assert rates["USD"] == 0.9
+    assert rates["ETH"] == 2700
+    db.close()
