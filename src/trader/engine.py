@@ -571,6 +571,7 @@ class Engine:
                     continue
                 rates = self._fx_rates(prices)
                 fresh_rates = self._fresh_fx_rates(prices)
+                fresh_buy_rates = self._fresh_fx_buy_rates(prices)
                 equity_eur = self.paper.equity(prices, rates)
                 atr_percent = max(0.0, float(signal.get("atr_percent") or 0.0))
                 stop_distance_pct = max(float(self.s.stop_loss_pct), atr_percent * 1.5, 0.5)
@@ -580,14 +581,16 @@ class Engine:
                             self.daily_pnl(prices), self.limits)
                 # Cached rates may value the portfolio but must never fund a new trade.
                 quote_to_eur = fresh_rates.get(quote_currency)
-                if not quote_to_eur or quote_to_eur <= 0:
-                    audit(self.db, "ENTRY_SKIPPED", f"{signal['symbol']}: no fresh EUR conversion route for {quote_currency}")
+                quote_units_per_eur = fresh_buy_rates.get(quote_currency)
+                if (not quote_to_eur or quote_to_eur <= 0
+                        or not quote_units_per_eur or quote_units_per_eur <= 0):
+                    audit(self.db, "ENTRY_SKIPPED", f"{signal['symbol']}: no fresh executable EUR conversion route for {quote_currency}")
                     continue
                 # Autonomously route existing PAPER cash into the market's
                 # quote currency when needed. Convert only enough to reach the
                 # per-trade EUR cap; never use leverage or create a negative balance.
                 quote_balance = self.paper.balance(quote_currency)
-                target_allocation = trade_budget_eur / quote_to_eur
+                target_allocation = trade_budget_eur * quote_units_per_eur
                 target_shortfall = max(0.0, target_allocation - quote_balance)
                 if target_shortfall > 1e-12:
                     for source_currency in sorted(
@@ -599,16 +602,19 @@ class Engine:
                         if not source_to_eur or source_to_eur <= 0:
                             continue
                         # Conversion fee is charged in the destination currency.
+                        # Sell source currency at its bid-side EUR value, then
+                        # buy the target currency at its ask-side EUR cost.
+                        conversion_rate = source_to_eur * quote_units_per_eur
                         source_needed = (
-                            target_shortfall / (1.0 - self.paper.fee_rate)
-                            * quote_to_eur / source_to_eur
+                            target_shortfall
+                            / ((1.0 - self.paper.fee_rate) * conversion_rate)
                         )
                         source_amount = min(self.paper.balance(source_currency), source_needed)
                         if source_amount <= 1e-12:
                             continue
                         conversion = self.paper.convert(
                             source_currency, quote_currency, source_amount,
-                            source_to_eur / quote_to_eur,
+                            conversion_rate,
                         )
                         audit(
                             self.db, "PAPER_FX_CONVERSION",
