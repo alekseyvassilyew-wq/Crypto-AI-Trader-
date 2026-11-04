@@ -26,6 +26,7 @@ def test_render_events_baseline_then_new_failure_is_reported_once(monkeypatch):
         [{"event": {"id": "evt-old", "type": "server_restarted", "details": {}}}],
         [
             {"event": {"id": "evt-new", "type": "server_failed", "details": {"message": "process exited"}}},
+            {"event": {"id": "evt-build", "type": "build_ended", "details": {"buildStatus": "succeeded"}}},
             {"event": {"id": "evt-old", "type": "server_restarted", "details": {}}},
         ],
         [
@@ -41,11 +42,13 @@ def test_render_events_baseline_then_new_failure_is_reported_once(monkeypatch):
 
     assert poll_external_events(settings, state) == []
     events = poll_external_events(settings, state)
-    assert len(events) == 1
-    assert events[0]["source"] == "Render"
-    assert events[0]["status"] == "FAILED"
-    assert events[0]["title"] == "SERVER FAILED"
-    assert "process exited" in events[0]["detail"]
+    assert len(events) == 2
+    failed = next(item for item in events if item["title"] == "SERVER FAILED")
+    succeeded = next(item for item in events if item["title"] == "BUILD ENDED")
+    assert failed["source"] == "Render"
+    assert failed["status"] == "FAILED"
+    assert "process exited" in failed["detail"]
+    assert succeeded["status"] == "RECOVERED"
     assert poll_external_events(settings, state) == []
 
 
