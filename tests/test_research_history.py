@@ -111,6 +111,7 @@ def test_perform_research_uses_configured_paper_slippage(monkeypatch):
                               "max_drawdown_pct": 3.0, "trades": 2},
             "independent_holdout": {"net_return_pct": -0.5, "trades": 1},
             "rejection_reasons": ["test only"],
+            "assumptions": {"slippage_bps_per_side": slippage_bps},
         }
 
     monkeypatch.setattr("src.trader.learning.research_candidate", fake_research_candidate)
@@ -120,5 +121,5 @@ def test_perform_research_uses_configured_paper_slippage(monkeypatch):
     assert captured == {"fee_rate": 0.0026, "slippage_bps": 17.5}
     assert result["research_pass"] is False
     saved = list_research_runs(db, limit=1, symbol="XBTEUR")
-    assert saved[0]["report"]["assumptions"]["slippage_bps_per_side"] == 17.5 if "assumptions" in saved[0]["report"] else saved[0]["outcome"] == "NOT_PASS"
+    assert saved[0]["report"]["assumptions"]["slippage_bps_per_side"] == 17.5
     db.close()
