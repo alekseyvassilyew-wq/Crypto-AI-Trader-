@@ -253,17 +253,45 @@ class Engine:
             if not price:
                 continue
             entry = pos["avg_price"]
+            peak = self.paper.update_peak(symbol, price)
             change_pct = (price / entry - 1) * 100
-            reason = "STOP_LOSS" if change_pct <= -self.s.stop_loss_pct else "TAKE_PROFIT" if change_pct >= self.s.take_profit_pct else None
+            peak_gain_pct = (peak / entry - 1) * 100
+            trailing_pct = float(getattr(self.s, "trailing_stop_pct", 1.5))
+            trailing_trigger = (
+                peak_gain_pct > 0
+                and price <= peak * (1.0 - trailing_pct / 100.0)
+            )
+            reason = (
+                "STOP_LOSS" if change_pct <= -self.s.stop_loss_pct
+                else "TAKE_PROFIT" if change_pct >= self.s.take_profit_pct
+                else "TRAILING_STOP" if trailing_trigger
+                else None
+            )
             if reason:
                 fill = self.paper.sell(symbol, pos["qty"], price)
                 save_trade(self.db, "PAPER", symbol, "Sell", fill["qty"], fill["quote"], fill["fee"], price, "FILLED")
-                audit(self.db, reason, f"{symbol} change={change_pct:.3f}%")
-                actions.append(f"{symbol} SELL {reason} {change_pct:.2f}%")
+                gross_cost = pos["qty"] * entry
+                realized_pct = (price / entry - 1) * 100
+                audit(
+                    self.db, reason,
+                    f"{symbol} entry={entry:.10g} peak={peak:.10g} "
+                    f"exit={price:.10g} change={realized_pct:.3f}%",
+                )
+                actions.append(f"{symbol} SELL {reason} {realized_pct:.2f}%")
         if self.daily_pnl(prices) <= -self.s.max_daily_loss:
             self.stop("Daily loss limit reached")
             return actions + ["DAILY LOSS LIMIT — paused"]
-        for signal in results:
+        # Rank BUY candidates by strategy score first, then liquidity in EUR.
+        # This prevents exchange pair ordering from deciding capital allocation.
+        buy_candidates = sorted(
+            (item for item in results if item.get("signal") == "BUY"),
+            key=lambda item: (
+                float(item.get("score") or 0),
+                float(item.get("turnover_eur") or 0),
+            ),
+            reverse=True,
+        )
+        for signal in buy_candidates:
             quote_currency = str(signal.get("quote", "EUR")).upper()
             if signal.get("signal") != "BUY" or signal["symbol"] in self.paper.positions:
                 continue
