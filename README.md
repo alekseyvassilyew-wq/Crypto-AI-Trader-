@@ -20,8 +20,8 @@ This archive is a **PAPER-only release**. It is not a live trading bot and must 
 - Dynamic full-market scanner: discovers all online Kraken Spot crypto markets and retrieves their tickers in one request; candle analysis rotates through the configured per-cycle budget across liquid markets with a valid EUR valuation route.
 - Multi-currency PAPER cash, FX conversion, and positions persisted in SQLite.
 - PAPER buys are simulated at the ticker ask and sells at the ticker bid (spread-aware), with stop checks based on the executable bid; includes stop-loss, take-profit and trailing-stop exits, score-ranked entries, volatility-adjusted risk sizing, per-trade cap, max-position cap, and daily equity-loss pause.
-- Deterministic 7-8-1 neural-network research candidate with chronological expanding-window walk-forward validation, fee/slippage-aware out-of-sample metrics, and shadow-only forecasts that are settled against later closed candles. Candidate models never modify trading decisions or auto-promote.
-- Persistent PAPER equity snapshots, 90-day telemetry retention, and forward-test reports.
+- Deterministic 7-8-1 neural-network research candidate retrained every six hours on up to three liquid eligible markets, with chronological expanding-window walk-forward validation, purged horizons, next-candle-open entries, adverse slippage and two-sided fees. Shadow-only forecasts are settled against later closed candles; candidates never modify trading decisions or auto-promote.
+- A PAPER equity snapshot is persisted after every successful trading cycle, with 90-day telemetry retention and forward-test reports. Cached FX rates are valuation-only fallbacks; new entries require a conversion route from the current ticker snapshot.
 - Fee- and slippage-aware single-market and multi-market portfolio historical backtests with next-candle-open fills, conservative stop/target ordering, net P/L, profit factor, win rate and maximum drawdown; available as Telegram `/backtest SYMBOL` and `/backtest portfolio`.
 - Strictly increasing private API nonces within the running process; malformed API responses are rejected.
 - Persistent SQLite state and a safe paused-on-restart behavior.
@@ -75,7 +75,7 @@ python -m src.trader.main
 - Simulated fee estimate: 0.26%
 - Stop loss: 2%; take profit: 4%; trailing stop: 1.5%
 - Risk budget: 0.5% of marked PAPER equity per trade; allocation is reduced as ATR volatility rises
-- Automatic model research: up to 3 liquid markets per UTC day (configurable up to 5)
+- Automatic model research: every 6 hours on up to 3 liquid markets (configurable up to 5)
 - Multi-timeframe confirmation: enabled; potential BUY entries require 4h bullish trend, non-bearish 1d trend, and no high-volatility regime on higher timeframes
 
 These are configurable simulation assumptions, not recommendations. Verify Kraken's current minimum order sizes, pair availability, fees, and API behavior before any future live-trading implementation.
@@ -84,7 +84,7 @@ These are configurable simulation assumptions, not recommendations. Verify Krake
 
 - /learn XBTEUR fetches up to 720 closed 1-hour candles and trains a small deterministic neural network using momentum, EMA spread, RSI, ATR and volume features.
 - Evaluation uses three chronological expanding-window validation folds, purges overlapping label horizons at fold boundaries, and includes round-trip fee/slippage assumptions. It reports out-of-sample return, trade count, win rate, profit factor and drawdown.
-- The service automatically researches up to three of the most liquid eligible markets once per UTC day; /learn SYMBOL can trigger a manual research run. A research PASS is only a filter, not proof of an edge. The model is saved as SHADOW_ONLY; it does not influence entries, cannot place orders, and is never automatically promoted.
+- The service automatically retrains candidates every six hours on up to three of the most liquid eligible markets; /learn SYMBOL can trigger manual research. Signal features are calculated after a candle closes, entries are modelled at the next candle open, and fees/slippage are applied on both sides. A research PASS is only a filter, not proof of an edge. Candidates are saved as SHADOW_ONLY; they do not influence entries, cannot place orders, and are never automatically promoted.
 - During later scans of a researched symbol, shadow forecasts are recorded once per candle and settled after the configured three-hour horizon using subsequent closed candles. /learning reports realized shadow results. Collect a substantial sample across different market regimes before considering any strategy change.
 - /paperreport 24 (or another hour count up to 2160) reports saved PAPER equity changes and observed drawdown. Snapshots are recorded only while PAPER is actively running; retention is 90 days.
 - /realbalance calls Kraken's private Balance endpoint in read-only mode. It displays Kraken asset codes and quantities only; it does not transfer or synchronize actual holdings into the virtual PAPER wallet.
