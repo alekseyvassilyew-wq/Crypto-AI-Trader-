@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import math
 from .risk import Limits, check_order
 from .indicators import analyze
 from .db import audit, save_trade, get_state, set_state
@@ -63,6 +64,18 @@ class Engine:
                     continue
                 rates[source] = edges[target] * rates[target]
                 queue.append(source)
+        # After a restart the exchange universe has not been scanned yet.
+        # Retain the last validated FX snapshot until fresh ticker routes exist.
+        saved_rates = get_state(self.db, "paper_fx_rates", {})
+        if isinstance(saved_rates, dict):
+            for currency, raw_rate in saved_rates.items():
+                try:
+                    rate = float(raw_rate)
+                except (TypeError, ValueError, OverflowError):
+                    continue
+                if math.isfinite(rate) and rate > 0:
+                    rates.setdefault(str(currency).upper(), rate)
+        rates["EUR"] = 1.0
         return rates
 
     def _seed_multicurrency_wallet(self, fx_rates):
