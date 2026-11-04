@@ -83,6 +83,37 @@ def build_app(s, engine, exchange):
                 format_error(exc, "/scan", update.effective_user)
             )
 
+    async def backtest(update, context):
+        if not await authorized(update): return await deny(update)
+        symbol = (context.args[0] if context.args else "ZECEUR").upper().replace("/", "")
+        if not symbol.isalnum() or len(symbol) < 6 or len(symbol) > 20:
+            return await update.effective_message.reply_text("Использование: /backtest ZECEUR")
+        await update.effective_message.reply_text(f"Загружаю часовые свечи Kraken для {symbol}; это может занять несколько минут…")
+        try:
+            from .backtest import run_backtest
+            def work():
+                rows = exchange.candles(symbol, interval="60", limit=720)
+                return run_backtest(rows, fee_rate=s.fee_rate, slippage_bps=5.0,
+                                    stop_loss_pct=s.stop_loss_pct, take_profit_pct=s.take_profit_pct)
+            result = await context.application.bot_data["run_blocking"].run(work)
+            report = (
+                f"📉 ИСТОРИЧЕСКИЙ PAPER-БЭКТЕСТ — {symbol}/EUR\n"
+                f"Свечей (1h): {result['candles']}\n"
+                f"Сделок: {result['trades']} | прибыльных: {result['wins']}\n"
+                f"Win rate: {result['win_rate_pct']:.1f}%\n"
+                f"Доходность стратегии: {result['return_pct']:+.2f}%\n"
+                f"Buy & hold: {result['buy_hold_pct']:+.2f}%\n"
+                f"Макс. просадка: {result['max_drawdown_pct']:.2f}%\n"
+                f"Комиссии в закрытых сделках: {result['fees_total']:.4f} EUR\n"
+                "Учтено: комиссия биржи, 5 bps проскальзывания, стоп 2%, тейк 4%. "
+                "Если стоп и тейк задеты одной свечой — считается стоп.\n"
+                "Это историческая проверка, не прогноз и не гарантия будущей прибыли."
+            )
+            await update.effective_message.reply_text(report[:3900])
+        except Exception as exc:
+            log.exception("Historical backtest failed for %s", symbol)
+            await update.effective_message.reply_text(format_error(exc, f"/backtest {symbol}", update.effective_user))
+
     async def account(update, context):
         if not await authorized(update): return await deny(update)
         try:
@@ -252,7 +283,7 @@ def build_app(s, engine, exchange):
         @staticmethod
         async def run(fn): return await asyncio.to_thread(fn)
     app.bot_data["run_blocking"] = Runner
-    for name, fn in [("start", start), ("status", status), ("scan", scan), ("account", account), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
+    for name, fn in [("start", start), ("status", status), ("scan", scan), ("backtest", backtest), ("account", account), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
                      ("run", run), ("pause", pause), ("stop", stop), ("help", help_cmd)]:
         app.add_handler(CommandHandler(name, fn))
     app.add_handler(CallbackQueryHandler(callback))
