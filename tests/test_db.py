@@ -127,3 +127,39 @@ def test_sqlite_backup_versions_are_unique_and_retention_is_enforced(tmp_path):
     retained = list(backup_dir.glob("crypto_ai_trader_*.sqlite3"))
     assert len(retained) == 2
     db.close()
+
+
+def test_paper_metrics_report_actual_measurement_span_not_requested_window():
+    db = connect(":memory:")
+    now = datetime.now(timezone.utc)
+    first = now - timedelta(hours=5, minutes=30)
+    save_paper_snapshot(
+        db, ts=first.isoformat(), equity_eur=20.0, cash={"EUR": 20.0},
+        open_positions=0, analyzed_markets=20, buy_signals=1,
+    )
+    save_paper_snapshot(
+        db, ts=now.isoformat(), equity_eur=19.9, cash={"EUR": 19.9},
+        open_positions=0, analyzed_markets=20, buy_signals=0,
+    )
+
+    metrics = get_paper_metrics(db, hours=24)
+
+    assert metrics["hours"] == 24
+    assert metrics["samples"] == 2
+    assert metrics["measurement_span_seconds"] == pytest.approx(5.5 * 3600, abs=1)
+    assert metrics["measurement_span_hours"] == pytest.approx(5.5, abs=1 / 3600)
+    db.close()
+
+
+def test_single_paper_snapshot_has_zero_measurement_span():
+    db = connect(":memory:")
+    save_paper_snapshot(
+        db, ts=datetime.now(timezone.utc).isoformat(), equity_eur=20.0,
+        cash={"EUR": 20.0}, open_positions=0, analyzed_markets=20, buy_signals=0,
+    )
+
+    metrics = get_paper_metrics(db, hours=24)
+
+    assert metrics["samples"] == 1
+    assert metrics["measurement_span_seconds"] == 0.0
+    db.close()
