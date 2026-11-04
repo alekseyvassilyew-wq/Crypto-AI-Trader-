@@ -71,7 +71,8 @@ class KrakenSpot:
                 # Kraken public REST endpoints share a per-IP call budget.
                 # Serialize requests and leave a small gap to reduce throttling.
                 with self._public_lock:
-                    wait = 0.5 - (time.monotonic() - self._last_public_request)
+                    # Keep all public Kraken REST calls at least 1.05 s apart.
+                    wait = 1.05 - (time.monotonic() - self._last_public_request)
                     if wait > 0:
                         time.sleep(wait)
                     self._last_public_request = time.monotonic()
