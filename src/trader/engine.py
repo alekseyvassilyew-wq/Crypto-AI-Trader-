@@ -481,7 +481,11 @@ class Engine:
         ticker_seconds = time.monotonic() - stage_started
         self.market_pairs = [{"symbol": symbol, "quote": "EUR"} for symbol in symbols]
         self.market_ticker_count = len(tickers)
-        results = [self.scan_one(symbol, tickers) for symbol in symbols]
+        results = []
+        for symbol in symbols:
+            stage_started = time.monotonic()
+            results.append(self.scan_one(symbol, tickers))
+            ohlc_seconds += time.monotonic() - stage_started
         total_seconds = time.monotonic() - scan_started
         log.info(
             "Market scan timing: pairs=%d tickers=%d eligible=%d OHLC_selected=%d "
