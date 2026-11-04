@@ -75,8 +75,7 @@ def load_settings():
         raise ValueError("All numeric settings must be finite numbers.")
     if min(s.max_daily_loss, s.max_positions, s.max_candle_pairs, s.scan_interval, s.stop_loss_pct, s.take_profit_pct) <= 0:
         raise ValueError("Risk limits and scan interval must be positive.")
-    if s.trade_quote_currency != "EUR":
-        raise ValueError("This PAPER wallet is denominated in EUR; TRADE_QUOTE_CURRENCY must remain EUR.")
+    # TRADE_QUOTE_CURRENCY is retained for backwards-compatible display/defaults.
     if s.max_spread_bps <= 0 or s.min_turnover < 0:
         raise ValueError("Spread limit must be positive and minimum turnover cannot be negative.")
     if not 0 <= s.fee_rate < 0.1:
