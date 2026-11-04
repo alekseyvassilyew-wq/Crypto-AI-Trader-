@@ -58,14 +58,14 @@ def build_app(s, engine, exchange):
         description = safe_error_message(exc)
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         return (
-            "🚨 <b>ОШИБКА БОТА</b>\\n"
-            f"🕒 Время: <code>{timestamp}</code>\\n"
-            f"🧩 Источник: <b>{html.escape(source)}</b>\\n"
-            f"👤 Кто: {html.escape(who)}\\n"
-            f"💬 Действие: {html.escape(str(action))}\\n"
-            f"⚠️ Тип: <code>{html.escape(type(exc).__name__)}</code>\\n"
-            f"📝 Описание: {html.escape(description)}\\n"
-            "📋 <b>Трейс:</b>\\n"
+            "🚨 <b>ОШИБКА БОТА</b>\n"
+            f"🕒 Время: <code>{timestamp}</code>\n"
+            f"🧩 Источник: <b>{html.escape(source)}</b>\n"
+            f"👤 Кто: {html.escape(who)}\n"
+            f"💬 Действие: {html.escape(str(action))}\n"
+            f"⚠️ Тип: <code>{html.escape(type(exc).__name__)}</code>\n"
+            f"📝 Описание: {html.escape(description)}\n"
+            "📋 <b>Трейс:</b>\n"
             f"<pre>{html.escape(trace[-2600:])}</pre>"
         )[:3900]
 
