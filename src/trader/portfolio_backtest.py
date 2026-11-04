@@ -213,10 +213,11 @@ def run_portfolio_backtest(
                 break
             market = markets[symbol]
             quote = market["quote"]
-            current_rates = rates_at(timestamp)
-            quote_rate = current_rates[quote]
+            next_timestamp = common_timestamps[index + 1]
+            execution_rates = rates_at(next_timestamp)
+            quote_rate = execution_rates[quote]
             next_open = market["rows"][index + 1][1]
-            available_eur = sum(amount * current_rates.get(currency, 0.0) for currency, amount in cash.items())
+            available_eur = sum(amount * execution_rates.get(currency, 0.0) for currency, amount in cash.items())
             budget_eur = min(trade_cap, available_eur, current_equity / int(max_positions))
             if budget_eur <= 0:
                 break
@@ -229,7 +230,7 @@ def run_portfolio_backtest(
                 if cash.get("EUR", 0.0) + 1e-12 < source_eur:
                     # Use any other funded quote wallet via its EUR valuation.
                     for source in sorted(c for c, amount in cash.items() if c != quote and amount > 1e-12):
-                        source_rate = current_rates.get(source)
+                        source_rate = execution_rates.get(source)
                         if not source_rate:
                             continue
                         source_amount = min(cash[source], source_eur / source_rate)
