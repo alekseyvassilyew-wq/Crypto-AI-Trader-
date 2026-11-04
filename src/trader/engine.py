@@ -34,11 +34,35 @@ class Engine:
         self.scan_interval_seconds = self.s.scan_interval
         audit(self.db, "PAPER_STOPPED", reason)
 
+    def _fx_rates(self, prices=None):
+        """Build quote-currency to EUR conversion rates from discovered spot markets."""
+        prices = prices or self.last_prices
+        graph = {}
+        for pair in self.market_pairs:
+            base = str(pair.get("base") or "").upper()
+            quote = str(pair.get("quote") or "").upper()
+            symbol = pair.get("symbol")
+            price = float(prices.get(symbol) or 0) if symbol else 0
+            if not base or not quote or price <= 0:
+                continue
+            graph.setdefault(base, {})[quote] = price
+            graph.setdefault(quote, {})[base] = 1.0 / price
+        rates = {"EUR": 1.0}
+        queue = ["EUR"]
+        while queue:
+            target = queue.pop(0)
+            for source, edges in graph.items():
+                if source in rates or target not in edges:
+                    continue
+                rates[source] = edges[target] * rates[target]
+                queue.append(source)
+        return rates
+
     def daily_pnl(self, prices=None):
         self._ensure_day()
         state = get_state(self.db, "daily", {})
-        prices = prices or {}
-        return self.paper.equity(prices) - float(state.get("start_equity", self.paper.cash))
+        prices = prices or self.last_prices or {}
+        return self.paper.equity(prices, self._fx_rates(prices)) - float(state.get("start_equity", self.paper.cash))
 
     def scan_one(self, symbol, tickers=None):
         tickers = tickers if tickers is not None else self.exchange.tickers([symbol])
@@ -198,7 +222,12 @@ class Engine:
             try:
                 check_order(self.s.max_trade, signal["spread_bps"], signal["turnover"], len(self.paper.positions),
                             self.daily_pnl(prices), self.limits)
-                allocation = min(float(self.s.max_trade), self.paper.balance(quote_currency) / 2.0)
+                quote_to_eur = self._fx_rates(prices).get(quote_currency)
+                if not quote_to_eur or quote_to_eur <= 0:
+                    audit(self.db, "ENTRY_SKIPPED", f"{signal['symbol']}: no EUR conversion rate for {quote_currency}")
+                    continue
+                max_quote_allocation = float(self.s.max_trade) / quote_to_eur
+                allocation = min(max_quote_allocation, self.paper.balance(quote_currency) / 2.0)
                 if allocation <= 0:
                     continue
                 fill = self.paper.buy(signal["symbol"], allocation, signal["price"], currency=quote_currency)
