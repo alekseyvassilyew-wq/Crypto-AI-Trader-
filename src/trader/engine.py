@@ -134,6 +134,7 @@ class Engine:
         self.paused = True
         self.scan_interval_seconds = settings.scan_interval
         self.last_scan_at = None
+        self.last_scan_metrics = {}
         self.last_prices = {}
         self.last_signals = []
         self.market_pairs = []
@@ -623,6 +624,15 @@ class Engine:
                     updated_average = 0.7 * average_ohlc_seconds + 0.3 * observed_average
                     set_state(self.db, "ohlc_avg_seconds_per_market", updated_average)
             total_seconds = time.monotonic() - scan_started
+            self.last_scan_metrics = {
+                "pairs": len(pairs),
+                "tickers": len(tickers),
+                "eligible": len(eligible),
+                "ohlc_selected": len(selected),
+                "ohlc_budget": analysis_limit,
+                "ohlc_analyzed": ohlc_analyzed_count,
+                "duration_seconds": total_seconds,
+            }
             log.info(
                 "Market scan timing: pairs=%d tickers=%d eligible=%d OHLC_selected=%d OHLC_budget=%d "
                 "OHLC_analyzed=%d priority_selected=%d discovery=%.2fs ticker=%.2fs fx=%.2fs "
@@ -646,6 +656,15 @@ class Engine:
             results.append(self.scan_one(symbol, tickers))
             ohlc_seconds += time.monotonic() - stage_started
         total_seconds = time.monotonic() - scan_started
+        self.last_scan_metrics = {
+            "pairs": len(symbols),
+            "tickers": len(tickers),
+            "eligible": len(symbols),
+            "ohlc_selected": len(symbols),
+            "ohlc_budget": len(symbols),
+            "ohlc_analyzed": sum(int(bool(item.get("ohlc_analyzed"))) for item in results),
+            "duration_seconds": total_seconds,
+        }
         log.info(
             "Market scan timing: pairs=%d tickers=%d eligible=%d OHLC_selected=%d "
             "OHLC_analyzed=%d discovery=%.2fs ticker=%.2fs fx=%.2fs "
