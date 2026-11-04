@@ -1271,6 +1271,62 @@ def build_app(s, engine, exchange):
             except Exception:
                 log.error("Could not send SQLite backup failure notification")
 
+    async def backup_health_job(context):
+        """Alert only on backup-health state transitions; avoid repeated noise."""
+        from .db import get_backup_status, get_state, set_state
+
+        backup_dir = Path(s.db_path).expanduser().parent / "backups"
+        try:
+            current = await context.application.bot_data["run_blocking"].run(
+                lambda: get_backup_status(backup_dir)
+            )
+            def read_previous():
+                value = get_state(monitor_db, "sqlite_backup_health", {})
+                return value if isinstance(value, dict) else {}
+            previous = await context.application.bot_data["monitor_runner"].run(read_previous)
+            old_status = previous.get("status")
+            new_status = current["status"]
+
+            if new_status != old_status:
+                if new_status in {"missing", "stale"}:
+                    detail = (
+                        "Резервная копия SQLite не найдена на постоянном диске."
+                        if new_status == "missing"
+                        else f"Последняя резервная копия SQLite устарела: {current['age_seconds'] / 3600:.1f} ч."
+                    )
+                    await send_topic(
+                        context, s.topic_errors_id,
+                        "🚨 <b>ПРОБЛЕМА РЕЗЕРВНОГО КОПИРОВАНИЯ</b>\\n"
+                        f"🕒 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\\n"
+                        f"⚠️ {html.escape(detail)}",
+                        parse_mode="HTML",
+                    )
+                elif new_status == "fresh" and old_status in {"missing", "stale"}:
+                    await send_topic(
+                        context, s.topic_general_id,
+                        "🟢 <b>РЕЗЕРВНОЕ КОПИРОВАНИЕ ВОССТАНОВЛЕНО</b>\\n"
+                        f"Последняя проверенная копия: {current['timestamp']} UTC",
+                        parse_mode="HTML",
+                    )
+            def persist():
+                set_state(monitor_db, "sqlite_backup_health", {
+                    "status": new_status,
+                    "checked_at": datetime.now(timezone.utc).isoformat(),
+                    "timestamp": current.get("timestamp"),
+                    "age_seconds": current.get("age_seconds"),
+                })
+            await context.application.bot_data["monitor_runner"].run(persist)
+            log.info("SQLite backup health check: %s", new_status)
+        except Exception as exc:
+            log.error("SQLite backup health check failed: %s", type(exc).__name__)
+            try:
+                await send_topic(
+                    context, s.topic_errors_id,
+                    f"🚨 Не удалось проверить состояние резервной копии SQLite: {type(exc).__name__}",
+                )
+            except Exception:
+                log.error("Could not notify backup health check failure")
+
     async def application_error_handler(update, context):
         error = context.error
         # Do not log exception strings: HTTP request exceptions can contain
@@ -1291,6 +1347,7 @@ def build_app(s, engine, exchange):
     app.job_queue.run_repeating(external_monitor_job, interval=90, first=25, name="external-platform-monitor")
     # Daily verified SQLite backup on the persistent Render disk; retain seven copies.
     app.job_queue.run_repeating(database_backup_job, interval=86400, first=300, name="sqlite-daily-backup")
+    app.job_queue.run_repeating(backup_health_job, interval=3600, first=600, name="sqlite-backup-health")
     # Start once, then cycle_job schedules the next scan after completion.
     # This fixed-delay cadence avoids overlapping jobs and skipped scans.
     app.job_queue.run_once(cycle_job, when=10, name="paper-cycle")
