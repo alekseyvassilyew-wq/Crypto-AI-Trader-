@@ -17,7 +17,7 @@ def test_paper_config(monkeypatch):
     assert s.paper_start == 20
     assert s.watchlist == ()
     assert s.trade_quote_currency == "EUR"
-    assert s.max_candle_pairs == 10
+    assert s.max_candle_pairs == 20
 
 
 def test_non_finite_risk_values_are_rejected(monkeypatch):
