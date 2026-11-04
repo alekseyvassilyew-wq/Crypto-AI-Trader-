@@ -180,6 +180,18 @@ def run_portfolio_backtest(
             trading_halted = False
         marks = {s: m["rows"][index][4] for s, m in markets.items()}
 
+        # Capture the full intrabar range for every open position before
+        # any stop/target closes it, so stopped trades remain in drawdown.
+        high_marks = {symbol: markets[symbol]["rows"][index][2] for symbol in positions}
+        low_marks = {symbol: markets[symbol]["rows"][index][3] for symbol in positions}
+        intrabar_high_equity = equity(high_marks, timestamp)
+        intrabar_low_equity = equity(low_marks, timestamp)
+        max_equity = max(max_equity, intrabar_high_equity)
+        if max_equity > 0:
+            max_drawdown = max(max_drawdown, (max_equity - intrabar_low_equity) / max_equity)
+        if daily_limit is not None and intrabar_low_equity - daily_start <= -daily_limit:
+            trading_halted = True
+
         # Manage all existing positions before considering new entries.
         for symbol in list(positions):
             row = markets[symbol]["rows"][index]
@@ -208,18 +220,7 @@ def run_portfolio_backtest(
             if reason:
                 close(symbol, exit_price, timestamp, reason)
 
-        # Mark remaining positions at both candle extremes. Using the
-        # high before the low is a conservative worst-case drawdown assumption.
-        high_marks = {symbol: markets[symbol]["rows"][index][2] for symbol in positions}
-        low_marks = {symbol: markets[symbol]["rows"][index][3] for symbol in positions}
-        intrabar_high_equity = equity(high_marks, timestamp)
-        intrabar_low_equity = equity(low_marks, timestamp)
-        max_equity = max(max_equity, intrabar_high_equity)
-        if max_equity > 0:
-            max_drawdown = max(max_drawdown, (max_equity - intrabar_low_equity) / max_equity)
         current_equity = equity(marks, timestamp)
-        if daily_limit is not None and intrabar_low_equity - daily_start <= -daily_limit:
-            trading_halted = True
 
         # Signals are based on this closed candle; any order fills at next open.
         candidates = []
@@ -311,6 +312,13 @@ def run_portfolio_backtest(
 
     # Apply stop/target logic to the final candle before forced liquidation.
     last_timestamp = common_timestamps[-1]
+    final_high_marks = {symbol: market["rows"][-1][2] for symbol, market in markets.items() if symbol in positions}
+    final_low_marks = {symbol: market["rows"][-1][3] for symbol, market in markets.items() if symbol in positions}
+    final_intrabar_high = equity(final_high_marks, last_timestamp)
+    final_intrabar_low = equity(final_low_marks, last_timestamp)
+    max_equity = max(max_equity, final_intrabar_high)
+    if max_equity > 0:
+        max_drawdown = max(max_drawdown, (max_equity - final_intrabar_low) / max_equity)
     for symbol in list(positions):
         _, op, high, low, close_price, _ = markets[symbol]["rows"][-1]
         pos = positions[symbol]
