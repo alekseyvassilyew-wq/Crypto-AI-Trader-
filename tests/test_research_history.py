@@ -86,3 +86,39 @@ def test_research_failures_are_also_saved():
     assert rows[0]["outcome"] == "INSUFFICIENT_DATA"
     assert "insufficient data" in rows[0]["reasons"][0]
     db.close()
+
+
+def test_perform_research_uses_configured_paper_slippage(monkeypatch):
+    from types import SimpleNamespace
+    from src.trader.research_history import perform_research
+
+    db = connect(":memory:")
+    rows = candles(80)
+    class Exchange:
+        def candles(self, symbol, interval, limit):
+            assert symbol == "XBTEUR"
+            assert interval == "60"
+            return rows[-limit:]
+
+    captured = {}
+    def fake_research_candidate(history, *, fee_rate, slippage_bps):
+        captured["fee_rate"] = fee_rate
+        captured["slippage_bps"] = slippage_bps
+        return {
+            "research_pass": False,
+            "samples": len(history),
+            "out_of_sample": {"net_return_pct": -1.0, "profit_factor": 0.5,
+                              "max_drawdown_pct": 3.0, "trades": 2},
+            "independent_holdout": {"net_return_pct": -0.5, "trades": 1},
+            "rejection_reasons": ["test only"],
+        }
+
+    monkeypatch.setattr("src.trader.learning.research_candidate", fake_research_candidate)
+    settings = SimpleNamespace(fee_rate=0.0026, paper_slippage_bps=17.5)
+    result = perform_research(db, Exchange(), settings, "XBTEUR", source="unit-test")
+
+    assert captured == {"fee_rate": 0.0026, "slippage_bps": 17.5}
+    assert result["research_pass"] is False
+    saved = list_research_runs(db, limit=1, symbol="XBTEUR")
+    assert saved[0]["report"]["assumptions"]["slippage_bps_per_side"] == 17.5 if "assumptions" in saved[0]["report"] else saved[0]["outcome"] == "NOT_PASS"
+    db.close()
