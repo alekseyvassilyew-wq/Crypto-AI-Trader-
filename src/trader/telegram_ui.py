@@ -128,10 +128,22 @@ def build_app(s, engine, exchange):
                     log.warning("PAPER status valuation unavailable: %s", type(exc).__name__)
                     daily_text = "недоступен — ошибка оценки"
                     equity_text = "недоступна — ошибка оценки"
+            from .db import get_latest_paper_snapshot
+            snapshot = get_latest_paper_snapshot(engine.db)
+            valuation_time = (
+                engine.last_scan_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+                if engine.last_scan_at else "нет свежего сканирования"
+            )
+            if snapshot:
+                snapshot_time = str(snapshot["ts"]).replace("T", " ")[:19] + " UTC"
+                snapshot_text = f"{float(snapshot['equity_eur']):.4f} EUR в {snapshot_time}"
+            else:
+                snapshot_text = "ещё нет сохранённых измерений"
             return (
                 f"Режим: PAPER\nСостояние: {state}\nСвободные средства: {balances}\n"
-                f"Общая стоимость портфеля после расчётных расходов на выход: {equity_text}\n"
-                f"Время оценки по последнему сканированию: {engine.last_scan_at.strftime('%Y-%m-%d %H:%M:%S UTC') if engine.last_scan_at else 'нет данных'}\n"
+                f"Текущая оценка портфеля после расходов на выход: {equity_text}\n"
+                f"Время рыночных котировок для оценки: {valuation_time}\n"
+                f"Последний сохранённый снимок PAPER: {snapshot_text}\n"
                 f"Позиции: {len(engine.paper.positions)}/{s.max_positions}\nP/L сегодня (UTC): {daily_text}\n"
                 f"Риск: SL {s.stop_loss_pct:.2f}% | TP {s.take_profit_pct:.2f}% | trailing {getattr(s, 'trailing_stop_pct', 1.5):.2f}%\n"
                 f"Рынок Kraken: {len(engine.market_pairs)} пар; котировок получено: {engine.market_ticker_count}\n"
@@ -149,7 +161,20 @@ def build_app(s, engine, exchange):
             state = get_state(monitor_db, "external_monitor_state", {})
             if not isinstance(state, dict):
                 state = {}
-            return format_monitor_status(s, state)
+            report = format_monitor_status(s, state)
+            from .db import get_backup_health
+            backup = get_backup_health(Path(s.db_path).expanduser().parent / "backups", max_age_hours=26, keep=7)
+            if backup["count"] == 0:
+                backup_line = "SQLite backup: НЕ НАЙДЕНА"
+            else:
+                age_hours = backup["age_seconds"] / 3600.0
+                backup_line = (
+                    f"SQLite backup: {backup['latest_at']} UTC; возраст {age_hours:.1f} ч; "
+                    f"integrity {backup['integrity']}; копий {backup['count']}/7"
+                )
+                if not backup["healthy"]:
+                    backup_line += " — ВНИМАНИЕ: ПРОВЕРКА НЕ ПРОЙДЕНА"
+            return report + "\\n" + backup_line
         message = await context.application.bot_data["monitor_runner"].run(read_monitor_status)
         await update.effective_message.reply_text(message)
 
@@ -1278,6 +1303,71 @@ def build_app(s, engine, exchange):
             except Exception:
                 log.error("Could not send SQLite backup failure notification")
 
+    async def backup_health_job(context):
+        """Alert once on SQLite backup health transitions and confirm recovery."""
+        from .db import get_backup_health, get_state, set_state
+        from .monitoring import backup_health_transition
+
+        backup_dir = Path(s.db_path).expanduser().parent / "backups"
+        try:
+            current = await context.application.bot_data["run_blocking"].run(
+                lambda: get_backup_health(backup_dir, max_age_hours=26, keep=7)
+            )
+            if current["count"] == 0:
+                new_status = "missing"
+            elif current["integrity"] != "ok":
+                new_status = "corrupt"
+            elif not current["retention_ok"]:
+                new_status = "retention"
+            elif not current["healthy"]:
+                new_status = "stale"
+            else:
+                new_status = "fresh"
+
+            def read_previous():
+                value = get_state(monitor_db, "sqlite_backup_health", {})
+                return value if isinstance(value, dict) else {}
+            previous = await context.application.bot_data["monitor_runner"].run(read_previous)
+            transition = backup_health_transition(previous.get("status"), new_status)
+
+            if transition == "failure":
+                if new_status == "missing":
+                    detail = "Резервная копия SQLite не найдена."
+                elif new_status == "corrupt":
+                    detail = f"Integrity последней копии не пройден: {current['integrity']}."
+                elif new_status == "retention":
+                    detail = f"Количество резервных копий превышает лимит 7: {current['count']}."
+                else:
+                    detail = f"Последняя резервная копия устарела: {current['age_seconds'] / 3600:.1f} ч."
+                await send_topic(
+                    context, s.topic_errors_id,
+                    "🚨 <b>ПРОБЛЕМА РЕЗЕРВНОГО КОПИРОВАНИЯ</b>\\n"
+                    f"🕒 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\\n"
+                    f"⚠️ {html.escape(detail)}",
+                    parse_mode="HTML",
+                )
+            elif transition == "recovered":
+                await send_topic(
+                    context, s.topic_general_id,
+                    "🟢 <b>РЕЗЕРВНОЕ КОПИРОВАНИЕ ВОССТАНОВЛЕНО</b>\\n"
+                    f"Последняя проверенная копия: {current['latest_at']}",
+                    parse_mode="HTML",
+                )
+
+            def persist_health():
+                set_state(monitor_db, "sqlite_backup_health", {
+                    "status": new_status,
+                    "checked_at": datetime.now(timezone.utc).isoformat(),
+                    "latest_at": current.get("latest_at"),
+                    "age_seconds": current.get("age_seconds"),
+                    "integrity": current.get("integrity"),
+                    "count": current.get("count", 0),
+                })
+            await context.application.bot_data["monitor_runner"].run(persist_health)
+            log.info("SQLite backup health check: %s", new_status)
+        except Exception as exc:
+            log.error("SQLite backup health check failed: %s", type(exc).__name__)
+
     async def application_error_handler(update, context):
         error = context.error
         # Do not log exception strings: HTTP request exceptions can contain
@@ -1298,6 +1388,7 @@ def build_app(s, engine, exchange):
     app.job_queue.run_repeating(external_monitor_job, interval=90, first=25, name="external-platform-monitor")
     # Daily verified SQLite backup on the persistent Render disk; retain seven copies.
     app.job_queue.run_repeating(database_backup_job, interval=86400, first=300, name="sqlite-daily-backup")
+    app.job_queue.run_repeating(backup_health_job, interval=3600, first=600, name="sqlite-backup-health")
     # Start once, then cycle_job schedules the next scan after completion.
     # This fixed-delay cadence avoids overlapping jobs and skipped scans.
     app.job_queue.run_once(cycle_job, when=10, name="paper-cycle")
