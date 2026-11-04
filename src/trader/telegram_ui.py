@@ -145,7 +145,8 @@ def build_app(s, engine, exchange):
             ]
             lines.extend(
                 f"{x['symbol']}: {x['signal']} ({x.get('score', 0)}/5), "
-                f"оборот {x.get('turnover_eur', 0):,.0f} EUR/24ч, цена {x.get('price', 0):,.8g}"
+                f"оборот {x.get('turnover_eur', 0):,.0f} EUR/24ч, цена {x.get('price', 0):,.8g}\n"
+                f"  Причина: {'; '.join(x.get('reasons', [])[:2]) or 'Нет дополнительных причин'}"
                 for x in ranked
             )
             lines.append("Все рынки получают мониторинг котировок; анализ свечей ограничен бюджетом запросов.")
@@ -393,17 +394,8 @@ def build_app(s, engine, exchange):
         )
         try:
             def run_research():
-                from .learning import research_candidate
-                from .db import set_state
-                candles = exchange.candles(symbol, interval="60", limit=720)
-                candidate = research_candidate(candles, fee_rate=s.fee_rate, slippage_bps=5.0)
-                from datetime import datetime, timezone
-                trained_at = datetime.now(timezone.utc)
-                candidate["symbol"] = symbol
-                candidate["model_version"] = trained_at.strftime("%Y%m%dT%H%M%S")
-                candidate["trained_at_utc"] = trained_at.isoformat()
-                set_state(engine.db, "ml_candidate_" + symbol, candidate)
-                return candidate
+                from .research_history import perform_research
+                return perform_research(engine.db, exchange, s, symbol, source="manual")
             candidate = await context.application.bot_data["run_blocking"].run(run_research)
             metrics = candidate["out_of_sample"]
             pf = metrics["profit_factor"]
@@ -417,9 +409,18 @@ def build_app(s, engine, exchange):
                 f"Вневыборочных сделок: {metrics['trades']}\n"
                 f"Доходность после издержек: {metrics['net_return_pct']:+.2f}%\n"
                 f"Win rate: {metrics['win_rate_pct']:.1f}% | Profit factor: {pf_text}\n"
-                f"Макс. просадка: {metrics['max_drawdown_pct']:.2f}%\n"
-                "Модель сохранена как исследовательский кандидат. Автоматического внедрения нет; "
-                "следующий этап — длительное теневое сравнение с базовой стратегией."
+                f"Макс. просадка OOS: {metrics['max_drawdown_pct']:.2f}%\n"
+                f"Независимый holdout: {candidate['independent_holdout']['net_return_pct']:+.2f}% | "
+                f"{candidate['independent_holdout']['trades']} сделок | "
+                f"DD {candidate['independent_holdout']['max_drawdown_pct']:.2f}%\n"
+                "Режимы рынка (OOS): " + " | ".join(
+                    f"{regime}: {data['observations']} наблюдений, {data['net_return_pct']:+.2f}%"
+                    for regime, data in candidate.get("regime_metrics", {}).items()
+                ) + "\n"
+                + ("Причины отказа:\n" + "\n".join("• " + reason for reason in candidate.get("rejection_reasons", [])[:6])
+                   if candidate.get("rejection_reasons") else "Все исследовательские критерии пройдены.") + "\n"
+                + f"Исторических свечей накоплено: {candidate.get('history_candles', candidate['samples'])}\n"
+                "Модель остаётся SHADOW ONLY: автоматического внедрения в торговлю нет."
             )
         except Exception as exc:
             log.error("ML research failed for %s: %s", symbol, type(exc).__name__)
@@ -450,6 +451,42 @@ def build_app(s, engine, exchange):
         if len(lines) == 1:
             return await update.effective_message.reply_text("Исследовательских моделей пока нет. Запусти /learn XBTEUR.")
         await update.effective_message.reply_text("\n".join(lines)[:3900])
+
+    async def research_history_cmd(update, context):
+        if not await authorized(update): return await deny(update)
+        symbol = context.args[0].strip().upper().replace("/", "") if context.args else None
+        try:
+            def read_history():
+                from .research_history import list_research_runs
+                return list_research_runs(engine.db, limit=10, symbol=symbol)
+            rows = await context.application.bot_data["run_blocking"].run(read_history)
+            if not rows:
+                return await update.effective_message.reply_text(
+                    "История исследований пока пуста. Запусти /learn XBTEUR или дождись автоматического исследования."
+                )
+            lines = ["🧠 ИСТОРИЯ ИССЛЕДОВАНИЙ — SHADOW ONLY"]
+            for item in rows:
+                report = item.get("report") or {}
+                oos = report.get("out_of_sample") or {}
+                holdout = report.get("independent_holdout") or {}
+                reasons = item.get("reasons") or []
+                lines.append(
+                    f"{item['created_at']} | {item['symbol']} | {item['outcome']} | "
+                    f"OOS {float(item.get('oos_return_pct') or 0):+.2f}% | "
+                    f"holdout {float(item.get('holdout_return_pct') or 0):+.2f}% | "
+                    f"PF {item.get('profit_factor', 'N/A')} | DD {float(item.get('max_drawdown_pct') or 0):.2f}%"
+                )
+                if reasons:
+                    lines.append("Причина: " + "; ".join(str(reason) for reason in reasons[:3]))
+                regimes = report.get("regime_metrics") or {}
+                if regimes:
+                    lines.append("Режимы: " + " | ".join(
+                        f"{name} {data.get('net_return_pct', 0):+.2f}%/{data.get('observations', 0)} obs"
+                        for name, data in regimes.items()
+                    ))
+            await update.effective_message.reply_text("\n".join(lines)[:3900])
+        except Exception as exc:
+            await update.effective_message.reply_text(f"Ошибка истории исследований: {safe_error_message(exc)}")
 
     async def paperreport(update, context):
         if not await authorized(update): return await deny(update)
@@ -590,7 +627,8 @@ def build_app(s, engine, exchange):
             "/start — меню\n/status — состояние и P/L\n/scan — сканирование\n"
             "/account — виртуальные остатки PAPER\n/realbalance — реальные остатки Kraken (только чтение)\n"
             "/portfolio — PAPER-позиции\n/paperreport [часы] — статистика автономного PAPER-теста\n"
-            "/learn XBTEUR — обучение/проверка ML-кандидата без торговли\n/learning — результаты walk-forward и shadow-теста\n"
+            "/learn XBTEUR — обучение/проверка ML-кандидата без торговли\n/learning — текущие кандидаты и shadow-тест\n"
+            "/research [SYMBOL] — история экспериментов, причины отказа и режимы рынка\n"
             "/backtest XBTEUR — тест одного рынка; /backtest portfolio — до 5 рынков\n"
             "/interval 1m|5m|15m|30m|1h|4h|24h — интервал\n"
             "/run — запуск PAPER\n/pause — пауза\n/stop — аварийная остановка\n"
@@ -612,7 +650,7 @@ def build_app(s, engine, exchange):
             def research_top_markets():
                 from datetime import datetime, timezone, timedelta
                 from .db import get_state, set_state
-                from .learning import research_candidate
+                from .research_history import perform_research
                 now_utc = datetime.now(timezone.utc)
                 previous = get_state(engine.db, "ml_auto_research_date", {})
                 if isinstance(previous, dict) and previous.get("at_utc"):
@@ -657,18 +695,17 @@ def build_app(s, engine, exchange):
                 trained = []
                 for _, symbol in selected:
                     try:
-                        candles = exchange.candles(symbol, interval="60", limit=720)
-                        candidate = research_candidate(candles, fee_rate=s.fee_rate, slippage_bps=5.0)
-                        version_time = datetime.now(timezone.utc)
-                        candidate["symbol"] = symbol
-                        candidate["model_version"] = version_time.strftime("%Y%m%dT%H%M%S")
-                        candidate["trained_at_utc"] = version_time.isoformat()
-                        set_state(engine.db, "ml_candidate_" + symbol, candidate)
+                        candidate = perform_research(
+                            engine.db, exchange, s, symbol, source="automatic"
+                        )
                         trained.append({
                             "symbol": symbol,
                             "pass": bool(candidate["research_pass"]),
                             "samples": candidate["samples"],
                             "version": candidate["model_version"],
+                            "reasons": candidate.get("rejection_reasons", []),
+                            "oos_return": candidate["out_of_sample"]["net_return_pct"],
+                            "holdout_return": candidate["independent_holdout"]["net_return_pct"],
                         })
                     except Exception as market_exc:
                         log.warning("Automatic model research skipped %s: %s", symbol, market_exc)
@@ -683,8 +720,10 @@ def build_app(s, engine, exchange):
             trained = await context.application.bot_data["run_blocking"].run(research_top_markets)
             if trained:
                 summary = "\n".join(
-                    f"{item['symbol']}: {'research PASS' if item['pass'] else 'not passed'} "
-                    f"({item['samples']} samples; shadow only)"
+                    f"{item['symbol']}: {'research PASS' if item['pass'] else 'NOT PASSED'} "
+                    f"({item['samples']} samples; OOS {item['oos_return']:+.2f}%; "
+                    f"holdout {item['holdout_return']:+.2f}%; shadow only)"
+                    + (("\nПричина: " + "; ".join(item["reasons"][:2])) if item["reasons"] else "")
                     for item in trained
                 )
                 await send_topic(context, s.topic_general_id, "🧠 Плановое исследование моделей завершено.\n" + summary)
@@ -751,7 +790,8 @@ def build_app(s, engine, exchange):
             if state["last_scan_at"] and not state["paused"] and now - last_report >= 900:
                 scan_time = state["last_scan_at"].strftime("%Y-%m-%d %H:%M:%S UTC")
                 signal_lines = [
-                    f"{item['symbol']}: {item.get('signal', 'N/A')} ({item.get('score', 0)}/5) — {float(item.get('price') or 0):,.6g}"
+                    f"{item['symbol']}: {item.get('signal', 'N/A')} ({item.get('score', 0)}/5) — {float(item.get('price') or 0):,.6g}\n"
+                    f"Причина: {'; '.join(item.get('reasons', [])[:2]) or 'нет'}"
                     for item in sorted(state["last_signals"], key=lambda item: item.get("score", 0), reverse=True)[:15]
                 ]
                 position_lines = [
@@ -833,7 +873,7 @@ def build_app(s, engine, exchange):
     # one requests.Session, engine state and SQLite connection.
     from .worker import SerializedRunner
     app.bot_data["run_blocking"] = SerializedRunner()
-    for name, fn in [("start", start), ("status", status), ("scan", scan), ("account", account), ("realbalance", realbalance), ("paperreport", paperreport), ("learn", learn), ("learning", learning), ("backtest", backtest), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
+    for name, fn in [("start", start), ("status", status), ("scan", scan), ("account", account), ("realbalance", realbalance), ("paperreport", paperreport), ("learn", learn), ("learning", learning), ("research", research_history_cmd), ("backtest", backtest), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
                      ("run", run), ("pause", pause), ("stop", stop), ("help", help_cmd)]:
         app.add_handler(CommandHandler(name, fn))
     app.add_handler(CallbackQueryHandler(callback))
