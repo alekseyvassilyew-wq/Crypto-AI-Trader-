@@ -16,7 +16,7 @@ RENDER_RECOVERY_EVENTS = {
     "server_restarted", "server_available", "service_resumed",
     "service_disk_usage_recovered",
 }
-RENDER_TERMINAL_EVENTS = {"build_ended", "initial_deploy_hook_ended"}
+RENDER_TERMINAL_EVENTS = {"build_ended", "deploy_ended", "initial_deploy_hook_ended"}
 
 
 def _get_json(url: str, headers: dict[str, str], params=None):
