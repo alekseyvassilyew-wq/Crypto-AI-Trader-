@@ -21,6 +21,21 @@ def make_engine(tmp_path):
     return Engine(settings, db, DummyExchange(), paper), db
 
 
+def test_paper_trade_eur_accounting_includes_both_sides_fees_and_fresh_fx(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.paper.fee_rate = 0.01
+    engine._fresh_fx_rates = lambda prices: {"EUR": 1.0, "USD": 0.9}
+
+    fee_eur, realized_pnl_eur = engine._paper_trade_eur_values(
+        "USD", 0.24, {"ETHUSD": 12.0},
+        position={"avg_price": 10.0}, qty=2.0, exit_price=12.0,
+    )
+
+    assert fee_eur == pytest.approx(0.216)
+    assert realized_pnl_eur == pytest.approx(3.204)
+    db.close()
+
+
 def test_stop_pauses_and_audits_without_name_error(tmp_path):
     engine, db = make_engine(tmp_path)
     engine.start()
