@@ -485,7 +485,9 @@ def test_daily_baseline_is_captured_before_first_cycle_exit_after_midnight(tmp_p
     daily = get_state(db, "daily")
     assert any("XBTEUR SELL STOP_LOSS" in action for action in actions)
     assert daily["start_equity"] == pytest.approx(14.987 + 0.5 * 9.7 * 0.9995 * (1 - engine.paper.fee_rate))
-    assert engine.daily_pnl(engine.last_prices) < 0
+    # The new UTC-day baseline is net liquidation value, so exiting at the
+    # same executable bid does not manufacture a same-day loss.
+    assert engine.daily_pnl(engine.last_prices) == pytest.approx(0.0)
     db.close()
 
 
