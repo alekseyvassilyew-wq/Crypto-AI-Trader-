@@ -938,16 +938,22 @@ def build_app(s, engine, exchange):
             return
         try:
             from .monitoring import poll_external_events
-            def poll_and_persist():
-                from .db import get_state, set_state
+            def poll_without_committing():
+                from .db import get_state
                 state = get_state(engine.db, "external_monitor_state", {})
                 if not isinstance(state, dict):
                     state = {}
                 events = poll_external_events(s, state)
-                set_state(engine.db, "external_monitor_state", state)
-                return events
+                return state, events
 
-            events = await context.application.bot_data["run_blocking"].run(poll_and_persist)
+            # Do not advance the durable cursors until every alert has been
+            # accepted by Telegram. A transient Telegram failure then causes
+            # the same event to be retried on the next poll instead of lost.
+            if not bool(s.telegram_group_chat_id):
+                log.warning("External monitoring has no Telegram destination; keeping event cursors unchanged")
+                return
+
+            state, events = await context.application.bot_data["run_blocking"].run(poll_without_committing)
             for event in events:
                 source = html.escape(event["source"])
                 status = html.escape(event["status"])
@@ -967,6 +973,13 @@ def build_app(s, engine, exchange):
                 )
                 topic = s.topic_general_id if successful else s.topic_errors_id
                 await send_topic(context, topic, message, parse_mode="HTML")
+
+            # Commit only after all sends succeeded. Empty event batches still
+            # commit polling cursors so the initial baseline is persisted.
+            def persist_monitor_state():
+                from .db import set_state
+                set_state(engine.db, "external_monitor_state", state)
+            await context.application.bot_data["run_blocking"].run(persist_monitor_state)
         except Exception as exc:
             log.warning("External monitoring job failed: %s", type(exc).__name__)
 
