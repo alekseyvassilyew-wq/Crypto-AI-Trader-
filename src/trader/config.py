@@ -75,6 +75,8 @@ def load_settings():
     )
     if not s.bot_token or s.admin_id <= 0:
         raise ValueError("Set BOT_TOKEN and numeric ADMIN_ID.")
+    if bool(s.kraken_api_key) != bool(s.kraken_api_secret):
+        raise ValueError("Set both KRAKEN_API_KEY and KRAKEN_API_SECRET, or leave both empty.")
     if s.paper_start <= 0 or s.max_trade <= 0 or s.max_trade > s.paper_start:
         raise ValueError("Invalid paper balance or trade size configuration.")
     numeric_values = (s.paper_start, s.max_trade, s.max_daily_loss, s.risk_per_trade_pct, s.max_spread_bps,
