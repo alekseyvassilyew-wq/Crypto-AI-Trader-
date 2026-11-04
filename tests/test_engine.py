@@ -374,3 +374,21 @@ def test_saved_fx_snapshot_values_non_eur_wallet_after_restart(tmp_path):
         + engine.paper.positions["ETHUSD"]["qty"] * 10.0 * 0.9
     )
     db.close()
+
+
+def test_position_size_shrinks_when_atr_volatility_increases(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.s.max_trade = 5
+    engine.s.risk_per_trade_pct = 0.5
+    engine.scan = lambda **kwargs: [{
+        "symbol": "VOLATILEEUR", "quote": "EUR", "signal": "BUY", "score": 5,
+        "price": 10.0, "bid": 9.99, "ask": 10.01, "spread_bps": 10,
+        "turnover": 50000, "turnover_eur": 50000, "atr_percent": 10.0, "reasons": [],
+    }]
+    engine.start()
+    actions = engine.cycle()
+    assert len(actions) == 1
+    trade = db.execute("SELECT quote FROM trades WHERE side='Buy'").fetchone()
+    # 0.5% of EUR20 risk budget / (1.5 * 10% ATR) = about EUR0.67.
+    assert trade["quote"] == pytest.approx(20 * 0.005 / 0.15, rel=0.02)
+    db.close()
