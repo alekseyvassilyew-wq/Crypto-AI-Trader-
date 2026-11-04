@@ -419,17 +419,17 @@ def build_app(s, engine, exchange):
                 ) + "\n"
                 + ("Причины отказа:\n" + "\n".join("• " + reason for reason in candidate.get("rejection_reasons", [])[:6])
                    if candidate.get("rejection_reasons") else "Все исследовательские критерии пройдены.") + "\n"
-                + "Диагностика вероятностей (не подбор торгового порога):\\n"
-                + "\\n".join(
+                + "Диагностика вероятностей (не подбор торгового порога):\n"
+                + "\n".join(
                     f"Порог {level}: {data['trades']} сделок, P/L {data['net_return_pct']:+.2f}%"
                     for level, data in candidate.get("probability_diagnostics", {}).get("walk_forward_oos", {}).get("thresholds", {}).items()
-                ) + "\\n"
+                ) + "\n"
                 + (f"Вероятность: min {candidate['probability_diagnostics']['walk_forward_oos']['min']:.3f}, "
                    f"средняя {candidate['probability_diagnostics']['walk_forward_oos']['mean']:.3f}, "
                    f"медиана {candidate['probability_diagnostics']['walk_forward_oos']['median']:.3f}, "
-                   f"max {candidate['probability_diagnostics']['walk_forward_oos']['max']:.3f}\\n"
+                   f"max {candidate['probability_diagnostics']['walk_forward_oos']['max']:.3f}\n"
                    if candidate.get("probability_diagnostics", {}).get("walk_forward_oos", {}).get("min") is not None
-                   else "Нет вневыборочных прогнозов.\\n")
+                   else "Нет вневыборочных прогнозов.\n")
                 + f"Исторических свечей накоплено: {candidate.get('history_candles', candidate['samples'])}\n"
                 "Модель остаётся SHADOW ONLY: автоматического внедрения в торговлю нет."
             )
