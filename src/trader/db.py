@@ -192,7 +192,8 @@ def get_paper_metrics(db, hours=24):
         "WHERE mode='PAPER' AND status='FILLED' AND julianday(ts) >= julianday('now', ?) ORDER BY ts ASC",
         (f"-{int(hours)} hours",),
     ).fetchall()
-    pnl_values = [float(row["realized_pnl_eur"]) for row in trades if row["side"].lower() == "sell" and row["realized_pnl_eur"] is not None]
+    sell_rows = [row for row in trades if row["side"].lower() == "sell"]
+    pnl_values = [float(row["realized_pnl_eur"]) for row in sell_rows if row["realized_pnl_eur"] is not None]
     wins = [value for value in pnl_values if value > 0]
     losses = [value for value in pnl_values if value < 0]
     gross_profit = sum(wins)
@@ -209,6 +210,8 @@ def get_paper_metrics(db, hours=24):
         item["wins"] += int(value > 0)
     trade_metrics = {
         "closed_trades": len(pnl_values),
+        "closed_trades_without_eur_valuation": sum(row["realized_pnl_eur"] is None for row in sell_rows),
+        "fills_without_eur_fee_valuation": sum(row["fee_eur"] is None for row in trades),
         "winning_trades": len(wins),
         "losing_trades": len(losses),
         "win_rate_pct": len(wins) / len(pnl_values) * 100 if pnl_values else 0.0,
