@@ -25,7 +25,7 @@ This archive is a **PAPER-only release**. It is not a live trading bot and must 
 - Fee- and slippage-aware single-market and multi-market portfolio historical backtests with next-candle-open fills, conservative stop/target ordering, net P/L, profit factor, win rate and maximum drawdown; available as Telegram `/backtest SYMBOL` and `/backtest portfolio`.
 - Strictly increasing private API nonces within the running process; malformed API responses are rejected.
 - Persistent SQLite state and a safe paused-on-restart behavior.
-- Telegram owner-only commands: `/start`, `/help`, `/status`, `/scan`, `/account` (virtual PAPER), `/realbalance` (Kraken read-only), `/portfolio`, `/paperreport`, `/learn SYMBOL`, `/learning`, `/backtest`, `/interval`, `/run`, `/pause`, `/stop`.
+- Telegram owner-only commands: `/start`, `/help`, `/status`, `/monitorstatus`, `/scan`, `/account` (virtual PAPER), `/realbalance` (Kraken read-only), `/portfolio`, `/paperreport`, `/learn SYMBOL`, `/learning`, `/backtest`, `/interval`, `/run`, `/pause`, `/stop`.
 - Render Background Worker blueprint with Persistent Disk mounted at `/var/data`.
 
 ## Kraken API key setup
