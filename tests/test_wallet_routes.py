@@ -59,8 +59,8 @@ def test_asset_pair_routes_include_base_and_quote_markets_and_constraints():
     xbteur = next(item for item in routes["XBT"] if item["symbol"] == "XBTEUR")
     assert xbteur["ordermin"] == "0.0001"
     assert xbteur["fees"] == [[0, 0.26]]
-    assert [item["symbol"] for item in routes["EUR"]] == ["XBTEUR"]
-    assert routes["EUR"][0]["role"] == "quote"
+    assert [item["symbol"] for item in routes["EUR"]] == ["ETHEUR", "XBTEUR"]
+    assert all(item["role"] == "quote" for item in routes["EUR"])
 
 
 def test_pair_routes_normalize_other_legacy_assets_from_market_universe():
