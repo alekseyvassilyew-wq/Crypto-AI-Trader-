@@ -228,8 +228,8 @@ def test_non_eur_signal_can_convert_eur_to_fund_quote_wallet(tmp_path):
 
 def test_wallet_seeds_usd_and_usdt_from_starting_eur_once(tmp_path):
     engine, db = make_engine(tmp_path)
-    rates = {"EUR": 1.0, "USD": 0.9, "USDT": 0.9}
-    engine._seed_multicurrency_wallet(rates)
+    buy_rates = {"EUR": 1.0, "USD": 1 / 0.9, "USDT": 1 / 0.9}
+    engine._seed_multicurrency_wallet(buy_rates)
     assert engine.paper.balance("EUR") == 10
     assert engine.paper.balance("USD") == pytest.approx(5 / 0.9 * (1 - engine.paper.fee_rate))
     assert engine.paper.balance("USDT") == pytest.approx(5 / 0.9 * (1 - engine.paper.fee_rate))
@@ -623,4 +623,24 @@ def test_fresh_fx_rejects_illiquid_direct_eur_market(tmp_path):
     }
     rates = engine._fresh_fx_rates({"USDZEUR": 0.9})
     assert "USD" not in rates
+    db.close()
+
+
+def test_fresh_fx_valuation_and_purchase_rates_use_executable_sides(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.market_pairs = [{"symbol": "USDZEUR", "base": "USD", "quote": "EUR"}]
+    engine.last_prices = {"USDZEUR": 0.9}
+    engine.last_ticker_data = {
+        "USDZEUR": {
+            "bid1Price": 0.899, "ask1Price": 0.901,
+            "lastPrice": 0.9, "turnover24h": 50000,
+        }
+    }
+
+    valuation_rates = engine._fresh_fx_rates(engine.last_prices)
+    buy_rates = engine._fresh_fx_buy_rates(engine.last_prices)
+
+    assert valuation_rates["USD"] == pytest.approx(0.899)
+    assert buy_rates["USD"] == pytest.approx(1 / 0.901)
+    assert buy_rates["USD"] < 1 / valuation_rates["USD"]
     db.close()
