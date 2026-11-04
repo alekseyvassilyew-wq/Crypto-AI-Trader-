@@ -102,8 +102,85 @@ def build_app(s, engine, exchange):
     async def backtest(update, context):
         if not await authorized(update): return await deny(update)
         if not context.args or len(context.args) != 1:
-            return await update.effective_message.reply_text("Использование: /backtest XBTEUR\nПроверяет стратегию на последних доступных закрытых часовых свечах Kraken. Ничего не покупает и не меняет PAPER-кошелёк.")
+            return await update.effective_message.reply_text(
+                "Использование: /backtest XBTEUR или /backtest portfolio\\n"
+                "Проверяет закрытые часовые свечи Kraken. Ничего не покупает и не меняет PAPER-кошелёк."
+            )
         symbol = context.args[0].strip().upper().replace("/", "")
+        if symbol == "PORTFOLIO":
+            await update.effective_message.reply_text("Мульти-рынковый исторический PAPER-тест: выбираю до 5 наиболее ликвидных рынков и загружаю закрытые часовые свечи…")
+            try:
+                def run_portfolio():
+                    from .portfolio_backtest import run_portfolio_backtest
+                    pairs = exchange.discover_pairs()
+                    tickers = exchange.tickers()
+                    engine.market_pairs = pairs
+                    prices = {x["symbol"]: float(x.get("lastPrice") or 0) for x in tickers if float(x.get("lastPrice") or 0) > 0}
+                    fx_rates = engine._fx_rates(prices)
+                    by_symbol = {x["symbol"]: x for x in tickers}
+                    eligible = []
+                    for pair in pairs:
+                        ticker = by_symbol.get(pair["symbol"])
+                        quote = str(pair.get("quote") or "").upper()
+                        rate = fx_rates.get(quote, 0.0)
+                        if ticker and rate > 0:
+                            turnover_eur = float(ticker.get("turnover24h") or 0) * rate
+                            if turnover_eur >= s.min_turnover:
+                                eligible.append((turnover_eur, pair["symbol"], quote))
+                    eligible.sort(reverse=True)
+                    selected = eligible[:5]
+                    if len(selected) < 2:
+                        raise RuntimeError("Недостаточно ликвидных рынков с доступным EUR-маршрутом для портфельного теста.")
+                    candles_by_symbol = {}
+                    quote_currencies = {}
+                    failures = []
+                    for _, market_symbol, quote in selected:
+                        try:
+                            candles_by_symbol[market_symbol] = exchange.candles(market_symbol, interval="60", limit=720)
+                            quote_currencies[market_symbol] = quote
+                        except Exception as exc:
+                            failures.append(f"{market_symbol}: {type(exc).__name__}")
+                    if len(candles_by_symbol) < 2:
+                        raise RuntimeError("Не удалось загрузить минимум два рынка: " + ", ".join(failures))
+                    result = run_portfolio_backtest(
+                        candles_by_symbol,
+                        quote_currencies=quote_currencies,
+                        fx_rates=fx_rates,
+                        initial_cash_eur=s.paper_start,
+                        max_trade_eur=s.max_trade,
+                        max_positions=s.max_positions,
+                        fee_rate=s.fee_rate,
+                        slippage_bps=5.0,
+                        stop_loss_pct=s.stop_loss_pct,
+                        take_profit_pct=s.take_profit_pct,
+                        trailing_stop_pct=s.trailing_stop_pct,
+                        max_daily_loss_eur=s.max_daily_loss,
+                    )
+                    return result, failures
+                result, failures = await context.application.bot_data["run_blocking"].run(run_portfolio)
+                factor = result["profit_factor"]
+                factor_text = "∞" if factor == float("inf") else f"{factor:.2f}"
+                lines = [
+                    "📊 ПОРТФЕЛЬНЫЙ ИСТОРИЧЕСКИЙ PAPER-ТЕСТ",
+                    f"Рынки: {', '.join(result['markets'])}",
+                    f"Начальный капитал: {result['initial_equity_eur']:.2f} EUR",
+                    f"Итоговый капитал: {result['final_equity_eur']:.2f} EUR",
+                    f"Чистый P/L: {result['net_pnl_eur']:+.4f} EUR ({result['return_pct']:+.2f}%)",
+                    f"Сделок: {result['trades']} | прибыльных: {result['wins']} | убыточных: {result['losses']}",
+                    f"Win rate: {result['win_rate_pct']:.1f}% | Profit factor: {factor_text}",
+                    f"Макс. просадка: {result['max_drawdown_pct']:.2f}%",
+                    f"Комиссии: {result['fees_paid_eur']:.4f} EUR",
+                    f"Комиссия: {s.fee_rate * 100:.3f}% на сторону; проскальзывание: 5 bps на сторону.",
+                    "Важно: максимум 5 рынков, до 720 закрытых часовых свечей. FX-курсы текущие, применены ко всей истории; это приближение, не точная историческая переоценка.",
+                    "Результат — симуляция, не прогноз прибыли и не гарантия будущей доходности.",
+                ]
+                if failures:
+                    lines.append("Рынки, пропущенные при загрузке: " + ", ".join(failures))
+                await update.effective_message.reply_text("\\n".join(lines)[:3900])
+            except Exception as exc:
+                log.exception("Portfolio historical backtest failed")
+                await update.effective_message.reply_text(format_error(exc, "/backtest portfolio", update.effective_user))
+            return
         await update.effective_message.reply_text(f"Исторический тест {symbol}…")
         try:
             from .backtest import run_backtest
@@ -122,16 +199,16 @@ def build_app(s, engine, exchange):
             factor = result["profit_factor"]
             factor_text = "∞" if factor == float("inf") else f"{factor:.2f}"
             await update.effective_message.reply_text(
-                f"📉 ИСТОРИЧЕСКИЙ PAPER-ТЕСТ: {symbol}\n"
-                f"Свечей: {result['candles']} (часовые, закрытые)\n"
-                f"Начальный капитал: {result['initial_cash']:.2f}\n"
-                f"Итоговый капитал: {result['final_equity']:.2f}\n"
-                f"Чистый P/L: {result['net_pnl']:+.4f} ({result['return_pct']:+.2f}%)\n"
-                f"Сделок: {result['trades']} | прибыльных: {result['wins']} | убыточных: {result['losses']}\n"
-                f"Win rate: {result['win_rate_pct']:.1f}%\n"
-                f"Profit factor: {factor_text}\n"
-                f"Макс. просадка: {result['max_drawdown_pct']:.2f}%\n"
-                f"Комиссии: {result['fees_paid']:.4f}\n"
+                f"📉 ИСТОРИЧЕСКИЙ PAPER-ТЕСТ: {symbol}\\n"
+                f"Свечей: {result['candles']} (часовые, закрытые)\\n"
+                f"Начальный капитал: {result['initial_cash']:.2f}\\n"
+                f"Итоговый капитал: {result['final_equity']:.2f}\\n"
+                f"Чистый P/L: {result['net_pnl']:+.4f} ({result['return_pct']:+.2f}%)\\n"
+                f"Сделок: {result['trades']} | прибыльных: {result['wins']} | убыточных: {result['losses']}\\n"
+                f"Win rate: {result['win_rate_pct']:.1f}%\\n"
+                f"Profit factor: {factor_text}\\n"
+                f"Макс. просадка: {result['max_drawdown_pct']:.2f}%\\n"
+                f"Комиссии: {result['fees_paid']:.4f}\\n"
                 "Издержки: комиссия на вход/выход + проскальзывание 5 bps на сторону. "
                 "Исполнение моделируется по открытию следующей свечи. "
                 "Это тест одного рынка, не прогноз и не гарантия будущей прибыли."
@@ -229,7 +306,7 @@ def build_app(s, engine, exchange):
 
     async def help_cmd(update, context):
         if not await authorized(update): return await deny(update)
-        await update.effective_message.reply_text("/start — меню\n/status — состояние и P/L\n/scan — сканирование\n/account — виртуальные остатки PAPER\n/portfolio — PAPER-позиции\n/backtest XBTEUR — исторический тест (до 720 закрытых часовых свечей)\n/interval 1m|5m|15m|30m|1h|4h|24h — интервал\n/run — запуск PAPER\n/pause — пауза\n/stop — аварийная остановка\n/topicid — ID группы и темы\n/testtopics или /test_topics — проверка тем")
+        await update.effective_message.reply_text("/start — меню\n/status — состояние и P/L\n/scan — сканирование\n/account — виртуальные остатки PAPER\n/portfolio — PAPER-позиции\n/backtest XBTEUR — тест одного рынка; /backtest portfolio — до 5 рынков\n/interval 1m|5m|15m|30m|1h|4h|24h — интервал\n/run — запуск PAPER\n/pause — пауза\n/stop — аварийная остановка\n/topicid — ID группы и темы\n/testtopics или /test_topics — проверка тем")
 
     async def callback(update, context):
         q = update.callback_query
