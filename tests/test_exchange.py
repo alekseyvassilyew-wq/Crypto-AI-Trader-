@@ -316,3 +316,16 @@ def test_tickers_without_symbols_skip_zero_last_price_and_keep_valid_markets():
 
     assert [item["symbol"] for item in tickers] == ["ETHUSD"]
 
+
+
+def test_public_requests_are_spaced_at_least_one_second(monkeypatch):
+    client = KrakenSpot()
+    client.session = FakeSession(FakeResponse({"error": [], "result": {"ok": 1}}))
+    sleeps = []
+    monkeypatch.setattr("src.trader.exchange.time.monotonic", lambda: 100.0)
+    monkeypatch.setattr("src.trader.exchange.time.sleep", lambda seconds: sleeps.append(seconds))
+
+    client._request("/0/public/SystemStatus")
+    client._request("/0/public/SystemStatus")
+
+    assert sleeps and sleeps[0] >= 1.05
