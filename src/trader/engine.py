@@ -163,14 +163,15 @@ class Engine:
         return [self.scan_one(symbol, tickers) for symbol in symbols]
 
     def cycle(self):
-        if self.paused:
-            return []
+        # Market monitoring continues while paused; only order simulation is gated.
         self._ensure_day()
         try:
             results = self.scan()
             self.last_scan_at = datetime.now(timezone.utc)
             self.last_prices = {x["symbol"]: float(x.get("price") or 0) for x in results if float(x.get("price") or 0) > 0}
             self.last_signals = results
+            if self.paused:
+                return []
         except Exception as exc:
             # Never trade on partial or stale market data after an exchange failure.
             audit(self.db, "SCAN_FAILED", f"{type(exc).__name__}: {exc}")
