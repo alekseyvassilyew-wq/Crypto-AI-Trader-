@@ -104,23 +104,27 @@ def run_backtest(
 
         if qty:
             stop_price = entry * (1.0 - stop_pct)
-            trail_price = peak * (1.0 - trail_pct) if peak > entry else 0.0
-            active_stop = max(stop_price, trail_price)
+            prior_trail = peak * (1.0 - trail_pct) if peak > entry else 0.0
+            prior_stop = max(stop_price, prior_trail)
             target_price = entry * (1.0 + target_pct)
             exit_reason = exit_at = None
-            if op <= active_stop:
-                exit_reason, exit_at = ("STOP_LOSS" if active_stop == stop_price else "TRAILING_STOP"), op
+            # The open is first: apply gaps to the prior stop, then assume
+            # the candle high occurs before its low for conservative trailing.
+            if op <= prior_stop:
+                exit_reason, exit_at = ("STOP_LOSS" if prior_stop == stop_price else "TRAILING_STOP"), op
             elif op >= target_price:
                 exit_reason, exit_at = "TAKE_PROFIT", op
-            elif low <= active_stop:
-                exit_reason = "STOP_LOSS" if active_stop == stop_price else "TRAILING_STOP"
-                exit_at = active_stop
-            elif high >= target_price:
-                exit_reason, exit_at = "TAKE_PROFIT", target_price
-            if exit_reason:
-                close_position(exit_at, ts, exit_reason)
             else:
                 peak = max(peak, high)
+                trail_price = peak * (1.0 - trail_pct) if peak > entry else 0.0
+                active_stop = max(stop_price, trail_price)
+                if low <= active_stop:
+                    exit_reason = "STOP_LOSS" if active_stop == stop_price else "TRAILING_STOP"
+                    exit_at = active_stop
+                elif high >= target_price:
+                    exit_reason, exit_at = "TAKE_PROFIT", target_price
+            if exit_reason:
+                close_position(exit_at, ts, exit_reason)
 
         # Measure worst-case intrabar equity only for positions that survived
         # this candle; stop-first handling above avoids assuming a later high
