@@ -193,7 +193,7 @@ def perform_research(db, exchange, settings, symbol, source="manual"):
         candidate = research_candidate(
             history,
             fee_rate=settings.fee_rate,
-            slippage_bps=5.0,
+            slippage_bps=settings.paper_slippage_bps,
         )
         trained_at = datetime.now(timezone.utc)
         candidate.update({
