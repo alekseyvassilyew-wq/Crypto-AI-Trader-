@@ -515,7 +515,7 @@ def build_app(s, engine, exchange):
                     item["symbol"]: float(item.get("lastPrice") or 0)
                     for item in tickers if float(item.get("lastPrice") or 0) > 0
                 }
-                rates = engine._fx_rates(prices)
+                rates = engine._fresh_fx_rates(prices)
                 by_symbol = {item["symbol"]: item for item in tickers}
                 eligible = []
                 for pair in pairs:
@@ -565,9 +565,9 @@ def build_app(s, engine, exchange):
                 )
                 await send_topic(context, s.topic_general_id, "🧠 Ежедневное исследование моделей завершено.\n" + summary)
         except Exception as exc:
-            log.exception("Automatic daily ML research failed")
+            log.exception("Automatic periodic ML research failed")
             try:
-                await send_topic(context, s.topic_errors_id, f"Ошибка ежедневного ML-исследования: {type(exc).__name__}: {exc}")
+                await send_topic(context, s.topic_errors_id, f"Ошибка планового ML-исследования: {type(exc).__name__}: {exc}")
             except Exception:
                 log.exception("Could not send ML research error to Telegram")
 
