@@ -139,8 +139,8 @@ def test_rotating_scan_covers_multiple_funded_quote_currencies(tmp_path):
             ]
         def tickers(self):
             return [
-                {"symbol": "XBTEUR", "bid1Price": 99, "ask1Price": 100, "lastPrice": 99.5, "turnover24h": 50000},
-                {"symbol": "ETHUSD", "bid1Price": 2990, "ask1Price": 3000, "lastPrice": 2995, "turnover24h": 40000},
+                {"symbol": "XBTEUR", "bid1Price": 99.95, "ask1Price": 100, "lastPrice": 99.98, "turnover24h": 50000},
+                {"symbol": "ETHUSD", "bid1Price": 2999.5, "ask1Price": 3000, "lastPrice": 2999.8, "turnover24h": 40000},
             ]
     engine.exchange = MultiQuoteExchange()
     seen = []
