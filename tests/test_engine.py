@@ -880,3 +880,20 @@ def test_adaptive_ohlc_budget_rejects_invalid_inputs(args):
 
     with pytest.raises(ValueError):
         adaptive_ohlc_budget(*args)
+
+
+def test_engine_restarts_paused_with_paper_wallet_restored(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.paper.buy("XBTEUR", 5, 10)
+    expected_cash = dict(engine.paper.cash_by_currency)
+    expected_positions = {key: dict(value) for key, value in engine.paper.positions.items()}
+    db.close()
+
+    db2 = connect(tmp_path / "engine.sqlite3")
+    restored_paper = PaperBroker(20, .0026, db=db2)
+    restored_engine = Engine(engine.s, db2, DummyExchange(), restored_paper)
+
+    assert restored_engine.paused is True
+    assert restored_paper.cash_by_currency == expected_cash
+    assert restored_paper.positions == expected_positions
+    db2.close()
