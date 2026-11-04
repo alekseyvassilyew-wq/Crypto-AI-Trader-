@@ -19,6 +19,8 @@ def test_unknown_legacy_prefix_is_normalized_only_when_market_confirms_asset():
     assert normalize_kraken_asset_code("XXMR", {"XMR", "EUR"}) == "XMR"
     assert normalize_kraken_asset_code("ZABC", {"ABC", "EUR"}) == "ABC"
     assert normalize_kraken_asset_code("XABC", {"ABC2", "EUR"}) == "XABC"
+    assert normalize_kraken_asset_code("XDG", {"XDG", "EUR"}) == "XDG"
+    assert normalize_kraken_asset_code("XXDG", {"XDG", "EUR"}) == "XDG"
 
 
 def test_inventory_keeps_original_balance_code_but_uses_normalized_fx_key():
