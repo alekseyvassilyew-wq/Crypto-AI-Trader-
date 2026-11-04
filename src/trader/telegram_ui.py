@@ -171,6 +171,34 @@ def build_app(s, engine, exchange):
                 for x in ranked
             )
             lines.append("Все рынки получают мониторинг котировок; анализ свечей ограничен бюджетом запросов.")
+
+            # Always surface the specifically requested TON markets, even if
+            # their OHLC analysis is deferred by the rotating scan budget.
+            ton_by_symbol = {
+                str(item.get("symbol") or "").upper(): item
+                for item in rows
+                if str(item.get("symbol") or "").upper() in {"TONEUR", "TONUSD"}
+            }
+            lines.extend(["", "🪙 ОТДЕЛЬНАЯ ПРОВЕРКА TON"])
+            if ton_by_symbol:
+                for symbol in ("TONEUR", "TONUSD"):
+                    item = ton_by_symbol.get(symbol)
+                    if item is None:
+                        continue
+                    spread = item.get("spread_bps")
+                    spread_text = f"{float(spread):.1f} bps" if spread is not None else "нет данных"
+                    turnover = item.get("turnover_eur")
+                    turnover_text = f"{float(turnover):,.0f} EUR/24ч" if turnover is not None else "нет данных"
+                    lines.append(
+                        f"{symbol}: {item.get('signal', 'HOLD')} | "
+                        f"спред {spread_text} | оборот {turnover_text} | "
+                        f"{'OHLC проверен' if item.get('ohlc_analyzed') else 'OHLC отложен'}"
+                    )
+                    reasons = item.get("reasons") or []
+                    if reasons:
+                        lines.append("  Причина: " + "; ".join(str(reason) for reason in reasons[:2]))
+            else:
+                lines.append("TONEUR/TONUSD не найдены в текущем снимке Kraken.")
             await update.effective_message.reply_text("\n".join(lines)[:3900])
         except Exception as exc:
             # Keep the full traceback in Render logs and expose the actionable
