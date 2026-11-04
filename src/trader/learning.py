@@ -158,6 +158,14 @@ def research_candidate(rows, *, horizon=3, fee_rate=0.0026, slippage_bps=5.0,
         raise ValueError("At least 260 closed candles are required for model research")
     if isinstance(horizon, bool) or int(horizon) < 1 or int(horizon) > 24:
         raise ValueError("horizon must be between 1 and 24 candles")
+    if isinstance(probability_threshold, bool):
+        raise ValueError("probability_threshold must be between 0 and 1")
+    threshold = float(probability_threshold)
+    if not math.isfinite(threshold) or not 0.0 < threshold < 1.0:
+        raise ValueError("probability_threshold must be between 0 and 1")
+    for name, value in (("min_train", min_train), ("min_validation", min_validation)):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError(f"{name} must be a positive integer")
     fee, slip = float(fee_rate), float(slippage_bps) / 10000.0
     if not math.isfinite(fee) or fee < 0 or fee >= 0.1 or not math.isfinite(slip) or slip < 0 or slip >= 0.1:
         raise ValueError("Invalid fee or slippage assumptions")
@@ -200,13 +208,13 @@ def research_candidate(rows, *, horizon=3, fee_rate=0.0026, slippage_bps=5.0,
         for i in range(start, end):
             probability = predict_probability(model, samples[i])
             predictions.append((i, probability, future_returns[i]))
-        metrics = _performance(predictions, probability_threshold, int(horizon))
+        metrics = _performance(predictions, threshold, int(horizon))
         metrics.update({"fold": fold + 1, "train_samples": train_end, "validation_samples": end - start})
         folds.append(metrics)
         all_oos.extend(predictions)
     if len(folds) != 3:
         raise ValueError("Could not construct three valid walk-forward folds")
-    aggregate = _performance(all_oos, probability_threshold, int(horizon))
+    aggregate = _performance(all_oos, threshold, int(horizon))
     final_model = _fit(samples, labels)
     positive_folds = sum(1 for item in folds if item["net_return_pct"] > 0)
     research_pass = (
@@ -217,7 +225,7 @@ def research_candidate(rows, *, horizon=3, fee_rate=0.0026, slippage_bps=5.0,
     return {
         "status": "SHADOW_ONLY", "research_pass": research_pass, "samples": len(samples),
         "positive_labels_pct": sum(labels) / len(labels) * 100,
-        "horizon_candles": int(horizon), "probability_threshold": float(probability_threshold),
+        "horizon_candles": int(horizon), "probability_threshold": threshold,
         "assumptions": {"fee_rate_per_side": fee, "slippage_bps_per_side": float(slippage_bps)},
         "walk_forward": folds, "out_of_sample": aggregate,
         "model": {"feature_names": list(FEATURE_NAMES), **final_model},
