@@ -812,16 +812,19 @@ def build_app(s, engine, exchange):
             await _cycle_job(context)
         finally:
             duration = time.monotonic() - started
+            target_interval = float(engine.scan_interval_seconds)
+            delay = max(0.0, target_interval - duration)
             log.info(
-                "Trading cycle finished in %.1fs; next scan in %ss",
+                "Trading cycle finished in %.1fs; next scan scheduled in %.1fs",
                 duration,
-                engine.scan_interval_seconds,
+                delay,
             )
-            # Fixed-delay scheduling prevents APScheduler from dropping a scan
-            # when a long market scan or serialized ML research is still running.
+            # Schedule only after this run finishes. Keep the configured
+            # start-to-start cadence when possible, but never overlap or drop
+            # a scan if the previous cycle or serialized ML research runs long.
             context.job_queue.run_once(
                 cycle_job,
-                when=engine.scan_interval_seconds,
+                when=delay,
                 name="paper-cycle",
             )
 
