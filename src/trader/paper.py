@@ -59,6 +59,8 @@ class PaperBroker:
                     "avg_price": _finite_number(position.get("avg_price"), f"{symbol} average price", minimum=0, strict_minimum=True),
                     "quote_currency": self._validate_currency(position.get("quote_currency", "EUR")),
                     "peak_price": _finite_number(position.get("peak_price", position.get("avg_price")), f"{symbol} peak price", minimum=0, strict_minimum=True),
+                    "cost_basis_eur": None if position.get("cost_basis_eur") is None else _finite_number(position["cost_basis_eur"], f"{symbol} EUR cost basis", minimum=0),
+                    "entry_fees_eur": None if position.get("entry_fees_eur") is None else _finite_number(position["entry_fees_eur"], f"{symbol} EUR entry fees", minimum=0),
                 }
         else:
             self.cash_by_currency = {"EUR": initial}
@@ -121,11 +123,14 @@ class PaperBroker:
         return {"from": source, "to": target, "spent": amount, "received": received,
                 "fee": fee, "rate": rate}
 
-    def buy(self, symbol, quote, price, currency="EUR"):
+    def buy(self, symbol, quote, price, currency="EUR", quote_to_eur_rate=None):
         symbol = self._validate_symbol(symbol)
         currency = self._validate_currency(currency)
         quote = _finite_number(quote, "quote", minimum=0, strict_minimum=True)
         price = _finite_number(price, "price", minimum=0, strict_minimum=True)
+        rate = None if quote_to_eur_rate is None else _finite_number(
+            quote_to_eur_rate, "quote_to_eur_rate", minimum=0, strict_minimum=True
+        )
         fee = quote * self.fee_rate
         total_cost = quote + fee
         available = self.balance(currency)
@@ -144,12 +149,21 @@ class PaperBroker:
         new_cash = available - total_cost
         if not all(math.isfinite(x) for x in (total_qty, average, new_cash)) or new_cash < -1e-9:
             raise ValueError("Paper buy would create an invalid account state")
+        old_basis = old.get("cost_basis_eur")
+        old_fees = old.get("entry_fees_eur")
+        cost_basis_eur = None
+        entry_fees_eur = None
+        if rate is not None and (old_qty == 0 or old_basis is not None):
+            cost_basis_eur = (float(old_basis or 0.0) + quote * rate)
+        if rate is not None and (old_qty == 0 or old_fees is not None):
+            entry_fees_eur = (float(old_fees or 0.0) + fee * rate)
         self.cash_by_currency[currency] = max(0.0, new_cash)
         self._sync_cash()
         peak_price = max(float(old.get("peak_price", old_avg) or old_avg), price)
         self.positions[symbol] = {
             "qty": total_qty, "avg_price": average, "quote_currency": currency,
-            "peak_price": peak_price,
+            "peak_price": peak_price, "cost_basis_eur": cost_basis_eur,
+            "entry_fees_eur": entry_fees_eur,
         }
         self._persist()
         return {"symbol": symbol, "side": "Buy", "qty": qty, "quote": quote,
@@ -187,7 +201,12 @@ class PaperBroker:
         if remaining < 1e-12:
             self.positions.pop(symbol, None)
         else:
+            remaining_ratio = remaining / held
             self.positions[symbol]["qty"] = remaining
+            for field in ("cost_basis_eur", "entry_fees_eur"):
+                value = self.positions[symbol].get(field)
+                if value is not None:
+                    self.positions[symbol][field] = float(value) * remaining_ratio
         self.cash_by_currency[currency] = new_cash
         self._sync_cash()
         self._persist()

@@ -689,10 +689,23 @@ def build_app(s, engine, exchange):
                 lambda: get_paper_metrics(engine.db, hours)
             )
             if not metrics["samples"]:
+                if not metrics["closed_trades"]:
+                    return await update.effective_message.reply_text(
+                        f"За последние {hours} ч. нет сохранённых PAPER-измерений или закрытых сделок. "
+                        "Запусти /run и оставь PAPER работать для сбора статистики."
+                    )
                 return await update.effective_message.reply_text(
-                    f"За последние {hours} ч. нет сохранённых PAPER-измерений. "
-                    "Запусти /run и оставь PAPER работать для сбора статистики."
+                    f"📊 PAPER СДЕЛКИ — {hours} ч.\n"
+                    f"Закрытых сделок: {metrics['closed_trades']}\n"
+                    f"Прибыльных: {metrics['winning_trades']} | убыточных: {metrics['losing_trades']}\n"
+                    f"Win rate: {metrics['win_rate_pct']:.1f}% | Profit factor: {metrics['profit_factor']}\n"
+                    f"Реализованный P/L: {metrics['realized_pnl_eur']:+.4f} EUR\n"
+                    f"Комиссии: {metrics['total_fees_eur']:.4f} EUR"
                 )
+            by_symbol_text = ", ".join(
+                "{} {:+.4f} EUR".format(item["symbol"], item["realized_pnl_eur"])
+                for item in metrics["by_symbol"][:5]
+            ) or "пока нет закрытых сделок"
             await update.effective_message.reply_text(
                 f"📈 PAPER FORWARD-TEST — {hours} ч.\n"
                 f"Измерений: {metrics['samples']}\n"
@@ -702,6 +715,12 @@ def build_app(s, engine, exchange):
                 f"Среднее число позиций: {metrics['avg_open_positions']:.2f}\n"
                 f"Сигналов BUY: {metrics['buy_signals']}\n"
                 f"Среднее число анализируемых рынков за цикл: {metrics['avg_analyzed_markets']:.1f}\n"
+                f"Закрытых сделок: {metrics['closed_trades']} | без EUR-оценки: {metrics['closed_trades_without_eur_valuation']}\n"
+                f"Прибыльных: {metrics['winning_trades']} | убыточных: {metrics['losing_trades']}\n"
+                f"Win rate: {metrics['win_rate_pct']:.1f}% | Profit factor: {metrics['profit_factor']}\n"
+                f"Реализованный P/L: {metrics['realized_pnl_eur']:+.4f} EUR\n"
+                f"Комиссии по исполнениям: {metrics['total_fees_eur']:.4f} EUR | без EUR-оценки: {metrics['fills_without_eur_fee_valuation']}\n"
+                f"По монетам: {by_symbol_text}\n"
                 f"Период: {metrics['first_ts']} — {metrics['last_ts']} UTC\n"
                 "Это изменение стоимости PAPER-портфеля, а не доказательство будущей доходности."
             )

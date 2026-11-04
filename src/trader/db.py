@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY, ts TEXT DEFAULT CURRENT_TIMESTAMP, event TEXT NOT NULL, details TEXT);
-CREATE TABLE IF NOT EXISTS trades(id INTEGER PRIMARY KEY, ts TEXT DEFAULT CURRENT_TIMESTAMP, mode TEXT NOT NULL, symbol TEXT NOT NULL, side TEXT NOT NULL, qty REAL NOT NULL, quote REAL NOT NULL, fee REAL NOT NULL, price REAL NOT NULL, status TEXT NOT NULL, order_id TEXT);
+CREATE TABLE IF NOT EXISTS trades(id INTEGER PRIMARY KEY, ts TEXT DEFAULT CURRENT_TIMESTAMP, mode TEXT NOT NULL, symbol TEXT NOT NULL, side TEXT NOT NULL, qty REAL NOT NULL, quote REAL NOT NULL, fee REAL NOT NULL, price REAL NOT NULL, status TEXT NOT NULL, order_id TEXT, fee_eur REAL, realized_pnl_eur REAL);
 CREATE TABLE IF NOT EXISTS app_state(key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE INDEX IF NOT EXISTS idx_trades_ts ON trades(ts);
 CREATE TABLE IF NOT EXISTS paper_snapshots(
@@ -50,6 +50,11 @@ def connect(path):
     db.execute("PRAGMA foreign_keys=ON")
     db.execute("PRAGMA busy_timeout=30000")
     db.executescript(SCHEMA)
+    trade_columns = {row["name"] for row in db.execute("PRAGMA table_info(trades)").fetchall()}
+    if "fee_eur" not in trade_columns:
+        db.execute("ALTER TABLE trades ADD COLUMN fee_eur REAL")
+    if "realized_pnl_eur" not in trade_columns:
+        db.execute("ALTER TABLE trades ADD COLUMN realized_pnl_eur REAL")
     # Additive migration for databases created before model-version tracking.
     columns = {row["name"] for row in db.execute("PRAGMA table_info(ml_shadow_predictions)").fetchall()}
     if "model_version" not in columns:
@@ -104,10 +109,20 @@ def audit(db, event, details=""):
     with db:
         db.execute("INSERT INTO audit(event,details) VALUES(?,?)", (event, str(details)))
 
-def save_trade(db, mode, symbol, side, qty, quote, fee, price, status, order_id=None):
+def save_trade(db, mode, symbol, side, qty, quote, fee, price, status, order_id=None, *, fee_eur=None, realized_pnl_eur=None):
+    """Persist a PAPER fill with optional EUR-denominated accounting fields."""
+    normalized_fee_eur = None if fee_eur is None else float(fee_eur)
+    normalized_pnl_eur = None if realized_pnl_eur is None else float(realized_pnl_eur)
+    if normalized_fee_eur is not None and (not math.isfinite(normalized_fee_eur) or normalized_fee_eur < 0):
+        raise ValueError("EUR fee must be finite and non-negative")
+    if normalized_pnl_eur is not None and not math.isfinite(normalized_pnl_eur):
+        raise ValueError("Realized EUR PnL must be finite")
     with db:
-        db.execute("INSERT INTO trades(mode,symbol,side,qty,quote,fee,price,status,order_id) VALUES(?,?,?,?,?,?,?,?,?)",
-                   (mode, symbol, side, qty, quote, fee, price, status, order_id))
+        db.execute(
+            "INSERT INTO trades(mode,symbol,side,qty,quote,fee,price,status,order_id,fee_eur,realized_pnl_eur) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (mode, symbol, side, qty, quote, fee, price, status, order_id, normalized_fee_eur, normalized_pnl_eur),
+        )
 
 def get_state(db, key, default=None):
     row = db.execute("SELECT value FROM app_state WHERE key=?", (key,)).fetchone()
@@ -164,7 +179,7 @@ def save_paper_snapshot(db, *, ts, equity_eur, cash, open_positions, analyzed_ma
 
 
 def get_paper_metrics(db, hours=24):
-    """Summarize persisted forward PAPER telemetry for the requested period."""
+    """Summarize forward PAPER equity and realized trade accounting."""
     if isinstance(hours, bool) or not isinstance(hours, int) or hours < 1 or hours > 2160:
         raise ValueError("hours must be an integer between 1 and 2160")
     rows = db.execute(
@@ -172,8 +187,41 @@ def get_paper_metrics(db, hours=24):
         "FROM paper_snapshots WHERE julianday(ts) >= julianday('now', ?) ORDER BY ts ASC",
         (f"-{int(hours)} hours",),
     ).fetchall()
+    trades = db.execute(
+        "SELECT symbol,side,fee_eur,realized_pnl_eur FROM trades "
+        "WHERE mode='PAPER' AND status='FILLED' AND julianday(ts) >= julianday('now', ?) ORDER BY ts ASC",
+        (f"-{int(hours)} hours",),
+    ).fetchall()
+    sell_rows = [row for row in trades if row["side"].lower() == "sell"]
+    pnl_values = [float(row["realized_pnl_eur"]) for row in sell_rows if row["realized_pnl_eur"] is not None]
+    wins = [value for value in pnl_values if value > 0]
+    losses = [value for value in pnl_values if value < 0]
+    gross_profit = sum(wins)
+    gross_loss = abs(sum(losses))
+    by_symbol = {}
+    for row in trades:
+        if row["side"].lower() != "sell" or row["realized_pnl_eur"] is None:
+            continue
+        symbol = str(row["symbol"])
+        item = by_symbol.setdefault(symbol, {"symbol": symbol, "closed_trades": 0, "realized_pnl_eur": 0.0, "wins": 0})
+        value = float(row["realized_pnl_eur"])
+        item["closed_trades"] += 1
+        item["realized_pnl_eur"] += value
+        item["wins"] += int(value > 0)
+    trade_metrics = {
+        "closed_trades": len(pnl_values),
+        "closed_trades_without_eur_valuation": sum(row["realized_pnl_eur"] is None for row in sell_rows),
+        "fills_without_eur_fee_valuation": sum(row["fee_eur"] is None for row in trades),
+        "winning_trades": len(wins),
+        "losing_trades": len(losses),
+        "win_rate_pct": len(wins) / len(pnl_values) * 100 if pnl_values else 0.0,
+        "realized_pnl_eur": sum(pnl_values),
+        "profit_factor": gross_profit / gross_loss if gross_loss else ("INF" if gross_profit else 0.0),
+        "total_fees_eur": sum(float(row["fee_eur"]) for row in trades if row["fee_eur"] is not None),
+        "by_symbol": sorted(by_symbol.values(), key=lambda item: item["realized_pnl_eur"], reverse=True),
+    }
     if not rows:
-        return {"samples": 0, "hours": int(hours)}
+        return {"samples": 0, "hours": int(hours), **trade_metrics}
     first, last = float(rows[0]["equity_eur"]), float(rows[-1]["equity_eur"])
     peak, drawdown = first, 0.0
     for row in rows:
@@ -191,6 +239,7 @@ def get_paper_metrics(db, hours=24):
         "buy_signals": sum(int(row["buy_signals"]) for row in rows),
         "avg_analyzed_markets": sum(int(row["analyzed_markets"]) for row in rows) / len(rows),
         "first_ts": rows[0]["ts"], "last_ts": rows[-1]["ts"],
+        **trade_metrics,
     }
 
 
