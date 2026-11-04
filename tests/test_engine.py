@@ -186,21 +186,29 @@ def test_non_eur_trade_spends_existing_quote_currency_without_converting_eur(tmp
     db.close()
 
 
-def test_non_eur_signal_cannot_spend_eur_when_quote_wallet_is_empty(tmp_path):
+def test_non_eur_signal_can_convert_eur_to_fund_quote_wallet(tmp_path):
     engine, db = make_engine(tmp_path)
     engine.s.max_trade = 5
-    engine.market_pairs = [{"symbol": "USDZEUR", "base": "USD", "quote": "EUR"}]
+    engine.market_pairs = [
+        {"symbol": "USDZEUR", "base": "USD", "quote": "EUR"},
+        {"symbol": "ETHUSD", "base": "ETH", "quote": "USD"},
+    ]
     engine.last_prices = {"USDZEUR": 0.9, "ETHUSD": 3000}
     engine.scan = lambda: [
+        {"symbol": "USDZEUR", "quote": "EUR", "signal": "HOLD", "score": 0,
+         "price": 0.9, "spread_bps": 10, "turnover": 50000, "turnover_eur": 45000, "reasons": []},
         {"symbol": "ETHUSD", "quote": "USD", "signal": "BUY", "score": 10,
          "price": 3000, "spread_bps": 10, "turnover": 50000, "turnover_eur": 45000, "reasons": []},
     ]
     engine.start()
     actions = engine.cycle()
-    assert actions == []
-    assert engine.paper.balance("EUR") == 20
-    assert engine.paper.balance("USD") == 0
-    assert "ETHUSD" not in engine.paper.positions
+    assert len(actions) == 1
+    assert "ETHUSD BUY" in actions[0]
+    assert engine.paper.balance("EUR") < 20
+    assert engine.paper.balance("USD") > 0
+    assert engine.paper.positions["ETHUSD"]["quote_currency"] == "USD"
+    row = db.execute("SELECT COUNT(*) AS n FROM audit WHERE event='PAPER_FX_CONVERSION'").fetchone()
+    assert row["n"] == 1
     db.close()
 
 
