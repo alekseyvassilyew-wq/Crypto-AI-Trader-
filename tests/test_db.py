@@ -121,7 +121,9 @@ def test_sqlite_backup_versions_are_unique_and_retention_is_enforced(tmp_path):
         paths.append(backup_database(db, backup_dir, keep=2))
 
     assert len(set(paths)) == 3
-    assert all(__import__("pathlib").Path(path).exists() for path in paths)
+    from pathlib import Path
+    assert not Path(paths[0]).exists()  # Retention prunes the oldest generation.
+    assert all(Path(path).exists() for path in paths[1:])
     retained = list(backup_dir.glob("crypto_ai_trader_*.sqlite3"))
     assert len(retained) == 2
     db.close()
