@@ -1,9 +1,14 @@
 from datetime import datetime, timezone
+import logging
 import math
+import time
 from .risk import Limits, check_order
 from .indicators import analyze, confirm_multi_timeframe
 from .learning import extract_features, predict_probability
 from .db import audit, save_trade, get_state, set_state, save_paper_snapshot, record_shadow_prediction, settle_shadow_predictions
+
+
+log = logging.getLogger(__name__)
 
 
 FX_CURRENCIES = frozenset({
@@ -330,11 +335,22 @@ class Engine:
         return result
 
     def scan(self, seed_wallet=False):
+        scan_started = time.monotonic()
+        discovery_seconds = 0.0
+        ticker_seconds = 0.0
+        fx_seconds = 0.0
+        ohlc_seconds = 0.0
+        ohlc_analyzed_count = 0
+
         # Modern Kraken client: discover all online spot pairs and fetch the
         # complete ticker snapshot with one public API request.
         if hasattr(self.exchange, "discover_pairs"):
+            stage_started = time.monotonic()
             pairs = self.exchange.discover_pairs()
+            discovery_seconds = time.monotonic() - stage_started
+            stage_started = time.monotonic()
             tickers = self.exchange.tickers()
+            ticker_seconds = time.monotonic() - stage_started
             self.market_pairs = pairs
             self.market_ticker_count = len(tickers)
             ticker_by_symbol = {item["symbol"]: item for item in tickers}
@@ -345,8 +361,10 @@ class Engine:
                 item["symbol"]: float(item.get("lastPrice") or 0)
                 for item in tickers if float(item.get("lastPrice") or 0) > 0
             }
+            stage_started = time.monotonic()
             fresh_fx_rates = self._fresh_fx_rates(snapshot_prices)
             fresh_fx_buy_rates = self._fresh_fx_buy_rates(snapshot_prices)
+            fx_seconds = time.monotonic() - stage_started
             # Market inspection must be side-effect free. Seed the virtual
             # multi-currency portfolio only inside an active PAPER cycle and
             # only from executable ask/bid routes in this fresh ticker snapshot.
@@ -422,7 +440,10 @@ class Engine:
                 set_state(self.db, "analysis_cursor", (cursor + analysis_limit) % len(eligible))
             for _, symbol, quote in eligible:
                 if (symbol, quote) in selected:
+                    stage_started = time.monotonic()
                     result = self.scan_one(symbol, [ticker_by_symbol[symbol]], fx_rates=fresh_fx_rates, quote_currency=quote)
+                    ohlc_seconds += time.monotonic() - stage_started
+                    ohlc_analyzed_count += int(bool(result.get("ohlc_analyzed")))
                     result["quote"] = quote
                     result["turnover_eur"] = float(result.get("turnover") or 0) * fresh_fx_rates.get(quote, 0.0)
                     results_by_symbol[symbol] = result
@@ -442,14 +463,39 @@ class Engine:
                         "quote": quote,
                         "ohlc_analyzed": False, "reasons": ["Ticker monitored; OHLC analysis deferred by rotating scan budget"],
                     }
+            total_seconds = time.monotonic() - scan_started
+            log.info(
+                "Market scan timing: pairs=%d tickers=%d eligible=%d OHLC_selected=%d "
+                "OHLC_analyzed=%d discovery=%.2fs ticker=%.2fs fx=%.2fs "
+                "OHLC=%.2fs total=%.2fs",
+                len(pairs), len(tickers), len(eligible), len(selected),
+                ohlc_analyzed_count, discovery_seconds, ticker_seconds,
+                fx_seconds, ohlc_seconds, total_seconds,
+            )
             return [results_by_symbol[pair["symbol"]] for pair in pairs if pair["symbol"] in results_by_symbol]
 
         # Compatibility path for small test doubles or explicitly configured watchlists.
         symbols = list(getattr(self.s, "watchlist", ()))
+        stage_started = time.monotonic()
         tickers = self.exchange.tickers(symbols)
+        ticker_seconds = time.monotonic() - stage_started
         self.market_pairs = [{"symbol": symbol, "quote": "EUR"} for symbol in symbols]
         self.market_ticker_count = len(tickers)
-        return [self.scan_one(symbol, tickers) for symbol in symbols]
+        results = []
+        for symbol in symbols:
+            stage_started = time.monotonic()
+            results.append(self.scan_one(symbol, tickers))
+            ohlc_seconds += time.monotonic() - stage_started
+        total_seconds = time.monotonic() - scan_started
+        log.info(
+            "Market scan timing: pairs=%d tickers=%d eligible=%d OHLC_selected=%d "
+            "OHLC_analyzed=%d discovery=%.2fs ticker=%.2fs fx=%.2fs "
+            "OHLC=%.2fs total=%.2fs",
+            len(symbols), len(tickers), len(symbols), len(symbols),
+            sum(int(bool(item.get("ohlc_analyzed"))) for item in results),
+            discovery_seconds, ticker_seconds, fx_seconds, ohlc_seconds, total_seconds,
+        )
+        return results
 
     def cycle(self):
         # Market monitoring continues while paused; only PAPER trading is gated.

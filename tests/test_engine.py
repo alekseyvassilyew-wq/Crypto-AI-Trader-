@@ -733,3 +733,17 @@ def test_pure_fx_rate_builder_does_not_require_mutating_engine_state():
     assert rates["EUR"] == 1.0
     assert rates["USD"] == pytest.approx(1 / 1.091)
     assert "XBT" not in rates
+
+
+def test_scan_logs_stage_timing(caplog, tmp_path):
+    engine, db = make_engine(tmp_path)
+
+    with caplog.at_level("INFO", logger="src.trader.engine"):
+        engine.scan()
+
+    assert any("Market scan timing:" in record.message for record in caplog.records)
+    timing = next(record.message for record in caplog.records if "Market scan timing:" in record.message)
+    assert "ticker=" in timing
+    assert "OHLC=" in timing
+    assert "total=" in timing
+    db.close()
