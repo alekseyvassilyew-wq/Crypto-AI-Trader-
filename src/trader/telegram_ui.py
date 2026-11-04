@@ -302,7 +302,7 @@ def build_app(s, engine, exchange):
             log.exception("Could not notify Telegram error topic")
 
     app.add_error_handler(application_error_handler)
-    # The actual market scan cadence is controlled by scan_interval_seconds.
-    # Polling the scheduler every second only creates noise and skipped-job warnings.
-    app.job_queue.run_repeating(cycle_job, interval=5, first=10, name="paper-cycle")
+    # The configured scan interval has a one-minute minimum. Wake the
+    # scheduler once per minute instead of creating overlapping skipped jobs.
+    app.job_queue.run_repeating(cycle_job, interval=60, first=10, name="paper-cycle")
     return app
