@@ -391,6 +391,7 @@ class Engine:
                 "STOP_LOSS" if change_pct <= -self.s.stop_loss_pct
                 else "TAKE_PROFIT" if change_pct >= self.s.take_profit_pct
                 else "TRAILING_STOP" if trailing_trigger
+                else "SIGNAL_SELL" if quote_row.get("signal") == "SELL"
                 else None
             )
             if reason:
