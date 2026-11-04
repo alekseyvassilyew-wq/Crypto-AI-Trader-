@@ -271,7 +271,7 @@ def test_portfolio_uses_executable_fx_buy_rate_and_cross_currency_funding_for_eu
     assert result["trades"] == 2
     usd_trade = next(trade for trade in result["trades_detail"] if trade["symbol"] == "ETHUSD")
     eur_trade = next(trade for trade in result["trades_detail"] if trade["symbol"] == "BTCEUR")
-    assert usd_trade["entry_quote"] == pytest.approx(55.0)
+    assert usd_trade["quantity"] * usd_trade["entry_price"] == pytest.approx(55.0)
     assert eur_trade["conversion_fee_eur"] > 0
     assert all(amount >= -1e-10 for amount in result["cash_by_currency"].values())
     assert result["fees_paid_eur"] == pytest.approx(
