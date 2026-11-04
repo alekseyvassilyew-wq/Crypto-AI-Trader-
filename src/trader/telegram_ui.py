@@ -10,7 +10,11 @@ def build_app(s, engine, exchange):
         from datetime import datetime, timezone
         import math
 
-        if not engine.paper.positions:
+        needs_market_marks = bool(engine.paper.positions) or any(
+            str(currency).upper() != "EUR" and float(amount) > 1e-12
+            for currency, amount in engine.paper.cash_by_currency.items()
+        )
+        if not needs_market_marks:
             return True, {}
         scanned_at = engine.last_scan_at
         if scanned_at is None:
@@ -103,7 +107,7 @@ def build_app(s, engine, exchange):
             if missing:
                 daily_text = "недоступен — нет свежего FX: " + ", ".join(missing)
             elif not quotes_fresh:
-                daily_text = "недоступен — нет свежих котировок открытых позиций"
+                daily_text = "недоступен — нет свежих рыночных котировок для оценки портфеля"
             else:
                 daily_text = f"{engine.daily_pnl(valuation_prices):.2f} EUR"
             return (
@@ -512,6 +516,8 @@ def build_app(s, engine, exchange):
                     f"цена Bid {mark:.8g} | пик {peak:.8g} | {pnl_text}"
                 )
             fx_text = "Свежие EUR-курсы для всех валют." if not missing else "Нет свежего EUR-курса: " + ", ".join(missing)
+            if not quotes_fresh:
+                fx_text += " Нет свежего рыночного снимка; оценка P/L скрыта."
             return "PAPER-кошелёк:\n" + ("\n".join(balances) or "Нет свободных средств.") + "\n" + fx_text + "\n\nПозиции:\n" + ("\n".join(lines) or "Нет открытых позиций.")
         message = await context.application.bot_data["run_blocking"].run(read_portfolio)
         await update.effective_message.reply_text(message)
