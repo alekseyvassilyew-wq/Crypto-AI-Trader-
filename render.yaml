@@ -33,7 +33,7 @@ services:
       - key: TRADE_QUOTE_CURRENCY
         value: EUR
       - key: MAX_CANDLE_PAIRS
-        value: "10"
+        value: "20"
       - key: ENABLE_MULTI_TIMEFRAME
         value: "true"
       - key: RISK_PER_TRADE_PERCENT
