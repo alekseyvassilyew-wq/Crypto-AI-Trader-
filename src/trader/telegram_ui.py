@@ -60,12 +60,14 @@ def build_app(s, engine, exchange):
         try:
             rows = await context.application.bot_data["run_blocking"].run(engine.scan)
             buy_rows = [x for x in rows if x.get("signal") == "BUY"]
-            analyzed = [x for x in rows if "Ticker monitored; OHLC analysis deferred by scan budget" not in x.get("reasons", []) and x.get("quote") == s.trade_quote_currency]
+            analyzed = [x for x in rows if x.get("ohlc_analyzed") is True and x.get("quote") == s.trade_quote_currency]
+            candle_failed = [x for x in rows if x.get("quote") == s.trade_quote_currency and any(str(reason).startswith("Candle data unavailable:") for reason in x.get("reasons", []))]
             ranked = sorted(analyzed, key=lambda x: (x.get("score", 0), x.get("turnover", 0)), reverse=True)[:12]
             lines = [
                 f"Всего рынков Kraken: {len(engine.market_pairs)}",
                 f"Тикеров получено: {engine.market_ticker_count}",
-                f"Пар {s.trade_quote_currency} с индикаторным анализом: {len(analyzed)}",
+                f"Пар {s.trade_quote_currency} с успешно проанализированными свечами/индикаторами: {len(analyzed)}",
+                f"Ошибок получения свечей: {len(candle_failed)}",
                 f"Сигналов BUY: {len(buy_rows)}",
                 "",
             ]
