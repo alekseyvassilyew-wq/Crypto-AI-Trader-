@@ -87,7 +87,7 @@ def test_engine_starts_paused_after_restart(tmp_path):
     db.close()
 
 
-def test_full_market_scan_monitors_all_pairs_but_analyzes_only_eur_budget(tmp_path):
+def test_full_market_scan_monitors_all_pairs_and_can_analyze_non_eur_markets(tmp_path):
     engine, db = make_engine(tmp_path)
     engine.s.trade_quote_currency = "EUR"
     engine.s.max_candle_pairs = 1
@@ -154,6 +154,32 @@ def test_rotating_scan_covers_multiple_funded_quote_currencies(tmp_path):
     second = engine.scan()
     assert seen == ["XBTEUR", "ETHUSD"]
     assert {row["quote"] for row in first + second} == {"EUR", "USD"}
+    db.close()
+
+ 
+ 
+def test_non_eur_signal_can_be_funded_from_eur_paper_wallet(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.s.max_positions = 2
+    engine.s.max_trade = 5
+    engine.market_pairs = [
+        {"symbol": "USDZEUR", "base": "USD", "quote": "EUR"},
+        {"symbol": "ETHUSD", "base": "ETH", "quote": "USD"},
+    ]
+    engine.exchange = DummyExchange()
+    engine.last_prices = {"USDZEUR": 0.9, "ETHUSD": 3000}
+    engine.scan = lambda: [{
+        "symbol": "ETHUSD", "quote": "USD", "signal": "BUY", "score": 10,
+        "price": 3000, "spread_bps": 10, "turnover": 50000, "turnover_eur": 45000,
+        "reasons": [],
+    }]
+    engine.start()
+    actions = engine.cycle()
+    assert len(actions) == 1
+    assert "ETHUSD BUY" in actions[0]
+    assert engine.paper.balance("EUR") == 15
+    assert engine.paper.balance("USD") == 0
+    assert engine.paper.positions["ETHUSD"]["quote_currency"] == "USD"
     db.close()
 
 
