@@ -116,32 +116,33 @@ class Engine:
                         "reasons": ["Turnover too low"],
                     }
                 else:
-                    eligible.append((turnover, symbol))
+                    eligible.append((turnover, symbol, quote))
 
-            # Tickers cover every Kraken spot market. To respect public API
-            # limits, OHLC/indicator analysis is budgeted to the most liquid
-            # EUR pairs each cycle; the complete universe is re-ranked each scan.
+            # Monitor every Kraken spot market through tickers. Rotate the
+            # limited OHLC budget across all funded quote currencies.
             eligible.sort(reverse=True)
-            # Rotate OHLC coverage so lower-ranked funded markets are not starved.
             cursor = int(get_state(self.db, "analysis_cursor", 0) or 0) % max(1, len(eligible))
             ordered = eligible[cursor:] + eligible[:cursor]
-            selected = {symbol for _, symbol in ordered[:analysis_limit]}
+            selected = {(symbol, quote) for _, symbol, quote in ordered[:analysis_limit]}
             if eligible:
                 set_state(self.db, "analysis_cursor", (cursor + analysis_limit) % len(eligible))
-            for _, symbol in eligible:
-                if symbol in selected:
+            for _, symbol, quote in eligible:
+                if (symbol, quote) in selected:
                     result = self.scan_one(symbol, [ticker_by_symbol[symbol]])
-                    result["quote"] = quote_currency
+                    result["quote"] = quote
                     results_by_symbol[symbol] = result
                 else:
                     ticker = ticker_by_symbol[symbol]
+                    bid = float(ticker.get("bid1Price") or 0)
+                    ask = float(ticker.get("ask1Price") or 0)
+                    spread = ((ask - bid) / ((ask + bid) / 2) * 10000
+                              if bid > 0 and ask > 0 else 999999)
                     results_by_symbol[symbol] = {
                         "symbol": symbol, "signal": "HOLD", "score": 0,
                         "price": float(ticker.get("lastPrice") or 0),
-                        "spread_bps": (float(ticker["ask1Price"]) - float(ticker["bid1Price"])) /
-                                      ((float(ticker["ask1Price"]) + float(ticker["bid1Price"])) / 2) * 10000,
+                        "spread_bps": spread,
                         "turnover": float(ticker.get("turnover24h") or 0),
-                        "quote": str(next((p.get("quote") for p in pairs if p["symbol"] == symbol), "EUR")).upper(),
+                        "quote": quote,
                         "reasons": ["Ticker monitored; OHLC analysis deferred by rotating scan budget"],
                     }
             return [results_by_symbol[pair["symbol"]] for pair in pairs if pair["symbol"] in results_by_symbol]
