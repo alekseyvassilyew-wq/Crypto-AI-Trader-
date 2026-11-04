@@ -45,7 +45,7 @@ class Engine:
 
     def _fresh_fx_rates(self, prices=None):
         """Build EUR conversion routes using only the current market snapshot."""
-        prices = prices or self.last_prices
+        prices = self.last_prices if prices is None else prices
         graph = {}
         for pair in self.market_pairs:
             base = str(pair.get("base") or "").upper()
@@ -145,7 +145,7 @@ class Engine:
     def daily_pnl(self, prices=None):
         self._ensure_day()
         state = get_state(self.db, "daily", {})
-        prices = prices or self.last_prices or {}
+        prices = self.last_prices if prices is None else prices or {}
         return self.paper.equity(prices, self._fx_rates(prices)) - float(state.get("start_equity", self.paper.cash))
 
     def scan_one(self, symbol, tickers=None, fx_rates=None, quote_currency=None):
