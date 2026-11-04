@@ -400,7 +400,7 @@ def test_successful_cycle_persists_paper_snapshot(tmp_path):
     engine.scan = lambda **kwargs: [{
         "symbol": "XBTEUR", "quote": "EUR", "signal": "HOLD", "score": 0,
         "price": 10.0, "bid": 9.99, "ask": 10.01, "spread_bps": 10,
-        "turnover": 50000, "turnover_eur": 50000, "reasons": [],
+        "turnover": 50000, "turnover_eur": 50000, "ohlc_analyzed": True, "reasons": [],
     }]
     engine.start()
 
