@@ -831,3 +831,23 @@ def test_paper_sell_fill_applies_slippage_to_executable_bid(tmp_path):
     assert any("SELL SIGNAL_SELL" in action for action in actions)
     assert row["price"] == pytest.approx(99.95)
     db.close()
+
+
+def test_liquidation_equity_includes_cash_and_open_positions_after_exit_costs(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.paper.cash_by_currency = {"EUR": 5.0}
+    engine.paper.positions = {
+        "XBTEUR": {
+            "qty": 0.1, "avg_price": 100.0, "quote_currency": "EUR",
+            "cost_basis_eur": 10.0, "entry_fees_eur": 0.026,
+        }
+    }
+
+    equity = engine._equity_after_liquidation(
+        {"XBTEUR": 110.0}, {"EUR": 1.0},
+    )
+    expected_position_value = 0.1 * 110.0 * (1 - 5 / 10000) * (1 - engine.paper.fee_rate)
+
+    assert equity == pytest.approx(5.0 + expected_position_value)
+    assert equity > engine.paper.balance("EUR")
+    db.close()

@@ -115,13 +115,23 @@ def build_app(s, engine, exchange):
             valuation_prices.update(bid_marks)
             if missing:
                 daily_text = "недоступен — нет свежего FX: " + ", ".join(missing)
+                equity_text = "недоступна — нет свежего FX: " + ", ".join(missing)
             elif not quotes_fresh:
                 daily_text = "недоступен — нет свежих рыночных котировок для оценки портфеля"
+                equity_text = "недоступна — нет свежих котировок для всех позиций"
             else:
-                daily_text = f"{engine.daily_pnl(valuation_prices):.2f} EUR"
+                try:
+                    equity = engine._equity_after_liquidation(valuation_prices, fresh_rates)
+                    equity_text = f"{equity:.4f} EUR"
+                    daily_text = f"{engine.daily_pnl(valuation_prices):.2f} EUR (UTC)"
+                except Exception as exc:
+                    log.warning("PAPER status valuation unavailable: %s", type(exc).__name__)
+                    daily_text = "недоступен — ошибка оценки"
+                    equity_text = "недоступна — ошибка оценки"
             return (
-                f"Режим: PAPER\nСостояние: {state}\nВиртуальные средства: {balances}\n"
-                f"Позиции: {len(engine.paper.positions)}/{s.max_positions}\nP/L сегодня: {daily_text}\n"
+                f"Режим: PAPER\nСостояние: {state}\nСвободные средства: {balances}\n"
+                f"Общая стоимость портфеля после расчётных расходов на выход: {equity_text}\n"
+                f"Позиции: {len(engine.paper.positions)}/{s.max_positions}\nP/L сегодня (UTC): {daily_text}\n"
                 f"Риск: SL {s.stop_loss_pct:.2f}% | TP {s.take_profit_pct:.2f}% | trailing {getattr(s, 'trailing_stop_pct', 1.5):.2f}%\n"
                 f"Рынок Kraken: {len(engine.market_pairs)} пар; котировок получено: {engine.market_ticker_count}\n"
                 f"Мониторинг всех котировок; анализ свечей: до {s.max_candle_pairs} пар за цикл.\n"
@@ -706,9 +716,18 @@ def build_app(s, engine, exchange):
                 "{} {:+.4f} EUR".format(item["symbol"], item["realized_pnl_eur"])
                 for item in metrics["by_symbol"][:5]
             ) or "пока нет закрытых сделок"
+            span_seconds = int(metrics.get("measurement_span_seconds", 0))
+            span_hours, remainder_seconds = divmod(span_seconds, 3600)
+            span_minutes = remainder_seconds // 60
+            span_text = (
+                f"{span_hours} ч {span_minutes} мин"
+                if span_hours else f"{span_minutes} мин"
+            )
+            coverage_pct = min(100.0, span_seconds / (hours * 3600) * 100.0)
             await update.effective_message.reply_text(
-                f"📈 PAPER FORWARD-TEST — {hours} ч.\n"
+                f"📈 PAPER FORWARD-TEST — окно {hours} ч.\n"
                 f"Измерений: {metrics['samples']}\n"
+                f"Размах измерений: {span_text} ({coverage_pct:.1f}% окна; не гарантия непрерывной работы)\n"
                 f"Капитал: {metrics['start_equity_eur']:.4f} → {metrics['end_equity_eur']:.4f} EUR\n"
                 f"Изменение: {metrics['change_eur']:+.4f} EUR ({metrics['change_pct']:+.2f}%)\n"
                 f"Макс. наблюдаемая просадка: {metrics['max_observed_drawdown_pct']:.2f}%\n"

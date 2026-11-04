@@ -221,7 +221,21 @@ def get_paper_metrics(db, hours=24):
         "by_symbol": sorted(by_symbol.values(), key=lambda item: item["realized_pnl_eur"], reverse=True),
     }
     if not rows:
-        return {"samples": 0, "hours": int(hours), **trade_metrics}
+        return {
+            "samples": 0, "hours": int(hours),
+            "measurement_span_seconds": 0.0,
+            "measurement_span_hours": 0.0,
+            **trade_metrics,
+        }
+    def parse_snapshot_timestamp(value):
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    first_ts = parse_snapshot_timestamp(rows[0]["ts"])
+    last_ts = parse_snapshot_timestamp(rows[-1]["ts"])
+    measurement_span_seconds = max(0.0, (last_ts - first_ts).total_seconds())
     first, last = float(rows[0]["equity_eur"]), float(rows[-1]["equity_eur"])
     peak, drawdown = first, 0.0
     for row in rows:
@@ -231,6 +245,8 @@ def get_paper_metrics(db, hours=24):
             drawdown = max(drawdown, (peak - equity) / peak)
     return {
         "samples": len(rows), "hours": int(hours),
+        "measurement_span_seconds": measurement_span_seconds,
+        "measurement_span_hours": measurement_span_seconds / 3600.0,
         "start_equity_eur": first, "end_equity_eur": last,
         "change_eur": last - first,
         "change_pct": (last / first - 1.0) * 100 if first else 0.0,
