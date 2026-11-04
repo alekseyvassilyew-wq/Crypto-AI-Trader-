@@ -114,3 +114,14 @@ def test_multi_currency_equity_uses_fx_rates():
     broker = PaperBroker(balance=20)
     broker.cash_by_currency["USD"] = 10
     assert broker.equity({}, {"USD": 0.9}) == pytest.approx(29)
+
+def test_trailing_peak_is_persisted_across_broker_restart(tmp_path):
+    from src.trader.db import connect
+    db = connect(tmp_path / "trailing.sqlite3")
+    broker = PaperBroker(balance=20, fee_rate=0.001, db=db)
+    broker.buy("XBTEUR", 5, 10)
+    assert broker.update_peak("XBTEUR", 12) == 12
+    restored = PaperBroker(balance=20, fee_rate=0.001, db=db)
+    assert restored.positions["XBTEUR"]["peak_price"] == 12
+    assert restored.update_peak("XBTEUR", 11) == 12
+    db.close()
