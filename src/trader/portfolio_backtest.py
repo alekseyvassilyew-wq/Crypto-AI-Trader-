@@ -27,6 +27,7 @@ def run_portfolio_backtest(
     quote_currencies,
     fx_rates,
     fx_rates_by_timestamp=None,
+    fx_buy_rates=None,
     initial_cash_eur=1000.0,
     max_trade_eur=100.0,
     max_positions=5,
@@ -41,10 +42,10 @@ def run_portfolio_backtest(
 ):
     """Simulate several spot markets against one shared multi-currency wallet.
 
-    fx_rates maps quote currencies to EUR per unit (EUR must be 1.0).
-    Optional fx_rates_by_timestamp maps candle timestamps to dated EUR-per-unit
-    rates. Missing currencies fall back to fx_rates. Entry and exit valuations
-    use the rates at their respective fill timestamps.
+    fx_rates maps liquidation value in EUR per quote-currency unit (EUR = 1).
+    fx_buy_rates maps quote-currency units obtainable per EUR at the executable
+    buy side. If omitted, reciprocal fx_rates are used for compatibility.
+    Optional fx_rates_by_timestamp supplies dated EUR-per-unit valuation rates.
     signal_fn is called as signal_fn(symbol, history); default is indicators.analyze.
     """
     if not isinstance(candles_by_symbol, dict) or not candles_by_symbol:
@@ -74,6 +75,15 @@ def run_portfolio_backtest(
     rates.setdefault("EUR", 1.0)
     if not math.isclose(rates["EUR"], 1.0, rel_tol=0, abs_tol=1e-12):
         raise ValueError("EUR FX rate must equal 1.0")
+    if fx_buy_rates is None:
+        buy_rates = {currency: 1.0 / rate for currency, rate in rates.items()}
+    else:
+        if not isinstance(fx_buy_rates, dict):
+            raise ValueError("fx_buy_rates must be a mapping")
+        buy_rates = {str(k).upper(): _positive(v, f"fx_buy_rates[{k}]") for k, v in fx_buy_rates.items()}
+        buy_rates.setdefault("EUR", 1.0)
+        if not math.isclose(buy_rates["EUR"], 1.0, rel_tol=0, abs_tol=1e-12):
+            raise ValueError("EUR FX buy rate must equal 1.0")
     dated_rates = {}
     if fx_rates_by_timestamp is not None:
         if not isinstance(fx_rates_by_timestamp, dict):
@@ -93,6 +103,9 @@ def run_portfolio_backtest(
         current.update(dated_rates.get(float(timestamp), {}))
         return current
 
+    def buy_rates_at(timestamp):
+        return dict(buy_rates)
+
     markets = {}
     common_timestamps = None
     for raw_symbol, raw_rows in candles_by_symbol.items():
@@ -100,8 +113,8 @@ def run_portfolio_backtest(
         if not symbol or symbol in markets:
             raise ValueError("Market symbols must be unique non-empty strings")
         quote = str(quote_currencies.get(raw_symbol, quote_currencies.get(symbol, ""))).strip().upper()
-        if not quote or quote not in rates:
-            raise ValueError(f"Missing quote currency or EUR FX rate for {symbol}")
+        if not quote or quote not in rates or quote not in buy_rates:
+            raise ValueError(f"Missing quote currency or EUR FX valuation/buy rate for {symbol}")
         if not isinstance(raw_rows, (list, tuple)) or len(raw_rows) < 62:
             raise ValueError(f"At least 62 candles are required for {symbol}")
         rows = []
@@ -250,6 +263,7 @@ def run_portfolio_backtest(
             next_timestamp = common_timestamps[index + 1]
             execution_rates = rates_at(next_timestamp)
             quote_rate = execution_rates[quote]
+            quote_buy_rate = buy_rates_at(next_timestamp)[quote]
             next_open = market["rows"][index + 1][1]
             next_marks = {s: m["rows"][index + 1][1] for s, m in markets.items()}
             current_equity = equity(next_marks, next_timestamp)
@@ -262,36 +276,50 @@ def run_portfolio_backtest(
             budget_eur = min(trade_cap, available_eur, risk_budget_eur / (stop_distance_pct / 100.0))
             if budget_eur <= 0:
                 break
-            required_quote = budget_eur / quote_rate
+            required_quote = budget_eur * quote_buy_rate
             quote_balance = cash.get(quote, 0.0)
             conversion_fee_for_trade = 0.0
             if quote_balance + 1e-12 < required_quote * (1 + fee):
-                # Convert only the shortfall from EUR; never borrow or rebalance positions.
+                # Convert only the shortfall using executable buy-side FX rates.
                 shortfall_quote = required_quote * (1 + fee) - quote_balance
-                source_eur = shortfall_quote * quote_rate / (1 - fee)
-                if cash.get("EUR", 0.0) + 1e-12 < source_eur:
-                    # Use any other funded quote wallet via its EUR valuation.
-                    for source in sorted(c for c, amount in cash.items() if c != quote and amount > 1e-12):
+                source_eur_needed = shortfall_quote / (quote_buy_rate * (1 - fee))
+                if cash.get("EUR", 0.0) + 1e-12 >= source_eur_needed:
+                    cash["EUR"] -= source_eur_needed
+                    received = source_eur_needed * quote_buy_rate * (1 - fee)
+                    cash[quote] = quote_balance + received
+                    conversion_fee = source_eur_needed * fee
+                    fees_paid += conversion_fee
+                    conversion_fee_for_trade += conversion_fee
+                else:
+                    # Cross-currency funding routes through EUR and pays a fee
+                    # on each exchange leg, not one synthetic fee.
+                    for source in sorted(c for c, amount in cash.items()
+                                         if c not in (quote, "EUR") and amount > 1e-12):
                         source_rate = execution_rates.get(source)
                         if not source_rate:
                             continue
-                        source_amount = min(cash[source], source_eur / source_rate)
-                        received = source_amount * source_rate / quote_rate * (1 - fee)
+                        source_amount = min(
+                            cash[source],
+                            source_eur_needed / (source_rate * (1 - fee)),
+                        )
+                        if source_amount <= 1e-12:
+                            continue
+                        eur_received = source_amount * source_rate * (1 - fee)
+                        if quote == "EUR":
+                            received = eur_received
+                            conversion_fee = source_amount * source_rate * fee
+                        else:
+                            received = eur_received * quote_buy_rate * (1 - fee)
+                            first_fee_eur = source_amount * source_rate * fee
+                            second_fee_eur = eur_received * quote_buy_rate * fee * quote_rate
+                            conversion_fee = first_fee_eur + second_fee_eur
                         cash[source] -= source_amount
                         cash[quote] = cash.get(quote, 0.0) + received
-                        conversion_fee = source_amount * source_rate * fee
                         fees_paid += conversion_fee
                         conversion_fee_for_trade += conversion_fee
                         quote_balance = cash[quote]
                         if quote_balance + 1e-12 >= required_quote * (1 + fee):
                             break
-                else:
-                    cash["EUR"] -= source_eur
-                    received = source_eur / quote_rate * (1 - fee)
-                    cash[quote] = quote_balance + received
-                    conversion_fee = source_eur * fee
-                    fees_paid += conversion_fee
-                    conversion_fee_for_trade += conversion_fee
             quote_balance = cash.get(quote, 0.0)
             spend = min(required_quote, quote_balance / (1 + fee))
             if spend <= 0:
@@ -374,8 +402,8 @@ def run_portfolio_backtest(
     benchmark_final_equity = 0.0
     for symbol, market in markets.items():
         quote = market["quote"]
-        quote_rate = benchmark_entry_rates[quote]
-        quote_allocation = benchmark_allocation_eur / quote_rate
+        quote_buy_rate = buy_rates_at(common_timestamps[benchmark_entry_index])[quote]
+        quote_allocation = benchmark_allocation_eur * quote_buy_rate
         if quote != "EUR":
             quote_allocation *= 1.0 - fee
         spend = quote_allocation / (1.0 + fee)
@@ -407,6 +435,7 @@ def run_portfolio_backtest(
             "intrabar_priority": "stop before take-profit",
             "buy_hold": "equal-weight same markets from first strategy entry (or first executable candle if no trades) through final close; includes conversion and two-sided fees/slippage",
             "fx_rates_fallback": rates,
+            "fx_buy_rates": buy_rates,
             "dated_fx_rate_timestamps": len(dated_rates),
         },
     }
