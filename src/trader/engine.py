@@ -143,7 +143,7 @@ class Engine:
         return price
 
     def _paper_trade_eur_values(self, quote_currency, fee, prices, *, position=None, qty=None, exit_price=None):
-        """Convert PAPER fees and realized round-trip PnL to EUR using fresh FX only."""
+        """Value PAPER fees and realized PnL using entry-time and exit-time EUR FX."""
         currency = str(quote_currency or "EUR").upper()
         rate = self._fresh_fx_rates(prices).get(currency)
         if rate is None:
@@ -156,15 +156,28 @@ class Engine:
         realized_pnl_eur = None
         if position is not None and qty is not None and exit_price is not None:
             quantity = float(qty)
-            entry_price = float(position["avg_price"])
+            held_quantity = float(position.get("qty", 0.0))
             exit_value = float(exit_price)
-            if not all(math.isfinite(value) and value > 0 for value in (quantity, entry_price, exit_value)):
+            cost_basis_eur = position.get("cost_basis_eur")
+            entry_fees_eur = position.get("entry_fees_eur")
+            if (
+                not math.isfinite(quantity) or quantity <= 0
+                or not math.isfinite(held_quantity) or held_quantity <= 0
+                or quantity > held_quantity + 1e-12
+                or not math.isfinite(exit_value) or exit_value <= 0
+            ):
                 raise ValueError("Invalid PAPER realized PnL inputs")
-            entry_fee = quantity * entry_price * self.paper.fee_rate
-            exit_fee = quantity * exit_value * self.paper.fee_rate
-            realized_pnl_eur = (quantity * (exit_value - entry_price) - entry_fee - exit_fee) * rate
-            if not math.isfinite(realized_pnl_eur):
-                raise ValueError("PAPER realized EUR PnL is not finite")
+            # Legacy open positions have no historical FX cost basis; do not invent one.
+            if cost_basis_eur is not None and entry_fees_eur is not None:
+                fraction = min(1.0, quantity / held_quantity)
+                allocated_basis = float(cost_basis_eur) * fraction
+                allocated_entry_fees = float(entry_fees_eur) * fraction
+                exit_gross_eur = quantity * exit_value * rate
+                realized_pnl_eur = exit_gross_eur - fee_eur - allocated_basis - allocated_entry_fees
+                if not all(math.isfinite(value) for value in (
+                    allocated_basis, allocated_entry_fees, exit_gross_eur, realized_pnl_eur
+                )):
+                    raise ValueError("PAPER realized EUR PnL is not finite")
         return fee_eur, realized_pnl_eur
 
     def _equity_after_liquidation(self, prices=None, fx_rates=None):
@@ -838,7 +851,11 @@ class Engine:
                     continue
                 # A PAPER buy crosses the spread and therefore fills at ask.
                 entry_price = self._paper_buy_price(float(signal.get("ask") or signal["price"]))
-                fill = self.paper.buy(signal["symbol"], allocation, entry_price, currency=quote_currency)
+                quote_to_eur_rate = self._fresh_fx_rates(prices).get(str(quote_currency).upper())
+                fill = self.paper.buy(
+                    signal["symbol"], allocation, entry_price,
+                    currency=quote_currency, quote_to_eur_rate=quote_to_eur_rate,
+                )
                 fee_eur, _ = self._paper_trade_eur_values(quote_currency, fill["fee"], prices)
                 save_trade(
                     self.db, "PAPER", signal["symbol"], "Buy", fill["qty"],
