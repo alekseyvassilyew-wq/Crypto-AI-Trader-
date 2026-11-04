@@ -15,6 +15,12 @@ def test_kraken_legacy_asset_codes_normalize_for_market_matching():
     assert normalize_kraken_asset_code("SOMECOIN") == "SOMECOIN"
 
 
+def test_unknown_legacy_prefix_is_normalized_only_when_market_confirms_asset():
+    assert normalize_kraken_asset_code("XXMR", {"XMR", "EUR"}) == "XMR"
+    assert normalize_kraken_asset_code("ZABC", {"ABC", "EUR"}) == "ABC"
+    assert normalize_kraken_asset_code("XABC", {"ABC2", "EUR"}) == "XABC"
+
+
 def test_inventory_keeps_original_balance_code_but_uses_normalized_fx_key():
     result = build_wallet_inventory(
         {"XXBT": "0.01", "ZEUR": "20"},
@@ -25,6 +31,16 @@ def test_inventory_keeps_original_balance_code_but_uses_normalized_fx_key():
     assert by_asset["XXBT"]["value_eur"] == pytest.approx(600)
     assert by_asset["ZEUR"]["value_eur"] == pytest.approx(20)
     assert result["total_eur"] == pytest.approx(620)
+
+
+def test_inventory_uses_discovered_market_symbols_for_legacy_asset_codes():
+    result = build_wallet_inventory(
+        {"XXMR": "2"},
+        {"XMR": 150},
+        known_assets={"XMR", "EUR"},
+    )
+    assert result["assets"][0]["canonical_asset"] == "XMR"
+    assert result["assets"][0]["value_eur"] == pytest.approx(300)
 
 
 def test_asset_pair_routes_include_base_and_quote_markets_and_constraints():
@@ -43,3 +59,11 @@ def test_asset_pair_routes_include_base_and_quote_markets_and_constraints():
     assert xbteur["fees"] == [[0, 0.26]]
     assert [item["symbol"] for item in routes["EUR"]] == ["XBTEUR"]
     assert routes["EUR"][0]["role"] == "quote"
+
+
+def test_pair_routes_normalize_other_legacy_assets_from_market_universe():
+    routes = build_asset_pair_routes(
+        ["XXMR"],
+        [{"symbol": "XMREUR", "base": "XMR", "quote": "EUR"}],
+    )
+    assert [item["symbol"] for item in routes["XMR"]] == ["XMREUR"]
