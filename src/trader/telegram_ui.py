@@ -123,9 +123,10 @@ def build_app(s, engine, exchange):
                     pairs = exchange.discover_pairs()
                     tickers = exchange.tickers()
                     engine.market_pairs = pairs
+                    by_symbol = {x["symbol"]: x for x in tickers}
+                    engine.last_ticker_data = by_symbol
                     prices = {x["symbol"]: float(x.get("lastPrice") or 0) for x in tickers if float(x.get("lastPrice") or 0) > 0}
                     fx_rates = engine._fresh_fx_rates(prices)
-                    by_symbol = {x["symbol"]: x for x in tickers}
                     eligible = []
                     for pair in pairs:
                         ticker = by_symbol.get(pair["symbol"])
@@ -548,12 +549,13 @@ def build_app(s, engine, exchange):
                 pairs = exchange.discover_pairs()
                 tickers = exchange.tickers()
                 engine.market_pairs = pairs
+                by_symbol = {item["symbol"]: item for item in tickers}
+                engine.last_ticker_data = by_symbol
                 prices = {
                     item["symbol"]: float(item.get("lastPrice") or 0)
                     for item in tickers if float(item.get("lastPrice") or 0) > 0
                 }
                 rates = engine._fresh_fx_rates(prices)
-                by_symbol = {item["symbol"]: item for item in tickers}
                 eligible = []
                 for pair in pairs:
                     ticker = by_symbol.get(pair["symbol"])
