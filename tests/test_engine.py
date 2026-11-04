@@ -671,3 +671,41 @@ def test_daily_loss_kill_switch_liquidates_open_positions_at_bid(tmp_path):
     row = db.execute("SELECT COUNT(*) AS n FROM audit WHERE event='DAILY_LOSS_LIQUIDATION'").fetchone()
     assert row["n"] == 1
     db.close()
+
+
+def test_non_eur_cross_conversion_charges_two_fee_legs(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.paper.cash_by_currency["EUR"] = 0.0
+    engine.paper.cash_by_currency["USD"] = 20.0
+    engine.paper._sync_cash()
+    engine.market_pairs = [
+        {"symbol": "USDZEUR", "base": "USD", "quote": "EUR"},
+        {"symbol": "USDTZEUR", "base": "USDT", "quote": "EUR"},
+        {"symbol": "ETHUSDT", "base": "ETH", "quote": "USDT"},
+    ]
+    engine.last_prices = {"USDZEUR": 0.9, "USDTZEUR": 0.9, "ETHUSDT": 3000.0}
+    engine.scan = lambda **kwargs: [
+        {"symbol": "USDZEUR", "quote": "EUR", "signal": "HOLD", "score": 0,
+         "price": 0.9, "bid": 0.899, "ask": 0.901, "spread_bps": 10,
+         "turnover": 50000, "turnover_eur": 45000, "reasons": []},
+        {"symbol": "USDTZEUR", "quote": "EUR", "signal": "HOLD", "score": 0,
+         "price": 0.9, "bid": 0.899, "ask": 0.901, "spread_bps": 10,
+         "turnover": 50000, "turnover_eur": 45000, "reasons": []},
+        {"symbol": "ETHUSDT", "quote": "USDT", "signal": "BUY", "score": 5,
+         "price": 3000, "bid": 2999, "ask": 3001, "spread_bps": 10,
+         "turnover": 50000, "turnover_eur": 45000, "reasons": []},
+    ]
+    engine.start()
+
+    actions = engine.cycle()
+
+    assert any("ETHUSDT BUY" in action for action in actions)
+    row = db.execute(
+        "SELECT details FROM audit WHERE event='PAPER_FX_CONVERSION' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    assert row is not None
+    assert "legs=2" in row["details"]
+    assert "fees=" in row["details"]
+    assert engine.paper.balance("EUR") >= 0
+    assert engine.paper.balance("USD") >= 0
+    db.close()
