@@ -616,24 +616,43 @@ class Engine:
                         if not source_to_eur or source_to_eur <= 0:
                             continue
                         # Conversion fee is charged in the destination currency.
-                        # Sell source currency at its bid-side EUR value, then
-                        # buy the target currency at its ask-side EUR cost.
+                        # Route through EUR. Non-EUR to non-EUR conversion
+                        # is two exchange legs and must pay the fee twice.
+                        fee_retention = 1.0 - self.paper.fee_rate
+                        fee_legs = 2 if source_currency != "EUR" and quote_currency != "EUR" else 1
                         conversion_rate = source_to_eur * quote_units_per_eur
                         source_needed = (
                             target_shortfall
-                            / ((1.0 - self.paper.fee_rate) * conversion_rate)
+                            / (fee_retention ** fee_legs * conversion_rate)
                         )
                         source_amount = min(self.paper.balance(source_currency), source_needed)
                         if source_amount <= 1e-12:
                             continue
-                        conversion = self.paper.convert(
-                            source_currency, quote_currency, source_amount,
-                            conversion_rate,
-                        )
+                        if fee_legs == 2:
+                            first_leg = self.paper.convert(
+                                source_currency, "EUR", source_amount, source_to_eur,
+                            )
+                            second_leg = self.paper.convert(
+                                "EUR", quote_currency, first_leg["received"], quote_units_per_eur,
+                            )
+                            conversion = {
+                                "from": source_currency, "to": quote_currency,
+                                "spent": source_amount, "received": second_leg["received"],
+                                "fee": first_leg["fee"] + second_leg["fee"], "legs": 2,
+                            }
+                        elif source_currency == "EUR":
+                            conversion = self.paper.convert(
+                                "EUR", quote_currency, source_amount, quote_units_per_eur,
+                            )
+                        else:
+                            conversion = self.paper.convert(
+                                source_currency, "EUR", source_amount, source_to_eur,
+                            )
                         audit(
                             self.db, "PAPER_FX_CONVERSION",
-                            f"{conversion['from']}->{conversion['to']} "
-                            f"spent={conversion['spent']:.8f} received={conversion['received']:.8f}",
+                            f"{conversion['from']}->{conversion['to']} legs={fee_legs} "
+                            f"spent={conversion['spent']:.8f} received={conversion['received']:.8f} "
+                            f"fees={conversion.get('fee', 0.0):.8f}",
                         )
                         quote_balance = self.paper.balance(quote_currency)
                         target_shortfall = max(0.0, target_allocation - quote_balance)
