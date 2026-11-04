@@ -163,3 +163,41 @@ def test_single_paper_snapshot_has_zero_measurement_span():
     assert metrics["samples"] == 1
     assert metrics["measurement_span_seconds"] == 0.0
     db.close()
+
+
+def test_backup_restore_reopens_paper_wallet_positions_and_history(tmp_path):
+    import sqlite3
+    from src.trader.db import backup_database, save_trade
+    from src.trader.paper import PaperBroker
+
+    live_db = connect(tmp_path / "live.sqlite3")
+    broker = PaperBroker(20.0, 0.0026, db=live_db)
+    broker.buy("XBTEUR", 5.0, 100.0, quote_to_eur_rate=1.0)
+    broker.convert("EUR", "USD", 2.0, 0.9)
+    save_paper_snapshot(
+        live_db, ts=datetime.now(timezone.utc).isoformat(),
+        equity_eur=19.9, cash=broker.cash_by_currency,
+        open_positions=len(broker.positions), analyzed_markets=20, buy_signals=1,
+    )
+    save_trade(
+        live_db, "PAPER", "XBTEUR", "Buy", 0.05, 5.0, 0.013,
+        100.0, "FILLED", fee_eur=0.013,
+    )
+
+    backup_path = backup_database(live_db, tmp_path / "backups")
+    live_db.close()
+
+    with sqlite3.connect(backup_path) as raw:
+        assert raw.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+    restored_db = connect(backup_path)
+    try:
+        restored = PaperBroker(20.0, 0.0026, db=restored_db)
+        assert restored.balance("EUR") == pytest.approx(broker.balance("EUR"))
+        assert restored.balance("USD") == pytest.approx(broker.balance("USD"))
+        assert restored.positions["XBTEUR"]["qty"] == pytest.approx(0.05)
+        assert restored.positions["XBTEUR"]["cost_basis_eur"] == pytest.approx(5.0)
+        assert restored_db.execute("SELECT COUNT(*) FROM paper_snapshots").fetchone()[0] == 1
+        assert restored_db.execute("SELECT COUNT(*) FROM trades").fetchone()[0] == 1
+    finally:
+        restored_db.close()
