@@ -34,3 +34,5 @@ services:
         value: EUR
       - key: MAX_CANDLE_PAIRS
         value: "10"
+      - key: ENABLE_MULTI_TIMEFRAME
+        value: "true"
