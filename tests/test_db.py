@@ -201,3 +201,55 @@ def test_backup_restore_reopens_paper_wallet_positions_and_history(tmp_path):
         assert restored_db.execute("SELECT COUNT(*) FROM trades").fetchone()[0] == 1
     finally:
         restored_db.close()
+
+
+
+def test_latest_paper_snapshot_exposes_valuation_timestamp_and_equity():
+    from src.trader.db import get_latest_paper_snapshot
+
+    db = connect(":memory:")
+    first = datetime.now(timezone.utc) - timedelta(minutes=2)
+    second = datetime.now(timezone.utc)
+    save_paper_snapshot(
+        db, ts=first.isoformat(), equity_eur=19.9, cash={"EUR": 10.0},
+        open_positions=1, analyzed_markets=20, buy_signals=1,
+    )
+    save_paper_snapshot(
+        db, ts=second.isoformat(), equity_eur=19.8, cash={"EUR": 9.0},
+        open_positions=2, analyzed_markets=20, buy_signals=0,
+    )
+
+    snapshot = get_latest_paper_snapshot(db)
+
+    assert snapshot["ts"] == second.isoformat()
+    assert snapshot["equity_eur"] == pytest.approx(19.8)
+    assert snapshot["open_positions"] == 2
+    assert snapshot["cash"] == {"EUR": 9.0}
+    db.close()
+
+
+def test_backup_status_reports_missing_fresh_and_stale(tmp_path):
+    from src.trader.db import get_backup_status
+
+    backup_dir = tmp_path / "backups"
+    now = datetime.now(timezone.utc)
+    missing = get_backup_status(backup_dir, now=now)
+    assert missing["status"] == "missing"
+
+    backup_dir.mkdir()
+    backup = backup_dir / "crypto_ai_trader_test.sqlite3"
+    backup.write_bytes(b"verified-backup")
+    import os
+    fresh_time = now.timestamp() - 3600
+    os.utime(backup, (fresh_time, fresh_time))
+
+    fresh = get_backup_status(backup_dir, now=now)
+    assert fresh["status"] == "fresh"
+    assert fresh["age_seconds"] == pytest.approx(3600, abs=1)
+    assert fresh["size_bytes"] == len(b"verified-backup")
+
+    stale_time = now.timestamp() - 27 * 3600
+    os.utime(backup, (stale_time, stale_time))
+    stale = get_backup_status(backup_dir, now=now)
+    assert stale["status"] == "stale"
+    assert stale["age_seconds"] == pytest.approx(27 * 3600, abs=1)
