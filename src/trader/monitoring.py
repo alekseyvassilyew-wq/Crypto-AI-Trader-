@@ -65,28 +65,33 @@ def format_monitor_status(settings, state: dict) -> str:
     telegram_ready = bool(getattr(settings, "telegram_group_chat_id", 0))
     lines = [
         "🛰 МОНИТОРИНГ ВНЕШНИХ СЕРВИСОВ",
-        f"Render API: {'ПОДКЛЮЧЁН' if render_ready else 'НЕ НАСТРОЕН'}",
-        f"GitHub Actions: {'ПОДКЛЮЧЁН' if github_ready else 'НЕ НАСТРОЕН'}",
-        f"Telegram-группа: {'ПОДКЛЮЧЕНА' if telegram_ready else 'НЕ НАСТРОЕНА'}",
+        f"Render API: {'НАСТРОЕН' if render_ready else 'НЕ НАСТРОЕН'}",
+        f"GitHub Actions: {'НАСТРОЕН' if github_ready else 'НЕ НАСТРОЕН'}",
+        f"Telegram-группа: {'НАСТРОЕНА' if telegram_ready else 'НЕ НАСТРОЕНА'}",
     ]
     if render_ready:
         saved = state.get("render_event_ids")
         lines.append(f"Render: сохранено событий — {len(saved) if isinstance(saved, list) else 0}")
-        if state.get("render_last_error"):
-            lines.append(f"Последняя ошибка Render API: {state['render_last_error']}")
-        elif state.get("render_last_success_at"):
+        if state.get("render_last_success_at"):
             lines.append(f"Последняя успешная проверка Render: {state['render_last_success_at']}")
         else:
             lines.append("Последняя успешная проверка Render: ещё не зафиксирована")
+        if state.get("render_last_error"):
+            lines.append(f"Последняя ошибка Render API: {state['render_last_error']}")
     if github_ready:
         tracked = state.get("github_status")
         lines.append(f"GitHub: отслеживается запусков — {len(tracked) if isinstance(tracked, dict) else 0}")
-        if state.get("github_last_error"):
-            lines.append(f"Последняя ошибка GitHub API: {state['github_last_error']}")
-        elif state.get("github_last_success_at"):
+        if state.get("github_last_success_at"):
             lines.append(f"Последняя успешная проверка GitHub: {state['github_last_success_at']}")
         else:
             lines.append("Последняя успешная проверка GitHub: ещё не зафиксирована")
+        if state.get("github_last_error"):
+            lines.append(f"Последняя ошибка GitHub API: {state['github_last_error']}")
+    if telegram_ready:
+        if state.get("last_alert_delivery_at"):
+            lines.append(f"Последняя подтверждённая отправка Telegram: {state['last_alert_delivery_at']}")
+        else:
+            lines.append("Подтверждённая отправка Telegram: ещё не зафиксирована")
     if state.get("last_poll_at"):
         lines.append(f"Последний завершённый цикл мониторинга: {state['last_poll_at']}")
         lines.append(f"Новых событий в последнем цикле: {int(state.get('last_events_count') or 0)}")
