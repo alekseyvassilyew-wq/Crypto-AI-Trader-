@@ -174,7 +174,7 @@ def build_app(s, engine, exchange):
                 )
                 if not backup["healthy"]:
                     backup_line += " — ВНИМАНИЕ: ПРОВЕРКА НЕ ПРОЙДЕНА"
-            return report + "\\n" + backup_line
+            return report + "\n" + backup_line
         message = await context.application.bot_data["monitor_runner"].run(read_monitor_status)
         await update.effective_message.reply_text(message)
 
@@ -1341,15 +1341,15 @@ def build_app(s, engine, exchange):
                     detail = f"Последняя резервная копия устарела: {current['age_seconds'] / 3600:.1f} ч."
                 await send_topic(
                     context, s.topic_errors_id,
-                    "🚨 <b>ПРОБЛЕМА РЕЗЕРВНОГО КОПИРОВАНИЯ</b>\\n"
-                    f"🕒 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\\n"
+                    "🚨 <b>ПРОБЛЕМА РЕЗЕРВНОГО КОПИРОВАНИЯ</b>\n"
+                    f"🕒 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
                     f"⚠️ {html.escape(detail)}",
                     parse_mode="HTML",
                 )
             elif transition == "recovered":
                 await send_topic(
                     context, s.topic_general_id,
-                    "🟢 <b>РЕЗЕРВНОЕ КОПИРОВАНИЕ ВОССТАНОВЛЕНО</b>\\n"
+                    "🟢 <b>РЕЗЕРВНОЕ КОПИРОВАНИЕ ВОССТАНОВЛЕНО</b>\n"
                     f"Последняя проверенная копия: {current['latest_at']}",
                     parse_mode="HTML",
                 )
