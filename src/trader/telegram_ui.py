@@ -5,6 +5,34 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 log = logging.getLogger(__name__)
 
 def build_app(s, engine, exchange):
+    def fresh_position_marks():
+        """Return recent executable bid-side marks for every open PAPER position."""
+        from datetime import datetime, timezone
+        import math
+
+        if not engine.paper.positions:
+            return True, {}
+        scanned_at = engine.last_scan_at
+        if scanned_at is None:
+            return False, {}
+        age = (datetime.now(timezone.utc) - scanned_at).total_seconds()
+        if age < 0 or age > max(120, 2 * int(engine.scan_interval_seconds)):
+            return False, {}
+        marks = {}
+        for symbol in engine.paper.positions:
+            ticker = engine.last_ticker_data.get(str(symbol).upper())
+            try:
+                bid = float(ticker.get("bid1Price") or 0) if ticker else 0.0
+                ask = float(ticker.get("ask1Price") or 0) if ticker else 0.0
+                last = float(engine.last_prices.get(str(symbol).upper()) or 0)
+            except (TypeError, ValueError, OverflowError):
+                return False, {}
+            if (not all(math.isfinite(value) and value > 0 for value in (bid, ask, last))
+                    or ask < bid):
+                return False, {}
+            marks[str(symbol).upper()] = bid
+        return True, {}
+
     def safe_error_message(exc):
         message = str(exc) or "Без дополнительного описания"
         if s.bot_token:
