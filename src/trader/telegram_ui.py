@@ -147,10 +147,16 @@ def build_app(s, engine, exchange):
                 f"Позиции: {len(engine.paper.positions)}/{s.max_positions}\nP/L сегодня (UTC): {daily_text}\n"
                 f"Риск: SL {s.stop_loss_pct:.2f}% | TP {s.take_profit_pct:.2f}% | trailing {getattr(s, 'trailing_stop_pct', 1.5):.2f}%\n"
                 f"Рынок Kraken: {len(engine.market_pairs)} пар; котировок получено: {engine.market_ticker_count}\n"
-                f"Последний цикл сканирования: {engine.last_scan_metrics.get('duration_seconds', 0):.1f} с; "
-                f"OHLC {engine.last_scan_metrics.get('ohlc_analyzed', 0)}/"
-                f"{engine.last_scan_metrics.get('ohlc_budget', 0)}; подходящих рынков "
-                f"{engine.last_scan_metrics.get('eligible', 0)}.\n"
+                (
+                    "Последний цикл сканирования: "
+                    f"{engine.last_scan_metrics['duration_seconds']:.1f} с; "
+                    f"OHLC {engine.last_scan_metrics['ohlc_analyzed']}/"
+                    f"{engine.last_scan_metrics['ohlc_budget']}; подходящих рынков "
+                    f"{engine.last_scan_metrics['eligible']}; "
+                    f"{engine.last_scan_metrics.get('completed_at', 'время неизвестно')}.\n"
+                    if engine.last_scan_metrics else
+                    "Последний цикл сканирования: ещё не завершён.\n"
+                )
                 f"Мониторинг всех котировок; анализ свечей: до {s.max_candle_pairs} пар за цикл.\n"
                 "* P/L показывается только при наличии свежих EUR-курсов для всех валют кошелька."
             )
