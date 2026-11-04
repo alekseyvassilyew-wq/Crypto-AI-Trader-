@@ -69,13 +69,7 @@ def build_app(s, engine, exchange):
             analyzed = [
                 x for x in rows
                 if "Ticker monitored; OHLC analysis deferred by rotating scan budget" not in x.get("reasons", [])
-                and (
-                    engine.paper.balance(str(x.get("quote") or "EUR").upper()) > 0
-                    or (
-                        engine.paper.balance("EUR") > 0
-                        and fx_rates.get(str(x.get("quote") or "EUR").upper(), 0) > 0
-                    )
-                )
+                and engine.paper.balance(str(x.get("quote") or "EUR").upper()) > 0
             ]
             ranked = sorted(
                 analyzed,
