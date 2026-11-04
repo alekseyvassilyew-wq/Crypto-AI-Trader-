@@ -168,7 +168,8 @@ class Engine:
                     threshold = float(candidate.get("probability_threshold", 0.58))
                     latest = base_candles[-1]
                     record_shadow_prediction(
-                        self.db, symbol=symbol, signal_ts=float(latest[0]),
+                        self.db, symbol=symbol, model_version=candidate.get("model_version", ""),
+                        signal_ts=float(latest[0]),
                         target_ts=float(latest[0]) + int(candidate.get("horizon_candles", 3)) * 3600,
                         probability=probability, threshold=threshold,
                         entry_price=float(latest[4]),
