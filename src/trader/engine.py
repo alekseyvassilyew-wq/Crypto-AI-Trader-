@@ -134,7 +134,19 @@ class Engine:
         self.paused = True
         self.scan_interval_seconds = settings.scan_interval
         self.last_scan_at = None
-        self.last_scan_metrics = {}
+        saved_scan_metrics = get_state(db, "last_scan_metrics", {})
+        self.last_scan_metrics = (
+            saved_scan_metrics
+            if isinstance(saved_scan_metrics, dict)
+            and all(
+                isinstance(saved_scan_metrics.get(key), (int, float))
+                and not isinstance(saved_scan_metrics.get(key), bool)
+                and math.isfinite(float(saved_scan_metrics[key]))
+                and float(saved_scan_metrics[key]) >= 0
+                for key in ("pairs", "tickers", "eligible", "ohlc_selected", "ohlc_budget", "ohlc_analyzed", "duration_seconds")
+            )
+            else {}
+        )
         self.last_prices = {}
         self.last_signals = []
         self.market_pairs = []
@@ -632,7 +644,9 @@ class Engine:
                 "ohlc_budget": analysis_limit,
                 "ohlc_analyzed": ohlc_analyzed_count,
                 "duration_seconds": total_seconds,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
             }
+            set_state(self.db, "last_scan_metrics", self.last_scan_metrics)
             log.info(
                 "Market scan timing: pairs=%d tickers=%d eligible=%d OHLC_selected=%d OHLC_budget=%d "
                 "OHLC_analyzed=%d priority_selected=%d discovery=%.2fs ticker=%.2fs fx=%.2fs "
@@ -664,7 +678,9 @@ class Engine:
             "ohlc_budget": len(symbols),
             "ohlc_analyzed": sum(int(bool(item.get("ohlc_analyzed"))) for item in results),
             "duration_seconds": total_seconds,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
         }
+        set_state(self.db, "last_scan_metrics", self.last_scan_metrics)
         log.info(
             "Market scan timing: pairs=%d tickers=%d eligible=%d OHLC_selected=%d "
             "OHLC_analyzed=%d discovery=%.2fs ticker=%.2fs fx=%.2fs "

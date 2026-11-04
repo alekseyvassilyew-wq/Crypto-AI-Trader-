@@ -768,6 +768,11 @@ def test_scan_logs_stage_timing(caplog, tmp_path):
     assert "ticker=" in timing
     assert "OHLC=" in timing
     assert "total=" in timing
+    saved = get_state(db, "last_scan_metrics", {})
+    assert saved == engine.last_scan_metrics
+    assert saved["duration_seconds"] >= 0
+    restored = Engine(engine.s, db, DummyExchange(), PaperBroker(20, .0026, db=db))
+    assert restored.last_scan_metrics == saved
     db.close()
 
 
