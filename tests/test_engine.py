@@ -484,7 +484,7 @@ def test_daily_baseline_is_captured_before_first_cycle_exit_after_midnight(tmp_p
     actions = engine.cycle()
     daily = get_state(db, "daily")
     assert any("XBTEUR SELL STOP_LOSS" in action for action in actions)
-    assert daily["start_equity"] == pytest.approx(14.987 + 0.5 * 9.7)
+    assert daily["start_equity"] == pytest.approx(14.987 + 0.5 * 9.7 * 0.9995 * (1 - engine.paper.fee_rate))
     assert engine.daily_pnl(engine.last_prices) < 0
     db.close()
 
