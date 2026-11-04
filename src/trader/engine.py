@@ -168,12 +168,15 @@ class Engine:
                 spread = (ask - bid) / ((ask + bid) / 2) * 10000 if bid > 0 and ask > 0 else 999999
                 turnover = float(ticker.get("turnover24h") or 0)
                 turnover_eur = turnover * fx_rates.get(quote, 0.0)
-                if self.paper.balance(quote) <= 0:
+                # Analyze every liquid market with an EUR valuation route,
+                # even when its quote wallet is currently empty. A BUY may
+                # autonomously fund that quote currency from another wallet.
+                if not fx_rates.get(quote):
                     results_by_symbol[symbol] = {
                         "symbol": symbol, "signal": "HOLD", "score": 0,
                         "price": float(ticker.get("lastPrice") or 0),
-                        "spread_bps": spread, "turnover": turnover, "turnover_eur": turnover_eur, "quote": quote,
-                        "reasons": [f"Monitored only; no PAPER wallet balance in {quote}"],
+                        "spread_bps": spread, "turnover": turnover, "turnover_eur": 0.0, "quote": quote,
+                        "reasons": [f"Monitored only; no EUR conversion route for {quote}"],
                     }
                 elif spread > self.s.max_spread_bps:
                     results_by_symbol[symbol] = {
