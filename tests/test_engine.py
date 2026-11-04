@@ -234,7 +234,7 @@ def test_wallet_seeds_usd_and_usdt_from_starting_eur_once(tmp_path):
     assert engine.paper.balance("USD") == pytest.approx(5 / 0.9 * (1 - engine.paper.fee_rate))
     assert engine.paper.balance("USDT") == pytest.approx(5 / 0.9 * (1 - engine.paper.fee_rate))
     before = dict(engine.paper.cash_by_currency)
-    engine._seed_multicurrency_wallet(rates)
+    engine._seed_multicurrency_wallet(buy_rates)
     assert engine.paper.cash_by_currency == before
     rows = db.execute("SELECT COUNT(*) AS n FROM audit WHERE event='PAPER_WALLET_SEED'").fetchone()
     assert rows["n"] == 2
