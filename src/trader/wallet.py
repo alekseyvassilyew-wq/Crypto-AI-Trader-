@@ -52,7 +52,7 @@ def build_wallet_inventory(balances, eur_rates):
         raise ValueError("Kraken balance response must be an object")
     rates = {"EUR": 1.0}
     for currency, raw_rate in (eur_rates or {}).items():
-        code = str(currency).strip().upper()
+        code = normalize_kraken_asset_code(currency)
         try:
             rate = float(raw_rate)
         except (TypeError, ValueError, OverflowError):
@@ -62,7 +62,8 @@ def build_wallet_inventory(balances, eur_rates):
 
     assets = []
     for raw_code, raw_amount in sorted(balances.items(), key=lambda item: str(item[0]).upper()):
-        code = normalize_kraken_asset_code(raw_code)
+        code = str(raw_code).strip().upper()
+        canonical_code = normalize_kraken_asset_code(code)
         if not code:
             continue
         try:
@@ -71,12 +72,13 @@ def build_wallet_inventory(balances, eur_rates):
             continue
         if not math.isfinite(amount) or amount <= 0:
             continue
-        rate = rates.get(code)
+        rate = rates.get(canonical_code)
         value_eur = amount * rate if rate is not None else None
         if value_eur is not None and not math.isfinite(value_eur):
             value_eur = None
         assets.append({
             "asset": code,
+            "canonical_asset": canonical_code,
             "amount": amount,
             "eur_rate": rate,
             "value_eur": value_eur,
