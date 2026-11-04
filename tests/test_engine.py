@@ -357,3 +357,20 @@ def test_paper_stop_uses_executable_bid_not_last_trade(tmp_path):
     assert trade["price"] == pytest.approx(97.9)
     assert "XBTEUR" not in engine.paper.positions
     db.close()
+
+
+
+def test_saved_fx_snapshot_values_non_eur_wallet_after_restart(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.paper.cash_by_currency["USD"] = 10.0
+    engine.paper.buy("ETHUSD", 5.0, 10.0, currency="USD")
+    set_state(db, "paper_fx_rates", {"EUR": 1.0, "USD": 0.9})
+
+    rates = engine._fx_rates({})
+
+    assert rates["USD"] == pytest.approx(0.9)
+    assert engine.paper.equity({}, rates) == pytest.approx(
+        20.0 + engine.paper.balance("USD") * 0.9
+        + engine.paper.positions["ETHUSD"]["qty"] * 10.0 * 0.9
+    )
+    db.close()
