@@ -19,7 +19,8 @@ def _ema(values, period):
     return value
 
 
-def _features(rows, end):
+def extract_features(rows, end=None):
+    end = len(rows) - 1 if end is None else int(end)
     history = rows[:end + 1]
     closes = [float(row[4]) for row in history]
     highs = [float(row[2]) for row in history]
@@ -84,12 +85,14 @@ def predict_probability(model, features):
     return _sigmoid(sum(w * x for w, x in zip(model["weights"], normalized)) + model["bias"])
 
 
-def _performance(trades, threshold):
+def _performance(trades, threshold, horizon=1):
     equity, peak, drawdown = 1.0, 1.0, 0.0
     wins, losses = [], []
-    for probability, future_return in trades:
-        if probability < threshold:
+    next_entry = -1
+    for sample_index, probability, future_return in trades:
+        if sample_index < next_entry or probability < threshold:
             continue
+        next_entry = sample_index + int(horizon)
         equity *= 1.0 + future_return
         peak = max(peak, equity)
         drawdown = max(drawdown, (peak - equity) / peak if peak else 0.0)
@@ -130,7 +133,7 @@ def research_candidate(rows, *, horizon=3, fee_rate=0.0026, slippage_bps=5.0,
         parsed.append(values)
     samples, labels, future_returns = [], [], []
     for index in range(60, len(parsed) - int(horizon)):
-        features = _features(parsed, index)
+        features = extract_features(parsed, index)
         entry, exit_price = parsed[index][4], parsed[index + int(horizon)][4]
         if features is None or entry <= 0:
             continue
@@ -153,14 +156,14 @@ def research_candidate(rows, *, horizon=3, fee_rate=0.0026, slippage_bps=5.0,
         predictions = []
         for i in range(start, end):
             probability = predict_probability(model, samples[i])
-            predictions.append((probability, future_returns[i]))
-        metrics = _performance(predictions, probability_threshold)
+            predictions.append((i, probability, future_returns[i]))
+        metrics = _performance(predictions, probability_threshold, int(horizon))
         metrics.update({"fold": fold + 1, "train_samples": train_end, "validation_samples": end - start})
         folds.append(metrics)
         all_oos.extend(predictions)
     if len(folds) != 3:
         raise ValueError("Could not construct three valid walk-forward folds")
-    aggregate = _performance(all_oos, probability_threshold)
+    aggregate = _performance(all_oos, probability_threshold, int(horizon))
     final_model = _fit(samples, labels)
     positive_folds = sum(1 for item in folds if item["net_return_pct"] > 0)
     research_pass = (
