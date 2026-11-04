@@ -644,3 +644,30 @@ def test_fresh_fx_valuation_and_purchase_rates_use_executable_sides(tmp_path):
     assert buy_rates["USD"] == pytest.approx(1 / 0.901)
     assert buy_rates["USD"] < 1 / valuation_rates["USD"]
     db.close()
+
+
+def test_daily_loss_kill_switch_liquidates_open_positions_at_bid(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.paper.buy("XBTEUR", 5, 100.0)
+    today = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).date().isoformat()
+    set_state(db, "daily", {"date": today, "start_equity": 30.0, "realized": 0.0})
+    engine.scan = lambda **kwargs: [{
+        "symbol": "XBTEUR", "quote": "EUR", "signal": "HOLD", "score": 0,
+        "price": 99.0, "bid": 99.0, "ask": 99.1,
+        "spread_bps": 10, "turnover": 50000, "turnover_eur": 50000,
+        "reasons": [],
+    }]
+    engine.start()
+
+    actions = engine.cycle()
+
+    assert engine.paused is True
+    assert "XBTEUR" not in engine.paper.positions
+    assert any("XBTEUR SELL DAILY_LOSS_LIMIT" in action for action in actions)
+    assert actions[-1] == "DAILY LOSS LIMIT — paused"
+    trade = db.execute("SELECT side,price FROM trades WHERE side='Sell' ORDER BY id DESC LIMIT 1").fetchone()
+    assert trade["side"] == "Sell"
+    assert trade["price"] == pytest.approx(99.0)
+    row = db.execute("SELECT COUNT(*) AS n FROM audit WHERE event='DAILY_LOSS_LIQUIDATION'").fetchone()
+    assert row["n"] == 1
+    db.close()
