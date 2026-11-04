@@ -154,7 +154,7 @@ def test_rotating_scan_covers_multiple_funded_quote_currencies(tmp_path):
             return [
                 {"symbol": "XBTEUR", "bid1Price": 99.95, "ask1Price": 100, "lastPrice": 99.98, "turnover24h": 50000},
                 {"symbol": "ETHUSD", "bid1Price": 2999.5, "ask1Price": 3000, "lastPrice": 2999.8, "turnover24h": 40000},
-                {"symbol": "USDZEUR", "bid1Price": 0.89, "ask1Price": 0.90, "lastPrice": 0.895, "turnover24h": 10000},
+                {"symbol": "USDZEUR", "bid1Price": 0.8999, "ask1Price": 0.9001, "lastPrice": 0.9, "turnover24h": 10000},
             ]
     engine.exchange = MultiQuoteExchange()
     seen = []
@@ -242,9 +242,9 @@ def test_fx_rates_convert_quote_currencies_to_eur(tmp_path):
     engine, db = make_engine(tmp_path)
     engine.market_pairs = [
         {"symbol": "USDZEUR", "base": "USD", "quote": "EUR"},
-        {"symbol": "ETHUSD", "base": "ETH", "quote": "USD"},
+        {"symbol": "ETHEUR", "base": "ETH", "quote": "EUR"},
     ]
-    rates = engine._fx_rates({"USDZEUR": 0.9, "ETHUSD": 3000})
+    rates = engine._fx_rates({"USDZEUR": 0.9, "ETHEUR": 2700})
     assert rates["USD"] == 0.9
     assert rates["ETH"] == 2700
     db.close()
@@ -321,7 +321,7 @@ def test_scan_analyzes_markets_with_fx_route_without_quote_cash(tmp_path):
             ]
         def tickers(self):
             return [
-                {'symbol': 'USDZEUR', 'bid1Price': 0.89, 'ask1Price': 0.90, 'lastPrice': 0.895, 'turnover24h': 50000},
+                {'symbol': 'USDZEUR', 'bid1Price': 0.8999, 'ask1Price': 0.9001, 'lastPrice': 0.9, 'turnover24h': 50000},
                 {'symbol': 'ETHUSD', 'bid1Price': 2999, 'ask1Price': 3001, 'lastPrice': 3000, 'turnover24h': 50000},
             ]
     engine.exchange = FxRoutedExchange()
