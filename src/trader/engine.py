@@ -189,22 +189,28 @@ class Engine:
         try:
             candidate = get_state(self.db, "ml_candidate_" + str(symbol).upper(), {})
             model = candidate.get("model") if isinstance(candidate, dict) else None
-            if model and len(base_candles) >= 60:
+            if model and len(base_candles) >= 61:
                 settle_shadow_predictions(
                     self.db, symbol=symbol, candles=base_candles,
                     fee_rate=self.s.fee_rate, slippage_bps=5.0,
                 )
-                features = extract_features(base_candles)
+                # Evaluate the preceding closed candle, because the current
+                # candle's open is the first observable executable entry after
+                # that signal. This prevents close-to-close lookahead.
+                signal_index = len(base_candles) - 2
+                features = extract_features(base_candles, end=signal_index)
                 if features is not None:
                     probability = predict_probability(model, features)
                     threshold = float(candidate.get("probability_threshold", 0.58))
-                    latest = base_candles[-1]
+                    signal_candle = base_candles[signal_index]
+                    entry_candle = base_candles[signal_index + 1]
+                    horizon = int(candidate.get("horizon_candles", 3))
                     record_shadow_prediction(
                         self.db, symbol=symbol, model_version=candidate.get("model_version", ""),
-                        signal_ts=float(latest[0]),
-                        target_ts=float(latest[0]) + int(candidate.get("horizon_candles", 3)) * 3600,
+                        signal_ts=float(signal_candle[0]),
+                        target_ts=float(signal_candle[0]) + horizon * 3600,
                         probability=probability, threshold=threshold,
-                        entry_price=float(latest[4]),
+                        entry_price=float(entry_candle[1]),
                     )
                     result["ml_shadow_probability"] = probability
                     result["ml_shadow_threshold"] = threshold
