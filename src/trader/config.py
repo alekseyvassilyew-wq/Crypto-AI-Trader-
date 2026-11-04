@@ -75,6 +75,8 @@ def load_settings():
     )
     if not s.bot_token or s.admin_id <= 0:
         raise ValueError("Set BOT_TOKEN and numeric ADMIN_ID.")
+    if bool(s.kraken_api_key) != bool(s.kraken_api_secret):
+        raise ValueError("Set both KRAKEN_API_KEY and KRAKEN_API_SECRET, or leave both empty.")
     if s.paper_start <= 0 or s.max_trade <= 0 or s.max_trade > s.paper_start:
         raise ValueError("Invalid paper balance or trade size configuration.")
     numeric_values = (s.paper_start, s.max_trade, s.max_daily_loss, s.risk_per_trade_pct, s.max_spread_bps,
@@ -83,6 +85,10 @@ def load_settings():
         raise ValueError("All numeric settings must be finite numbers.")
     if min(s.max_daily_loss, s.max_positions, s.max_candle_pairs, s.ml_auto_research_markets, s.scan_interval, s.stop_loss_pct, s.take_profit_pct, s.trailing_stop_pct, s.risk_per_trade_pct) <= 0:
         raise ValueError("Risk limits and scan interval must be positive.")
+    if s.max_candle_pairs > 20:
+        raise ValueError("MAX_CANDLE_PAIRS must not exceed 20 to respect Kraken public API limits.")
+    if s.scan_interval < 60:
+        raise ValueError("SCAN_INTERVAL_SECONDS must be at least 60 to respect Kraken public API limits.")
     # TRADE_QUOTE_CURRENCY is retained for backwards-compatible display/defaults.
     if s.max_spread_bps <= 0 or s.min_turnover < 0:
         raise ValueError("Spread limit must be positive and minimum turnover cannot be negative.")
