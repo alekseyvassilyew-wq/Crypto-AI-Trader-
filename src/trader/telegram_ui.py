@@ -142,6 +142,18 @@ def build_app(s, engine, exchange):
                             failures.append(f"{market_symbol}: {type(exc).__name__}")
                     if len(candles_by_symbol) < 2:
                         raise RuntimeError("Не удалось загрузить минимум два рынка: " + ", ".join(failures))
+                    # Align markets on their shared closed-candle timestamps; Kraken
+                    # may omit an individual candle for a thin/inactive pair.
+                    common = set(row[0] for rows in candles_by_symbol.values() for row in rows)
+                    for rows in candles_by_symbol.values():
+                        common.intersection_update(row[0] for row in rows)
+                    common_timestamps = sorted(common)
+                    if len(common_timestamps) < 62:
+                        raise RuntimeError("После синхронизации у рынков осталось менее 62 общих часовых свечей.")
+                    candles_by_symbol = {
+                        market: [row for row in rows if row[0] in common]
+                        for market, rows in candles_by_symbol.items()
+                    }
                     result = run_portfolio_backtest(
                         candles_by_symbol,
                         quote_currencies=quote_currencies,
