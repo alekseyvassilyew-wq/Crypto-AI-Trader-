@@ -17,6 +17,19 @@ CREATE TABLE IF NOT EXISTS paper_snapshots(
     buy_signals INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_paper_snapshots_ts ON paper_snapshots(ts);
+CREATE TABLE IF NOT EXISTS ml_shadow_predictions(
+    id INTEGER PRIMARY KEY,
+    symbol TEXT NOT NULL,
+    signal_ts REAL NOT NULL,
+    target_ts REAL NOT NULL,
+    probability REAL NOT NULL,
+    threshold REAL NOT NULL,
+    entry_price REAL NOT NULL,
+    exit_price REAL,
+    realized_return REAL,
+    UNIQUE(symbol, signal_ts)
+);
+CREATE INDEX IF NOT EXISTS idx_ml_shadow_pending ON ml_shadow_predictions(symbol, target_ts, realized_return);
 """
 
 def connect(path):
@@ -94,4 +107,86 @@ def get_paper_metrics(db, hours=24):
         "buy_signals": sum(int(row["buy_signals"]) for row in rows),
         "avg_analyzed_markets": sum(int(row["analyzed_markets"]) for row in rows) / len(rows),
         "first_ts": rows[0]["ts"], "last_ts": rows[-1]["ts"],
+    }
+
+
+
+def record_shadow_prediction(db, *, symbol, signal_ts, target_ts, probability, threshold, entry_price):
+    """Record one non-overlapping model prediction; never affects the trading engine."""
+    symbol = str(symbol).upper()
+    signal_ts, target_ts = float(signal_ts), float(target_ts)
+    probability, threshold, entry_price = float(probability), float(threshold), float(entry_price)
+    if not all(__import__("math").isfinite(x) for x in (signal_ts, target_ts, probability, threshold, entry_price)):
+        raise ValueError("Shadow prediction values must be finite")
+    if target_ts <= signal_ts or not 0 <= probability <= 1 or not 0 <= threshold <= 1 or entry_price <= 0:
+        raise ValueError("Invalid shadow prediction values")
+    with db:
+        latest = db.execute(
+            "SELECT signal_ts,target_ts FROM ml_shadow_predictions WHERE symbol=? ORDER BY signal_ts DESC LIMIT 1",
+            (symbol,),
+        ).fetchone()
+        if latest and (signal_ts <= float(latest["signal_ts"]) or signal_ts < float(latest["target_ts"])):
+            return False
+        db.execute(
+            "INSERT OR IGNORE INTO ml_shadow_predictions(symbol,signal_ts,target_ts,probability,threshold,entry_price) "
+            "VALUES(?,?,?,?,?,?)",
+            (symbol, signal_ts, target_ts, probability, threshold, entry_price),
+        )
+    return True
+
+
+def settle_shadow_predictions(db, *, symbol, candles, fee_rate, slippage_bps):
+    """Settle due shadow predictions using the first closed candle at/after target time."""
+    rows = sorted(candles, key=lambda row: float(row[0]))
+    if not rows:
+        return 0
+    fee, slip = float(fee_rate), float(slippage_bps) / 10000.0
+    settled = 0
+    with db:
+        pending = db.execute(
+            "SELECT id,target_ts,entry_price FROM ml_shadow_predictions "
+            "WHERE symbol=? AND realized_return IS NULL AND target_ts<=? ORDER BY target_ts",
+            (str(symbol).upper(), float(rows[-1][0])),
+        ).fetchall()
+        for prediction in pending:
+            target = float(prediction["target_ts"])
+            exit_row = next((row for row in rows if float(row[0]) >= target), None)
+            if exit_row is None:
+                continue
+            exit_price = float(exit_row[4])
+            entry_price = float(prediction["entry_price"])
+            net_return = exit_price * (1.0 - fee - slip) / (entry_price * (1.0 + fee + slip)) - 1.0
+            db.execute(
+                "UPDATE ml_shadow_predictions SET exit_price=?,realized_return=? WHERE id=? AND realized_return IS NULL",
+                (exit_price, net_return, prediction["id"]),
+            )
+            settled += 1
+    return settled
+
+
+def get_shadow_metrics(db, symbol):
+    rows = db.execute(
+        "SELECT probability,threshold,realized_return FROM ml_shadow_predictions "
+        "WHERE symbol=? AND realized_return IS NOT NULL ORDER BY signal_ts",
+        (str(symbol).upper(),),
+    ).fetchall()
+    selected = [float(row["realized_return"]) for row in rows if float(row["probability"]) >= float(row["threshold"])]
+    wins = [value for value in selected if value > 0]
+    losses = [value for value in selected if value <= 0]
+    equity, peak, drawdown = 1.0, 1.0, 0.0
+    for value in selected:
+        equity *= 1.0 + value
+        peak = max(peak, equity)
+        drawdown = max(drawdown, (peak - equity) / peak if peak else 0.0)
+    gross_loss = abs(sum(losses))
+    return {
+        "resolved_predictions": len(rows), "shadow_trades": len(selected),
+        "wins": len(wins), "net_return_pct": (equity - 1.0) * 100,
+        "win_rate_pct": len(wins) / len(selected) * 100 if selected else 0.0,
+        "profit_factor": sum(wins) / gross_loss if gross_loss else ("INF" if wins else 0.0),
+        "max_drawdown_pct": drawdown * 100,
+        "pending": db.execute(
+            "SELECT COUNT(*) AS n FROM ml_shadow_predictions WHERE symbol=? AND realized_return IS NULL",
+            (str(symbol).upper(),),
+        ).fetchone()["n"],
     }
