@@ -722,14 +722,14 @@ def test_pure_fx_rate_builder_does_not_require_mutating_engine_state():
         {"symbol": "XBTUSD", "base": "XBT", "quote": "USD"},
     ]
     tickers = {
-        "USDZEUR": {"bid1Price": 0.91, "ask1Price": 0.92, "turnover24h": 50000},
-        "ZEURUSD": {"bid1Price": 1.08, "ask1Price": 1.09, "turnover24h": 60000},
+        "USDZEUR": {"bid1Price": 0.915, "ask1Price": 0.916, "turnover24h": 50000},
+        "ZEURUSD": {"bid1Price": 1.090, "ask1Price": 1.091, "turnover24h": 60000},
         "XBTUSD": {"bid1Price": 60000, "ask1Price": 60010, "turnover24h": 1_000_000},
     }
-    prices = {"USDZEUR": 0.915, "ZEURUSD": 1.085, "XBTUSD": 60005}
+    prices = {"USDZEUR": 0.9155, "ZEURUSD": 1.0905, "XBTUSD": 60005}
 
     rates = fresh_fx_rates_from_market(settings, pairs, tickers, prices)
 
     assert rates["EUR"] == 1.0
-    assert rates["USD"] == pytest.approx(1 / 1.09)
+    assert rates["USD"] == pytest.approx(1 / 1.091)
     assert "XBT" not in rates
