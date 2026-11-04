@@ -707,7 +707,8 @@ def build_app(s, engine, exchange):
                 f"Win rate: {metrics['win_rate_pct']:.1f}% | Profit factor: {metrics['profit_factor']}\n"
                 f"Реализованный P/L: {metrics['realized_pnl_eur']:+.4f} EUR\n"
                 f"Комиссии по исполнениям: {metrics['total_fees_eur']:.4f} EUR | без EUR-оценки: {metrics['fills_without_eur_fee_valuation']}\n"
-                f"По монетам: {', '.join(f\"{item['symbol']} {item['realized_pnl_eur']:+.4f} EUR\" for item in metrics['by_symbol'][:5]) or 'пока нет закрытых сделок'}\n"
+                by_symbol_text = ", ".join("{} {:+.4f} EUR".format(item["symbol"], item["realized_pnl_eur"]) for item in metrics["by_symbol"][:5]) or "пока нет закрытых сделок"
+                f"По монетам: {by_symbol_text}\n"
                 f"Период: {metrics['first_ts']} — {metrics['last_ts']} UTC\n"
                 "Это изменение стоимости PAPER-портфеля, а не доказательство будущей доходности."
             )
