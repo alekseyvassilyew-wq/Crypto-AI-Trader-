@@ -274,3 +274,25 @@ def test_portfolio_uses_executable_fx_buy_rate_and_cross_currency_funding_for_eu
     assert usd_trade["entry_quote"] == pytest.approx(55.0)
     assert eur_trade["conversion_fee_eur"] > 0
     assert all(amount >= -1e-10 for amount in result["cash_by_currency"].values())
+
+
+def test_portfolio_backtest_uses_executable_fx_buy_rate_for_quote_allocation():
+    rows = flat_candles(62)
+    result = run_portfolio_backtest(
+        {"ETHUSD": rows},
+        quote_currencies={"ETHUSD": "USD"},
+        fx_rates={"EUR": 1.0, "USD": 0.899},
+        fx_buy_rates={"EUR": 1.0, "USD": 1 / 0.901},
+        initial_cash_eur=100,
+        max_trade_eur=10,
+        max_positions=1,
+        risk_per_trade_pct=2,
+        fee_rate=0,
+        slippage_bps=0,
+        stop_loss_pct=2,
+        take_profit_pct=50,
+        trailing_stop_pct=10,
+        signal_fn=buy_on_first_eligible_close,
+    )
+    trade = result["trades_detail"][0]
+    assert trade["quantity"] * trade["entry_price"] == pytest.approx(10 / 0.901)
