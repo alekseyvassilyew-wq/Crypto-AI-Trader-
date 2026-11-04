@@ -72,7 +72,7 @@ def test_portfolio_backtest_rejects_unknown_quote_fx_rate():
 
 
 def test_portfolio_backtest_uses_entry_and_exit_fx_rates():
-    candles = flat_candles(count=64, price=100)
+    candles = [[float(i), 100.0, 100.0, 100.0, 100.0, 1000.0] for i in range(64)]
     result = run_portfolio_backtest(
         {"ETHUSD": candles},
         quote_currencies={"ETHUSD": "USD"},
@@ -112,6 +112,6 @@ def test_portfolio_drawdown_includes_final_liquidation_fees():
 
     final_loss_pct = (100 - result["final_equity_eur"]) / 100 * 100
     assert result["trades"] == 1
-    assert result["final_equity_eur"] < 100
+    assert result["final_equity_eur"] == pytest.approx(99.0)
     assert result["max_drawdown_pct"] >= final_loss_pct
     assert result["equity_curve"][-1]["equity_eur"] == pytest.approx(result["final_equity_eur"])
