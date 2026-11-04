@@ -6,6 +6,14 @@ from .learning import extract_features, predict_probability
 from .db import audit, save_trade, get_state, set_state, save_paper_snapshot, record_shadow_prediction, settle_shadow_predictions
 
 
+FX_CURRENCIES = frozenset({
+    "EUR", "USD", "GBP", "JPY", "CHF", "CAD", "AUD", "NZD",
+    "SEK", "NOK", "DKK", "PLN", "CZK", "HUF", "RON", "TRY",
+    "MXN", "BRL", "SGD", "HKD", "RUB",
+    "USDT", "USDC", "DAI", "TUSD", "USDP", "PYUSD", "EURT", "EURC",
+})
+
+
 class Engine:
     def __init__(self, settings, db, exchange, paper):
         self.s, self.db, self.exchange, self.paper = settings, db, exchange, paper
@@ -298,10 +306,21 @@ class Engine:
                         "reasons": ["Ticker unavailable"],
                     }
                     continue
+                base = str(pair.get("base") or "").upper()
                 quote = str(pair.get("quote") or "").upper()
                 bid, ask = float(ticker.get("bid1Price") or 0), float(ticker.get("ask1Price") or 0)
                 spread = (ask - bid) / ((ask + bid) / 2) * 10000 if bid > 0 and ask > 0 else 999999
                 turnover = float(ticker.get("turnover24h") or 0)
+                if base in FX_CURRENCIES and quote in FX_CURRENCIES:
+                    results_by_symbol[symbol] = {
+                        "symbol": symbol, "signal": "HOLD", "score": 0,
+                        "price": float(ticker.get("lastPrice") or 0),
+                        "bid": bid, "ask": ask, "spread_bps": spread,
+                        "turnover": turnover, "turnover_eur": 0.0, "quote": quote,
+                        "ohlc_analyzed": False,
+                        "reasons": ["Fiat/stablecoin conversion market monitored only"],
+                    }
+                    continue
                 turnover_eur = turnover * fresh_fx_rates.get(quote, 0.0)
                 # Analyze every liquid market with a fresh EUR valuation route,
                 # even when its quote wallet is currently empty. A BUY may
