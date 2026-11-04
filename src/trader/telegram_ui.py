@@ -474,7 +474,7 @@ def build_app(s, engine, exchange):
                     value = (f'{item["value_eur"]:.2f} EUR'
                              if item["value_eur"] is not None else "оценка EUR недоступна")
                     lines.append(f"\n{asset}: {item['amount']:.12g} — {value}")
-                    asset_routes = routes.get(asset, [])
+                    asset_routes = routes.get(item["canonical_asset"], [])
                     if not asset_routes:
                         lines.append("  Торговые пары: не найдены среди онлайн spot-рынков")
                         continue
