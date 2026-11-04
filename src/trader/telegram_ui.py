@@ -335,25 +335,28 @@ def build_app(s, engine, exchange):
 
     async def learning(update, context):
         if not await authorized(update): return await deny(update)
-        from .db import get_state, get_shadow_metrics
-        rows = engine.db.execute(
-            "SELECT key FROM app_state WHERE key LIKE 'ml_candidate_%' ORDER BY updated_at DESC"
-        ).fetchall()
-        if not rows:
+        def read_models():
+            from .db import get_state, get_shadow_metrics
+            rows = engine.db.execute(
+                "SELECT key FROM app_state WHERE key LIKE 'ml_candidate_%' ORDER BY updated_at DESC"
+            ).fetchall()
+            lines = ["🧠 ИССЛЕДОВАТЕЛЬСКИЕ МОДЕЛИ (не торгуют):"]
+            for row in rows[:15]:
+                item = get_state(engine.db, row["key"], {})
+                metric = item.get("out_of_sample", {})
+                symbol = item.get("symbol", row["key"].replace("ml_candidate_", ""))
+                shadow = get_shadow_metrics(engine.db, symbol)
+                lines.append(
+                    f"{symbol}: {'PASS' if item.get('research_pass') else 'NOT PASS'} | "
+                    f"{metric.get('net_return_pct', 0):+.2f}% OOS | "
+                    f"PF {metric.get('profit_factor', 0)} | "
+                    f"SHADOW {shadow['shadow_trades']} trades / {shadow['resolved_predictions']} resolved | "
+                    f"{shadow['net_return_pct']:+.2f}% | SHADOW ONLY"
+                )
+            return lines
+        lines = await context.application.bot_data["run_blocking"].run(read_models)
+        if len(lines) == 1:
             return await update.effective_message.reply_text("Исследовательских моделей пока нет. Запусти /learn XBTEUR.")
-        lines = ["🧠 ИССЛЕДОВАТЕЛЬСКИЕ МОДЕЛИ (не торгуют):"]
-        for row in rows[:15]:
-            item = get_state(engine.db, row["key"], {})
-            metric = item.get("out_of_sample", {})
-            symbol = item.get("symbol", row["key"].replace("ml_candidate_", ""))
-            shadow = get_shadow_metrics(engine.db, symbol)
-            lines.append(
-                f"{symbol}: {'PASS' if item.get('research_pass') else 'NOT PASS'} | "
-                f"{metric.get('net_return_pct', 0):+.2f}% OOS | "
-                f"PF {metric.get('profit_factor', 0)} | "
-                f"SHADOW {shadow['shadow_trades']} trades / {shadow['resolved_predictions']} resolved | "
-                f"{shadow['net_return_pct']:+.2f}% | SHADOW ONLY"
-            )
         await update.effective_message.reply_text("\n".join(lines)[:3900])
 
     async def paperreport(update, context):
