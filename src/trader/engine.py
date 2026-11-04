@@ -123,6 +123,47 @@ class Engine:
                              settings.max_spread_bps, settings.min_turnover)
         self._ensure_day()
 
+    def _slippage_rate(self):
+        """Conservative PAPER execution slippage as a decimal fraction."""
+        value = float(getattr(self.s, "paper_slippage_bps", 5.0))
+        if not math.isfinite(value) or value < 0 or value > 100:
+            raise ValueError("PAPER slippage must be finite and between 0 and 100 bps")
+        return value / 10000.0
+
+    def _paper_buy_price(self, ask):
+        price = float(ask) * (1.0 + self._slippage_rate())
+        if not math.isfinite(price) or price <= 0:
+            raise ValueError("Invalid PAPER buy fill price")
+        return price
+
+    def _paper_sell_price(self, bid):
+        price = float(bid) * (1.0 - self._slippage_rate())
+        if not math.isfinite(price) or price <= 0:
+            raise ValueError("Invalid PAPER sell fill price")
+        return price
+
+    def _equity_after_liquidation(self, prices=None, fx_rates=None):
+        """Estimate net liquidation value after exit fee and slippage on holdings."""
+        prices = self.last_prices if prices is None else prices
+        rates = self._fx_rates(prices) if fx_rates is None else fx_rates
+        cash_value = sum(
+            float(amount) * float(rates.get(currency, 0.0))
+            for currency, amount in self.paper.cash_by_currency.items()
+        )
+        retention = (1.0 - self._slippage_rate()) * (1.0 - self.paper.fee_rate)
+        position_value = 0.0
+        for symbol, position in self.paper.positions.items():
+            mark = float(prices.get(symbol) or 0.0)
+            quote = str(position.get("quote_currency", "EUR")).upper()
+            rate = float(rates.get(quote, 0.0))
+            if not all(math.isfinite(x) and x >= 0 for x in (mark, rate)):
+                raise ValueError("Invalid PAPER liquidation valuation")
+            position_value += float(position["qty"]) * mark * retention * rate
+        equity = cash_value + position_value
+        if not math.isfinite(equity) or equity < 0:
+            raise ValueError("PAPER liquidation equity is invalid")
+        return equity
+
     def _ensure_day(self, prices=None):
         """Start a UTC trading day only after fresh market marks are available."""
         day = datetime.now(timezone.utc).date().isoformat()
@@ -131,7 +172,7 @@ class Engine:
             if prices is None:
                 return False
             rates = self._fx_rates(prices)
-            start_equity = self.paper.equity(prices, rates)
+            start_equity = self._equity_after_liquidation(prices, rates)
             set_state(self.db, "daily", {
                 "date": day,
                 "start_equity": start_equity,
@@ -237,7 +278,7 @@ class Engine:
             save_paper_snapshot(
                 self.db,
                 ts=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-                equity_eur=self.paper.equity(prices, self._fx_rates(prices)),
+                equity_eur=self._equity_after_liquidation(prices, self._fx_rates(prices)),
                 cash=self.paper.cash_by_currency,
                 open_positions=len(self.paper.positions),
                 analyzed_markets=analyzed,
@@ -284,7 +325,7 @@ class Engine:
         if not self._ensure_day(prices if prices else None):
             return 0.0
         state = get_state(self.db, "daily", {})
-        return self.paper.equity(prices, self._fx_rates(prices)) - float(state.get("start_equity", self.paper.cash))
+        return self._equity_after_liquidation(prices, self._fx_rates(prices)) - float(state.get("start_equity", self.paper.cash))
 
     def scan_one(self, symbol, tickers=None, fx_rates=None, quote_currency=None):
         tickers = tickers if tickers is not None else self.exchange.tickers([symbol])
@@ -597,7 +638,7 @@ class Engine:
             entry = pos["avg_price"]
             quote_row = next((item for item in results if item.get("symbol") == symbol), {})
             # Stops and exits must use the executable bid, not the last-traded price.
-            exit_price = float(quote_row.get("bid") or price)
+            exit_price = self._paper_sell_price(float(quote_row.get("bid") or price))
             peak = self.paper.update_peak(symbol, price)
             change_pct = (exit_price / entry - 1) * 100
             peak_gain_pct = (peak / entry - 1) * 100
@@ -634,7 +675,7 @@ class Engine:
             # then pause all further entries.
             for symbol, pos in list(self.paper.positions.items()):
                 quote_row = result_by_symbol[str(symbol).upper()]
-                exit_price = float(quote_row["bid"])
+                exit_price = self._paper_sell_price(float(quote_row["bid"]))
                 fill = self.paper.sell(symbol, pos["qty"], exit_price)
                 save_trade(self.db, "PAPER", symbol, "Sell", fill["qty"], fill["quote"], fill["fee"], fill["price"], "FILLED")
                 realized_pct = (exit_price / pos["avg_price"] - 1.0) * 100.0
@@ -673,7 +714,7 @@ class Engine:
                 rates = self._fx_rates(prices)
                 fresh_rates = self._fresh_fx_rates(prices)
                 fresh_buy_rates = self._fresh_fx_buy_rates(prices)
-                equity_eur = self.paper.equity(prices, rates)
+                equity_eur = self._equity_after_liquidation(prices, rates)
                 atr_percent = max(0.0, float(signal.get("atr_percent") or 0.0))
                 stop_distance_pct = max(float(self.s.stop_loss_pct), atr_percent * 1.5, 0.5)
                 risk_budget_eur = equity_eur * float(getattr(self.s, "risk_per_trade_pct", 0.5)) / 100.0
@@ -753,7 +794,7 @@ class Engine:
                     audit(self.db, "ENTRY_SKIPPED", f"{signal['symbol']}: no PAPER funds in {quote_currency}")
                     continue
                 # A PAPER buy crosses the spread and therefore fills at ask.
-                entry_price = float(signal.get("ask") or signal["price"])
+                entry_price = self._paper_buy_price(float(signal.get("ask") or signal["price"]))
                 fill = self.paper.buy(signal["symbol"], allocation, entry_price, currency=quote_currency)
                 save_trade(self.db, "PAPER", signal["symbol"], "Buy", fill["qty"], fill["quote"], fill["fee"], fill["price"], "FILLED")
                 actions.append(f"{signal['symbol']} BUY {fill['qty']:.8f} @ {fill['price']}")

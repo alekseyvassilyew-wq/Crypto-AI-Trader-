@@ -19,6 +19,7 @@ class Settings:
     max_spread_bps: float
     min_turnover: float
     fee_rate: float
+    paper_slippage_bps: float
     watchlist: tuple[str, ...]
     trade_quote_currency: str
     max_candle_pairs: int
@@ -59,6 +60,7 @@ def load_settings():
         max_spread_bps=float(os.getenv("MAX_SPREAD_BPS", "25")),
         min_turnover=float(os.getenv("MIN_24H_TURNOVER_EUR", "10000")),
         fee_rate=float(os.getenv("PAPER_FEE_RATE", "0.0026")),
+        paper_slippage_bps=float(os.getenv("PAPER_SLIPPAGE_BPS", "5")),
         watchlist=tuple(x.strip().upper().replace("/", "") for x in os.getenv("WATCHLIST", "").split(",") if x.strip()),
         trade_quote_currency=os.getenv("TRADE_QUOTE_CURRENCY", "EUR").strip().upper(),
         max_candle_pairs=int(os.getenv("MAX_CANDLE_PAIRS", "20")),
@@ -88,7 +90,7 @@ def load_settings():
     if s.paper_start <= 0 or s.max_trade <= 0 or s.max_trade > s.paper_start:
         raise ValueError("Invalid paper balance or trade size configuration.")
     numeric_values = (s.paper_start, s.max_trade, s.max_daily_loss, s.risk_per_trade_pct, s.max_spread_bps,
-                      s.min_turnover, s.fee_rate, s.stop_loss_pct, s.take_profit_pct, s.trailing_stop_pct)
+                      s.min_turnover, s.fee_rate, s.paper_slippage_bps, s.stop_loss_pct, s.take_profit_pct, s.trailing_stop_pct)
     if not all(math.isfinite(value) for value in numeric_values):
         raise ValueError("All numeric settings must be finite numbers.")
     if min(s.max_daily_loss, s.max_positions, s.max_candle_pairs, s.ml_auto_research_markets, s.scan_interval, s.stop_loss_pct, s.take_profit_pct, s.trailing_stop_pct, s.risk_per_trade_pct) <= 0:
@@ -116,4 +118,6 @@ def load_settings():
         raise ValueError("DATABASE_PATH must not be empty.")
     if not 0 <= s.fee_rate < 0.1:
         raise ValueError("PAPER_FEE_RATE must be between 0 and 0.1.")
+    if not 0 <= s.paper_slippage_bps <= 100:
+        raise ValueError("PAPER_SLIPPAGE_BPS must be between 0 and 100.")
     return s
