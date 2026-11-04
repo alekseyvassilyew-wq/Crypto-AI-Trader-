@@ -128,9 +128,22 @@ def build_app(s, engine, exchange):
                     log.warning("PAPER status valuation unavailable: %s", type(exc).__name__)
                     daily_text = "недоступен — ошибка оценки"
                     equity_text = "недоступна — ошибка оценки"
+            from .db import get_latest_paper_snapshot
+            snapshot = get_latest_paper_snapshot(engine.db)
+            valuation_time = (
+                engine.last_scan_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+                if engine.last_scan_at else "нет свежего сканирования"
+            )
+            if snapshot:
+                snapshot_time = str(snapshot["ts"]).replace("T", " ")[:19] + " UTC"
+                snapshot_text = f"{float(snapshot['equity_eur']):.4f} EUR в {snapshot_time}"
+            else:
+                snapshot_text = "ещё нет сохранённых измерений"
             return (
                 f"Режим: PAPER\nСостояние: {state}\nСвободные средства: {balances}\n"
-                f"Общая стоимость портфеля после расчётных расходов на выход: {equity_text}\n"
+                f"Текущая оценка портфеля после расходов на выход: {equity_text}\n"
+                f"Время рыночных котировок для оценки: {valuation_time}\n"
+                f"Последний сохранённый снимок PAPER: {snapshot_text}\n"
                 f"Позиции: {len(engine.paper.positions)}/{s.max_positions}\nP/L сегодня (UTC): {daily_text}\n"
                 f"Риск: SL {s.stop_loss_pct:.2f}% | TP {s.take_profit_pct:.2f}% | trailing {getattr(s, 'trailing_stop_pct', 1.5):.2f}%\n"
                 f"Рынок Kraken: {len(engine.market_pairs)} пар; котировок получено: {engine.market_ticker_count}\n"
@@ -148,7 +161,22 @@ def build_app(s, engine, exchange):
             state = get_state(monitor_db, "external_monitor_state", {})
             if not isinstance(state, dict):
                 state = {}
-            return format_monitor_status(s, state)
+            report = format_monitor_status(s, state)
+            from .db import get_backup_status
+            backup_dir = Path(s.db_path).expanduser().parent / "backups"
+            backup = get_backup_status(backup_dir)
+            if backup["status"] == "missing":
+                backup_line = "SQLite backup: НЕ НАЙДЕНА"
+            else:
+                age_hours = backup["age_seconds"] / 3600.0
+                backup_time = backup["timestamp"]
+                backup_line = (
+                    f"SQLite backup: {backup_time} UTC; возраст {age_hours:.1f} ч; "
+                    f"{backup['size_bytes'] / 1024:.1f} KiB"
+                )
+                if backup["status"] == "stale":
+                    backup_line += " — ВНИМАНИЕ: старше 26 часов"
+            return report + "\\n" + backup_line
         message = await context.application.bot_data["monitor_runner"].run(read_monitor_status)
         await update.effective_message.reply_text(message)
 
