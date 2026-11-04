@@ -129,9 +129,9 @@ def build_app(s, engine, exchange):
                     daily_text = "недоступен — ошибка оценки"
                     equity_text = "недоступна — ошибка оценки"
             return (
-                f"Режим: PAPER\\nСостояние: {state}\\nСвободные средства: {balances}\\n"
-                f"Общая стоимость портфеля после расчётных расходов на выход: {equity_text}\\n"
-                f"Позиции: {len(engine.paper.positions)}/{s.max_positions}\\nP/L сегодня (UTC): {daily_text}\\n"
+                f"Режим: PAPER\nСостояние: {state}\nСвободные средства: {balances}\n"
+                f"Общая стоимость портфеля после расчётных расходов на выход: {equity_text}\n"
+                f"Позиции: {len(engine.paper.positions)}/{s.max_positions}\nP/L сегодня (UTC): {daily_text}\n"
                 f"Риск: SL {s.stop_loss_pct:.2f}% | TP {s.take_profit_pct:.2f}% | trailing {getattr(s, 'trailing_stop_pct', 1.5):.2f}%\n"
                 f"Рынок Kraken: {len(engine.market_pairs)} пар; котировок получено: {engine.market_ticker_count}\n"
                 f"Мониторинг всех котировок; анализ свечей: до {s.max_candle_pairs} пар за цикл.\n"
@@ -725,9 +725,9 @@ def build_app(s, engine, exchange):
             )
             coverage_pct = min(100.0, span_seconds / (hours * 3600) * 100.0)
             await update.effective_message.reply_text(
-                f"📈 PAPER FORWARD-TEST — окно {hours} ч.\\n"
-                f"Измерений: {metrics['samples']}\\n"
-                f"Размах измерений: {span_text} ({coverage_pct:.1f}% окна; не гарантия непрерывной работы)\\n"
+                f"📈 PAPER FORWARD-TEST — окно {hours} ч.\n"
+                f"Измерений: {metrics['samples']}\n"
+                f"Размах измерений: {span_text} ({coverage_pct:.1f}% окна; не гарантия непрерывной работы)\n"
                 f"Капитал: {metrics['start_equity_eur']:.4f} → {metrics['end_equity_eur']:.4f} EUR\n"
                 f"Изменение: {metrics['change_eur']:+.4f} EUR ({metrics['change_pct']:+.2f}%)\n"
                 f"Макс. наблюдаемая просадка: {metrics['max_observed_drawdown_pct']:.2f}%\n"
