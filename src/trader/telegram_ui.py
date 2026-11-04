@@ -460,7 +460,13 @@ def build_app(s, engine, exchange):
                 if age < 0 or age > max(120, 2 * int(engine.scan_interval_seconds)):
                     rates = {"EUR": 1.0}
             from .wallet import build_wallet_inventory, build_asset_pair_routes
-            inventory = build_wallet_inventory(balances, rates)
+            known_assets = {
+                str(pair.get(field) or "").strip().upper()
+                for pair in pairs
+                for field in ("base", "quote")
+                if pair.get(field)
+            }
+            inventory = build_wallet_inventory(balances, rates, known_assets=known_assets)
             routes = build_asset_pair_routes(
                 [item["asset"] for item in inventory["assets"]], pairs
             )
