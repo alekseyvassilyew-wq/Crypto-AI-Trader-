@@ -85,3 +85,22 @@ def test_load_rejects_corrupted_persisted_position(tmp_path):
     with pytest.raises(ValueError):
         PaperBroker(db=db)
     db.close()
+
+
+def test_multi_currency_wallet_debits_and_credits_matching_quote_currency():
+    broker = PaperBroker(balance=20, fee_rate=0.01)
+    broker.cash_by_currency["USD"] = 50
+    bought = broker.buy("ETHUSD", 20, 10, currency="USD")
+    assert bought["currency"] == "USD"
+    assert broker.balance("USD") == pytest.approx(29.8)
+    assert broker.cash == pytest.approx(20)
+    sold = broker.sell("ETHUSD", 1, 12)
+    assert sold["currency"] == "USD"
+    assert broker.balance("USD") == pytest.approx(41.68)
+    assert broker.cash == pytest.approx(20)
+
+
+def test_multi_currency_equity_uses_fx_rates():
+    broker = PaperBroker(balance=20)
+    broker.cash_by_currency["USD"] = 10
+    assert broker.equity({}, {"USD": 0.9}) == pytest.approx(29)
