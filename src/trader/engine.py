@@ -65,6 +65,37 @@ class Engine:
                 queue.append(source)
         return rates
 
+    def _seed_multicurrency_wallet(self, fx_rates):
+        """Seed USD and USDT PAPER balances once, using virtual EUR conversions."""
+        seeded = get_state(self.db, "paper_seeded_currencies", {})
+        if not isinstance(seeded, dict):
+            seeded = {}
+        base_eur = get_state(self.db, "paper_seed_base_eur")
+        if base_eur is None:
+            base_eur = self.paper.balance("EUR")
+            set_state(self.db, "paper_seed_base_eur", base_eur)
+        base_eur = float(base_eur or 0)
+        if base_eur <= 0:
+            return
+        # Retain 50% in EUR; allocate 25% each to USD and USDT when a Kraken
+        # market-derived conversion route exists. Every conversion is audited.
+        for currency in ("USD", "USDT"):
+            if seeded.get(currency) or self.paper.balance(currency) > 0:
+                seeded[currency] = True
+                continue
+            currency_to_eur = float(fx_rates.get(currency) or 0)
+            if currency_to_eur <= 0:
+                continue
+            amount_eur = min(base_eur * 0.25, self.paper.balance("EUR"))
+            if amount_eur <= 0:
+                continue
+            conversion = self.paper.convert("EUR", currency, amount_eur, 1.0 / currency_to_eur)
+            audit(self.db, "PAPER_WALLET_SEED",
+                  f"{conversion['from']}->{conversion['to']} spent={conversion['spent']:.8f} "
+                  f"received={conversion['received']:.8f} fee={conversion['fee']:.8f}")
+            seeded[currency] = True
+            set_state(self.db, "paper_seeded_currencies", seeded)
+
     def daily_pnl(self, prices=None):
         self._ensure_day()
         state = get_state(self.db, "daily", {})
@@ -115,6 +146,7 @@ class Engine:
                 for item in tickers if float(item.get("lastPrice") or 0) > 0
             }
             fx_rates = self._fx_rates(snapshot_prices)
+            self._seed_multicurrency_wallet(fx_rates)
             eligible = []
             results_by_symbol = {}
             for pair in pairs:
@@ -133,12 +165,12 @@ class Engine:
                 spread = (ask - bid) / ((ask + bid) / 2) * 10000 if bid > 0 and ask > 0 else 999999
                 turnover = float(ticker.get("turnover24h") or 0)
                 turnover_eur = turnover * fx_rates.get(quote, 0.0)
-                if self.paper.balance(quote) <= 0 and (self.paper.balance("EUR") <= 0 or fx_rates.get(quote, 0) <= 0):
+                if self.paper.balance(quote) <= 0:
                     results_by_symbol[symbol] = {
                         "symbol": symbol, "signal": "HOLD", "score": 0,
                         "price": float(ticker.get("lastPrice") or 0),
                         "spread_bps": spread, "turnover": turnover, "turnover_eur": turnover_eur, "quote": quote,
-                        "reasons": [f"Monitored only; no PAPER funds or EUR conversion rate for {quote}"],
+                        "reasons": [f"Monitored only; no PAPER wallet balance in {quote}"],
                     }
                 elif spread > self.s.max_spread_bps:
                     results_by_symbol[symbol] = {
@@ -239,22 +271,14 @@ class Engine:
                             self.daily_pnl(prices), self.limits)
                 quote_to_eur = self._fx_rates(prices).get(quote_currency)
                 if not quote_to_eur or quote_to_eur <= 0:
-                    audit(self.db, "ENTRY_SKIPPED", f"{signal['symbol']}: no EUR conversion rate for {quote_currency}")
+                    audit(self.db, "ENTRY_SKIPPED", f"{signal['symbol']}: no EUR valuation rate for {quote_currency}")
                     continue
-                if quote_currency == "EUR":
-                    allocation = min(float(self.s.max_trade), self.paper.balance("EUR") / 2.0)
-                else:
-                    # Convert only virtual PAPER cash at the live Kraken FX mark.
-                    # Keep at least half of the remaining EUR wallet uncommitted.
-                    eur_to_spend = min(float(self.s.max_trade), self.paper.balance("EUR") / 2.0)
-                    if eur_to_spend <= 0:
-                        continue
-                    conversion = self.paper.convert("EUR", quote_currency, eur_to_spend, 1.0 / quote_to_eur)
-                    audit(self.db, "PAPER_FX_CONVERSION",
-                          f"{conversion['from']}->{conversion['to']} spent={conversion['spent']:.8f} received={conversion['received']:.8f}")
-                    # Reserve the PAPER trade fee inside the converted amount.
-                    allocation = conversion["received"] / (1.0 + self.paper.fee_rate)
+                # Spend only the balance already held in this market's quote currency.
+                # Never silently convert EUR to fund an individual trade.
+                quote_balance = self.paper.balance(quote_currency)
+                allocation = min(float(self.s.max_trade) / quote_to_eur, quote_balance / 2.0)
                 if allocation <= 0:
+                    audit(self.db, "ENTRY_SKIPPED", f"{signal['symbol']}: no PAPER funds in {quote_currency}")
                     continue
                 fill = self.paper.buy(signal["symbol"], allocation, signal["price"], currency=quote_currency)
                 save_trade(self.db, "PAPER", signal["symbol"], "Buy", fill["qty"], fill["quote"], fill["fee"], fill["price"], "FILLED")
