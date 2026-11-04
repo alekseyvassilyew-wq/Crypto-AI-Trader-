@@ -21,6 +21,7 @@ class Settings:
     watchlist: tuple[str, ...]
     trade_quote_currency: str
     max_candle_pairs: int
+    enable_multi_timeframe: bool
     scan_interval: int
     stop_loss_pct: float
     take_profit_pct: float
@@ -54,6 +55,7 @@ def load_settings():
         watchlist=tuple(x.strip().upper().replace("/", "") for x in os.getenv("WATCHLIST", "").split(",") if x.strip()),
         trade_quote_currency=os.getenv("TRADE_QUOTE_CURRENCY", "EUR").strip().upper(),
         max_candle_pairs=int(os.getenv("MAX_CANDLE_PAIRS", "10")),
+        enable_multi_timeframe=os.getenv("ENABLE_MULTI_TIMEFRAME", "true").strip().lower() in ("1", "true", "yes", "on"),
         scan_interval=int(os.getenv("SCAN_INTERVAL_SECONDS", "60")),
         stop_loss_pct=float(os.getenv("STOP_LOSS_PERCENT", "2")),
         take_profit_pct=float(os.getenv("TAKE_PROFIT_PERCENT", "4")),
