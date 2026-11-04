@@ -747,3 +747,33 @@ def test_scan_logs_stage_timing(caplog, tmp_path):
     assert "OHLC=" in timing
     assert "total=" in timing
     db.close()
+
+
+def test_priority_market_selection_keeps_ton_and_open_positions_fresh():
+    from src.trader.engine import select_ohlc_markets
+
+    eligible = [
+        (100000 - index, f"COIN{index}EUR", "EUR")
+        for index in range(30)
+    ] + [(5000, "TONEUR", "EUR"), (4000, "TONUSD", "USD")]
+    selected, next_cursor, priority_count = select_ohlc_markets(
+        eligible, 5, 0, ["OPENPOSITIONEUR", "TONEUR", "TONUSD"]
+    )
+    assert ("TONEUR", "EUR") in selected
+    assert ("TONUSD", "USD") in selected
+    assert len(selected) == 5
+    assert next_cursor == 5
+    assert priority_count == 2
+
+
+def test_priority_market_selection_rotates_remaining_markets_without_duplicates():
+    from src.trader.engine import select_ohlc_markets
+
+    eligible = [(1000 - index, f"COIN{index}EUR", "EUR") for index in range(12)]
+    first, cursor, _ = select_ohlc_markets(eligible, 4, 0, ["COIN0EUR"])
+    second, next_cursor, _ = select_ohlc_markets(eligible, 4, cursor, ["COIN0EUR"])
+    assert len(first) == len(second) == 4
+    assert ("COIN0EUR", "EUR") in first
+    assert ("COIN0EUR", "EUR") in second
+    assert len((first - {("COIN0EUR", "EUR")}) | (second - {("COIN0EUR", "EUR")})) >= 6
+    assert next_cursor == 8
