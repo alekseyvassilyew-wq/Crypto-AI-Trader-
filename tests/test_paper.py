@@ -85,3 +85,93 @@ def test_load_rejects_corrupted_persisted_position(tmp_path):
     with pytest.raises(ValueError):
         PaperBroker(db=db)
     db.close()
+
+
+def test_multi_currency_wallet_debits_and_credits_matching_quote_currency():
+    broker = PaperBroker(balance=20, fee_rate=0.01)
+    broker.cash_by_currency["USD"] = 50
+    bought = broker.buy("ETHUSD", 20, 10, currency="USD")
+    assert bought["currency"] == "USD"
+    assert broker.balance("USD") == pytest.approx(29.8)
+    assert broker.cash == pytest.approx(20)
+    sold = broker.sell("ETHUSD", 1, 12)
+    assert sold["currency"] == "USD"
+    assert broker.balance("USD") == pytest.approx(41.68)
+    assert broker.cash == pytest.approx(20)
+
+ 
+ 
+def test_paper_currency_conversion_moves_virtual_cash_and_charges_fee():
+    broker = PaperBroker(balance=20, fee_rate=0.01)
+    converted = broker.convert("EUR", "USD", 10, 1.1)
+    assert converted["spent"] == pytest.approx(10)
+    assert converted["received"] == pytest.approx(10.89)
+    assert broker.balance("EUR") == pytest.approx(10)
+    assert broker.balance("USD") == pytest.approx(10.89)
+
+
+def test_multi_currency_equity_uses_fx_rates():
+    broker = PaperBroker(balance=20)
+    broker.cash_by_currency["USD"] = 10
+    assert broker.equity({}, {"USD": 0.9}) == pytest.approx(29)
+
+def test_trailing_peak_is_persisted_across_broker_restart(tmp_path):
+    from src.trader.db import connect
+    db = connect(tmp_path / "trailing.sqlite3")
+    broker = PaperBroker(balance=20, fee_rate=0.001, db=db)
+    broker.buy("XBTEUR", 5, 10)
+    assert broker.update_peak("XBTEUR", 12) == 12
+    restored = PaperBroker(balance=20, fee_rate=0.001, db=db)
+    assert restored.positions["XBTEUR"]["peak_price"] == 12
+    assert restored.update_peak("XBTEUR", 11) == 12
+    db.close()
+
+
+def test_empty_corrupt_persisted_wallet_fails_closed(tmp_path):
+    from src.trader.db import connect, set_state
+    db = connect(tmp_path / "empty-wallet.sqlite3")
+    set_state(db, "paper_broker", {})
+    with pytest.raises(ValueError, match="Invalid saved paper broker state"):
+        PaperBroker(balance=20, db=db)
+    db.close()
+
+
+def test_duplicate_saved_currency_codes_fail_closed(tmp_path):
+    from src.trader.db import connect, set_state
+    db = connect(tmp_path / "duplicate-currency.sqlite3")
+    set_state(db, "paper_broker", {
+        "cash": 20,
+        "cash_by_currency": {"usd": 5, "USD": 6},
+        "positions": {},
+    })
+    with pytest.raises(ValueError, match="Duplicate saved currency"):
+        PaperBroker(balance=20, db=db)
+    db.close()
+
+
+def test_malformed_persisted_wallet_json_fails_closed(tmp_path):
+    from src.trader.db import connect
+    db = connect(tmp_path / "malformed-wallet.sqlite3")
+    db.execute("INSERT INTO app_state(key, value) VALUES(?, ?)", ("paper_broker", "{broken"))
+    db.commit()
+    with pytest.raises(ValueError, match="invalid JSON"):
+        PaperBroker(balance=20, db=db)
+    db.close()
+
+
+def test_non_object_persisted_wallet_json_fails_closed(tmp_path):
+    from src.trader.db import connect
+    db = connect(tmp_path / "null-wallet.sqlite3")
+    db.execute("INSERT INTO app_state(key, value) VALUES(?, ?)", ("paper_broker", "null"))
+    db.commit()
+    with pytest.raises(ValueError, match="JSON object"):
+        PaperBroker(balance=20, db=db)
+    db.close()
+
+
+def test_conversion_rejects_target_balance_overflow():
+    broker = PaperBroker(balance=1.0, fee_rate=0.0)
+    broker.cash_by_currency["EUR"] = 1.0
+    broker.cash_by_currency["USD"] = 1e308
+    with pytest.raises(ValueError, match="invalid wallet balance"):
+        broker.convert("EUR", "USD", 1.0, 1e308)

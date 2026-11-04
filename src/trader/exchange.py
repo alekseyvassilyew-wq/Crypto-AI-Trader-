@@ -39,6 +39,8 @@ class KrakenSpot:
         self._pair_cache = {}
         self._nonce_lock = threading.Lock()
         self._last_nonce = 0
+        self._public_lock = threading.Lock()
+        self._last_public_request = 0.0
         self._ohlc_lock = threading.Lock()
         self._last_ohlc_request_at = 0.0
 
@@ -66,7 +68,15 @@ class KrakenSpot:
             if private:
                 response = self.session.post(url, data=payload, headers=headers, timeout=self.timeout)
             else:
-                response = self.session.get(url, params=data, timeout=self.timeout)
+                # Kraken public REST endpoints share a per-IP call budget.
+                # Serialize requests and leave a small gap to reduce throttling.
+                with self._public_lock:
+                    # Keep all public Kraken REST calls at least 1.05 s apart.
+                    wait = 1.05 - (time.monotonic() - self._last_public_request)
+                    if wait > 0:
+                        time.sleep(wait)
+                    self._last_public_request = time.monotonic()
+                    response = self.session.get(url, params=data, timeout=self.timeout)
             response.raise_for_status()
         except (requests.Timeout, requests.ConnectionError) as exc:
             raise RuntimeError(f"Kraken network request failed: {exc}") from exc
@@ -210,8 +220,8 @@ class KrakenSpot:
         if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
             raise ValueError("Candle limit must be a positive integer")
         key, _ = self._pair_info(symbol)
-        # Kraken recommends no more than one public REST request per second.
-        # OHLC calls are serialized and spaced slightly above that threshold.
+        # Kraken's OHLC endpoint is rate-limited more strictly in practice;
+        # space OHLC calls slightly above one second, even across scan cycles.
         with self._ohlc_lock:
             wait = 1.05 - (time.monotonic() - self._last_ohlc_request_at)
             if wait > 0:
