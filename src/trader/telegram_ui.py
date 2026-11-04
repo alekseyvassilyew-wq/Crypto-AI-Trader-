@@ -69,7 +69,6 @@ def build_app(s, engine, exchange):
             analyzed = [
                 x for x in rows
                 if "Ticker monitored; OHLC analysis deferred by rotating scan budget" not in x.get("reasons", [])
-                and engine.paper.balance(str(x.get("quote") or "EUR").upper()) > 0
             ]
             ranked = sorted(
                 analyzed,
@@ -79,7 +78,7 @@ def build_app(s, engine, exchange):
             lines = [
                 f"Всего рынков Kraken: {len(engine.market_pairs)}",
                 f"Тикеров получено: {engine.market_ticker_count}",
-                f"Пар с доступным PAPER-финансированием, прошедших анализ свечей: {len(analyzed)}",
+                f"Пар с доступным EUR-маршрутом, прошедших анализ свечей: {len(analyzed)}",
                 f"Сигналов BUY: {len(buy_rows)}",
                 "",
             ]
@@ -115,7 +114,18 @@ def build_app(s, engine, exchange):
     async def portfolio(update, context):
         if not await authorized(update): return await deny(update)
         balances = [f"{currency}: {amount:.8f}" for currency, amount in sorted(engine.paper.cash_by_currency.items())]
-        lines = [f"{sym}: {p['qty']:.8f} @ avg {p['avg_price']:.8g} {p.get('quote_currency', 'EUR')}" for sym, p in engine.paper.positions.items()]
+        fx_rates = engine._fx_rates(engine.last_prices)
+        lines = []
+        for sym, p in engine.paper.positions.items():
+            quote = p.get("quote_currency", "EUR")
+            mark = engine.last_prices.get(sym, p["avg_price"])
+            pnl_quote = (mark - p["avg_price"]) * p["qty"]
+            pnl_eur = pnl_quote * fx_rates.get(quote, 0.0)
+            peak = p.get("peak_price", p["avg_price"])
+            lines.append(
+                f"{sym}: {p['qty']:.8f} | вход {p['avg_price']:.8g} {quote} | "
+                f"цена {mark:.8g} | пик {peak:.8g} | P/L {pnl_eur:+.4f} EUR"
+            )
         await update.effective_message.reply_text("PAPER-кошелёк:\n" + ("\n".join(balances) or "Нет свободных средств.") + "\n\nПозиции:\n" + ("\n".join(lines) or "Нет открытых позиций."))
 
     async def run(update, context):
@@ -224,7 +234,7 @@ def build_app(s, engine, exchange):
             if actions:
                 error_actions = [item for item in actions if "SCAN_FAILED" in item or "ERROR" in item]
                 trade_actions = [item for item in actions if " BUY " in item or " SELL " in item]
-                profit_actions = [item for item in actions if any(token in item for token in (" SELL ", "STOP_LOSS", "TAKE_PROFIT", "DAILY LOSS"))]
+                profit_actions = [item for item in actions if any(token in item for token in (" SELL ", "STOP_LOSS", "TAKE_PROFIT", "TRAILING_STOP", "DAILY LOSS"))]
 
                 if error_actions:
                     await send_topic(context, s.topic_errors_id, "⚠️ Ошибка рыночного сканирования:\n" + "\n".join(error_actions))
