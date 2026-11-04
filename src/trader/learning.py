@@ -1,8 +1,8 @@
 """Leakage-aware research models for PAPER strategy experiments.
 
 This module never places orders or promotes a model. It trains a deterministic
-logistic classifier using chronological walk-forward validation and returns a
-candidate artifact for shadow observation only.
+small neural network using chronological walk-forward validation and returns
+a candidate artifact for shadow observation only.
 """
 import math
 
@@ -72,18 +72,31 @@ def _fit(samples, labels, epochs=450, learning_rate=0.05, l2=0.01, hidden_units=
     w2 = [0.08 * math.cos(j + 1) for j in range(hidden_units)]
     b2 = 0.0
     count = len(normalized)
+    positive_count = sum(1 for label in labels if label == 1)
+    negative_count = count - positive_count
+    # Balance the loss so a rare profitable class is not overwhelmed by the
+    # majority class. These weights are fitted on the training partition only.
+    if positive_count and negative_count:
+        class_weights = {
+            "0": count / (2.0 * negative_count),
+            "1": count / (2.0 * positive_count),
+        }
+    else:
+        class_weights = {"0": 1.0, "1": 1.0}
+    weight_sum = sum(class_weights[str(label)] for label in labels)
     for _ in range(epochs):
         gw1 = [[0.0] * hidden_units for _ in range(width)]
         gb1 = [0.0] * hidden_units
         gw2 = [0.0] * hidden_units
         gb2 = 0.0
         for row, label in zip(normalized, labels):
+            sample_weight = class_weights[str(label)]
             hidden = [
                 math.tanh(b1[j] + sum(w1[i][j] * row[i] for i in range(width)))
                 for j in range(hidden_units)
             ]
             probability = _sigmoid(b2 + sum(w2[j] * hidden[j] for j in range(hidden_units)))
-            output_delta = probability - label
+            output_delta = (probability - label) * sample_weight
             gb2 += output_delta
             hidden_deltas = [
                 output_delta * w2[j] * (1.0 - hidden[j] * hidden[j])
@@ -94,18 +107,21 @@ def _fit(samples, labels, epochs=450, learning_rate=0.05, l2=0.01, hidden_units=
                 gb1[j] += hidden_deltas[j]
                 for i in range(width):
                     gw1[i][j] += hidden_deltas[j] * row[i]
-        b2 -= learning_rate * gb2 / count
+        b2 -= learning_rate * gb2 / weight_sum
         for j in range(hidden_units):
-            w2[j] -= learning_rate * (gw2[j] / count + l2 * w2[j])
-            b1[j] -= learning_rate * gb1[j] / count
+            w2[j] -= learning_rate * (gw2[j] / weight_sum + l2 * w2[j])
+            b1[j] -= learning_rate * gb1[j] / weight_sum
         for i in range(width):
             for j in range(hidden_units):
-                w1[i][j] -= learning_rate * (gw1[i][j] / count + l2 * w1[i][j])
+                w1[i][j] -= learning_rate * (gw1[i][j] / weight_sum + l2 * w1[i][j])
     return {
         "architecture": f"{width}-{hidden_units}-1",
         "means": means, "scales": scales,
         "weights_input_hidden": w1, "bias_hidden": b1,
         "weights_hidden_output": w2, "bias_output": b2,
+        "training_class_counts": {"negative": negative_count, "positive": positive_count},
+        "training_class_weights": class_weights,
+        "score_type": "class_weighted_probability_score_not_calibrated_probability",
     }
 
 
@@ -164,6 +180,33 @@ def _performance(trades, threshold, horizon=1):
         "profit_factor": gross_win / gross_loss if gross_loss else ("INF" if gross_win else 0.0),
         "max_drawdown_pct": drawdown * 100,
     }
+
+
+def _ranking_auc(predictions, labels_by_index):
+    """ROC AUC for ranking scores; None when OOS labels contain one class."""
+    positives = [float(p) for index, p, _ in predictions if labels_by_index[index] == 1]
+    negatives = [float(p) for index, p, _ in predictions if labels_by_index[index] == 0]
+    if not positives or not negatives:
+        return None
+    wins = 0.0
+    for positive in positives:
+        for negative in negatives:
+            wins += 1.0 if positive > negative else 0.5 if positive == negative else 0.0
+    return wins / (len(positives) * len(negatives))
+
+
+def _benchmark_predictions(samples, returns, indices, kind):
+    """Create deterministic, non-fitted benchmark scores on the same OOS rows."""
+    output = []
+    for index in indices:
+        if kind == "always_long":
+            score = 1.0
+        elif kind == "positive_24h_momentum":
+            score = 1.0 if samples[index][2] > 0.0 else 0.0
+        else:
+            raise ValueError("Unknown research benchmark")
+        output.append((index, score, returns[index]))
+    return output
 
 
 def _probability_diagnostics(predictions, horizon=3, thresholds=(0.50, 0.52, 0.55, 0.58, 0.60)):
@@ -276,6 +319,35 @@ def research_candidate(rows, *, horizon=3, fee_rate=0.0026, slippage_bps=5.0,
     ]
     aggregate = _performance(all_oos, threshold, int(horizon))
     independent_holdout = _performance(holdout_predictions, threshold, int(horizon))
+    oos_indices = [item[0] for item in all_oos]
+    holdout_indices = [item[0] for item in holdout_predictions]
+    benchmarks = {
+        "walk_forward_oos": {
+            "always_long": _performance(
+                _benchmark_predictions(samples, future_returns, oos_indices, "always_long"),
+                0.5, int(horizon),
+            ),
+            "positive_24h_momentum": _performance(
+                _benchmark_predictions(samples, future_returns, oos_indices, "positive_24h_momentum"),
+                0.5, int(horizon),
+            ),
+        },
+        "independent_holdout": {
+            "always_long": _performance(
+                _benchmark_predictions(samples, future_returns, holdout_indices, "always_long"),
+                0.5, int(horizon),
+            ),
+            "positive_24h_momentum": _performance(
+                _benchmark_predictions(samples, future_returns, holdout_indices, "positive_24h_momentum"),
+                0.5, int(horizon),
+            ),
+        },
+    }
+    score_ranking = {
+        "walk_forward_oos_roc_auc": _ranking_auc(all_oos, labels),
+        "independent_holdout_roc_auc": _ranking_auc(holdout_predictions, labels),
+        "interpretation": "RANKING_METRIC_ONLY_NOT_PROBABILITY_CALIBRATION",
+    }
     probability_diagnostics = {
         "walk_forward_oos": _probability_diagnostics(all_oos, horizon),
         "independent_holdout": _probability_diagnostics(holdout_predictions, horizon),
@@ -322,6 +394,14 @@ def research_candidate(rows, *, horizon=3, fee_rate=0.0026, slippage_bps=5.0,
     if aggregate["max_drawdown_pct"] > 15.0:
         reason_codes.append("OOS_DRAWDOWN_TOO_HIGH")
         rejection_reasons.append(f"Просадка выше 15%: {aggregate['max_drawdown_pct']:.2f}%")
+    always_long_oos = benchmarks["walk_forward_oos"]["always_long"]
+    if aggregate["net_return_pct"] <= always_long_oos["net_return_pct"]:
+        reason_codes.append("DOES_NOT_BEAT_ALWAYS_LONG")
+        rejection_reasons.append("Модель не превзошла базовый benchmark BUY-AND-HOLD на walk-forward OOS")
+    always_long_holdout = benchmarks["independent_holdout"]["always_long"]
+    if independent_holdout["net_return_pct"] <= always_long_holdout["net_return_pct"]:
+        reason_codes.append("DOES_NOT_BEAT_ALWAYS_LONG_HOLDOUT")
+        rejection_reasons.append("Модель не превзошла BUY-AND-HOLD на независимом holdout")
     if positive_folds < 2:
         reason_codes.append("UNSTABLE_WALK_FORWARD")
         rejection_reasons.append(f"Нестабильные фолды: положительных {positive_folds} из 3")
@@ -376,6 +456,8 @@ def research_candidate(rows, *, horizon=3, fee_rate=0.0026, slippage_bps=5.0,
         "regime_metrics": regime_metrics,
         "independent_holdout_by_regime": holdout_regime_metrics,
         "probability_diagnostics": probability_diagnostics,
+        "benchmark_metrics": benchmarks,
+        "score_ranking": score_ranking,
         "diagnostics": {
             "reason_codes": reason_codes,
             "rejection_reasons": rejection_reasons,

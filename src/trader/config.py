@@ -36,6 +36,10 @@ class Settings:
     topic_portfolio_id: int
     topic_profit_id: int
     topic_errors_id: int
+    render_api_key: str
+    render_service_id: str
+    github_token: str
+    github_repository: str
 
 
 def load_settings():
@@ -72,6 +76,10 @@ def load_settings():
         topic_portfolio_id=int(os.getenv("TOPIC_PORTFOLIO_ID", "0")),
         topic_profit_id=int(os.getenv("TOPIC_PROFIT_ID", "0")),
         topic_errors_id=int(os.getenv("TOPIC_ERRORS_ID", "0")),
+        render_api_key=os.getenv("RENDER_API_KEY", "").strip(),
+        render_service_id=os.getenv("RENDER_SERVICE_ID", "").strip(),
+        github_token=os.getenv("GITHUB_TOKEN", "").strip(),
+        github_repository=os.getenv("GITHUB_REPOSITORY", "").strip(),
     )
     if not s.bot_token or s.admin_id <= 0:
         raise ValueError("Set BOT_TOKEN and numeric ADMIN_ID.")

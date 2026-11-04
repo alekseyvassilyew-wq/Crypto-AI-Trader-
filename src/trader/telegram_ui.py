@@ -1,4 +1,6 @@
 import logging
+import html
+from datetime import datetime, timezone
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
@@ -43,7 +45,7 @@ def build_app(s, engine, exchange):
             message = message.replace(s.bot_token, "[REDACTED]")
         return f"{type(exc).__name__}: {message[:500]}"
 
-    def format_error(exc, action, user=None):
+    def format_error(exc, action, user=None, source="Crypto AI Trader"):
         import traceback
         if user:
             username = f"@{user.username}" if user.username else "без username"
@@ -51,24 +53,28 @@ def build_app(s, engine, exchange):
         else:
             who = "— (—)"
         trace = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-        # Telegram Bot API request URLs contain the bot token; redact defensively
-        # before sending exception details to chats or persistent logs.
         if s.bot_token:
             trace = trace.replace(s.bot_token, "[REDACTED]")
         description = safe_error_message(exc)
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         return (
-            "🚨 ОШИБКА CRYPTO AI TRADER\n"
-            f"👤 Кто: {who}\n"
-            f"💬 Действие: {action}\n"
-            f"⚠️ Тип: {type(exc).__name__}\n"
-            f"📝 Описание: {description}\n"
-            "📋 Трейс:\n"
-            + '```python\n' + trace[-2200:] + '\n```'
+            "🚨 <b>ОШИБКА БОТА</b>\n"
+            f"🕒 Время: <code>{timestamp}</code>\n"
+            f"🧩 Источник: <b>{html.escape(source)}</b>\n"
+            f"👤 Кто: {html.escape(who)}\n"
+            f"💬 Действие: {html.escape(str(action))}\n"
+            f"⚠️ Тип: <code>{html.escape(type(exc).__name__)}</code>\n"
+            f"📝 Описание: {html.escape(description)}\n"
+            "📋 <b>Трейс:</b>\n"
+            f"<pre>{html.escape(trace[-2600:])}</pre>"
         )[:3900]
-    async def send_topic(context, topic_id, text):
+
+    async def send_topic(context, topic_id, text, parse_mode=None):
         if not s.telegram_group_chat_id:
             return
         kwargs = {"chat_id": s.telegram_group_chat_id, "text": text[:3900]}
+        if parse_mode:
+            kwargs["parse_mode"] = parse_mode
         if topic_id:
             kwargs["message_thread_id"] = topic_id
         await context.bot.send_message(**kwargs)
@@ -156,7 +162,7 @@ def build_app(s, engine, exchange):
             # exception type/message in the private owner Telegram response.
             log.error("Market scan failed: %s", type(exc).__name__)
             await update.effective_message.reply_text(
-                format_error(exc, "/scan", update.effective_user)
+                format_error(exc, "/scan", update.effective_user), parse_mode="HTML"
             )
 
     async def backtest(update, context):
@@ -400,6 +406,12 @@ def build_app(s, engine, exchange):
             metrics = candidate["out_of_sample"]
             pf = metrics["profit_factor"]
             pf_text = "∞" if pf == "INF" else f"{pf:.2f}"
+            benchmarks = candidate.get("benchmark_metrics", {})
+            oos_benchmarks = benchmarks.get("walk_forward_oos", {})
+            holdout_benchmarks = benchmarks.get("independent_holdout", {})
+            ranking = candidate.get("score_ranking", {})
+            def auc_text(value):
+                return "н/д" if value is None else f"{float(value):.3f}"
             gate = "ПРОШЛА исследовательский фильтр" if candidate["research_pass"] else "НЕ прошла исследовательский фильтр"
             await update.effective_message.reply_text(
                 f"🧠 МОДЕЛЬ {symbol} — {gate}\n"
@@ -410,6 +422,12 @@ def build_app(s, engine, exchange):
                 f"Доходность после издержек: {metrics['net_return_pct']:+.2f}%\n"
                 f"Win rate: {metrics['win_rate_pct']:.1f}% | Profit factor: {pf_text}\n"
                 f"Макс. просадка OOS: {metrics['max_drawdown_pct']:.2f}%\n"
+                f"Benchmark OOS: BUY&HOLD {oos_benchmarks.get('always_long', {}).get('net_return_pct', 0):+.2f}% | "
+                f"Momentum {oos_benchmarks.get('positive_24h_momentum', {}).get('net_return_pct', 0):+.2f}%\n"
+                f"Benchmark holdout: BUY&HOLD {holdout_benchmarks.get('always_long', {}).get('net_return_pct', 0):+.2f}% | "
+                f"Momentum {holdout_benchmarks.get('positive_24h_momentum', {}).get('net_return_pct', 0):+.2f}%\n"
+                f"ROC AUC (ranking only): OOS {auc_text(ranking.get('walk_forward_oos_roc_auc'))} | "
+                f"holdout {auc_text(ranking.get('independent_holdout_roc_auc'))}\n"
                 f"Независимый holdout: {candidate['independent_holdout']['net_return_pct']:+.2f}% | "
                 f"{candidate['independent_holdout']['trades']} сделок | "
                 f"DD {candidate['independent_holdout']['max_drawdown_pct']:.2f}%\n"
@@ -683,6 +701,7 @@ def build_app(s, engine, exchange):
                         if last_run.tzinfo is None:
                             last_run = last_run.replace(tzinfo=timezone.utc)
                         if now_utc - last_run < timedelta(hours=1):
+                            log.info("Automatic ML research skipped: previous batch was less than one hour ago")
                             return []
                     except (TypeError, ValueError):
                         log.warning("Ignoring malformed automatic ML research timestamp")
@@ -709,6 +728,8 @@ def build_app(s, engine, exchange):
                     if spread <= s.max_spread_bps and turnover_eur >= s.min_turnover:
                         eligible.append((turnover_eur, pair["symbol"]))
                 eligible.sort(reverse=True)
+                log.info("Automatic ML research discovered %d Kraken pairs; %d pass liquidity/FX filters",
+                         len(pairs), len(eligible))
                 from .learning import rotate_research_batch
                 cursor = get_state(engine.db, "ml_auto_research_cursor", 0)
                 selected, next_cursor = rotate_research_batch(
@@ -716,6 +737,7 @@ def build_app(s, engine, exchange):
                 )
                 if selected:
                     set_state(engine.db, "ml_auto_research_cursor", next_cursor)
+                log.info("Automatic ML research selected %d markets for this batch", len(selected))
                 trained = []
                 for _, symbol in selected:
                     try:
@@ -730,9 +752,14 @@ def build_app(s, engine, exchange):
                             "reasons": candidate.get("rejection_reasons", []),
                             "oos_return": candidate["out_of_sample"]["net_return_pct"],
                             "holdout_return": candidate["independent_holdout"]["net_return_pct"],
+                            "benchmarks": candidate.get("benchmark_metrics", {}),
+                            "auc_oos": candidate.get("score_ranking", {}).get("walk_forward_oos_roc_auc"),
+                            "auc_holdout": candidate.get("score_ranking", {}).get("independent_holdout_roc_auc"),
                         })
                     except Exception as market_exc:
                         log.warning("Automatic model research skipped %s: %s", symbol, market_exc)
+                log.info("Automatic ML research completed: %d of %d selected markets trained",
+                         len(trained), len(selected))
                 if trained:
                     set_state(engine.db, "ml_auto_research_date", {
                         "at_utc": now_utc.isoformat(),
@@ -746,7 +773,10 @@ def build_app(s, engine, exchange):
                 summary = "\n".join(
                     f"{item['symbol']}: {'research PASS' if item['pass'] else 'NOT PASSED'} "
                     f"({item['samples']} samples; OOS {item['oos_return']:+.2f}%; "
-                    f"holdout {item['holdout_return']:+.2f}%; shadow only)"
+                    f"holdout {item['holdout_return']:+.2f}%; "
+                    f"BUY&HOLD OOS {item['benchmarks'].get('walk_forward_oos', {}).get('always_long', {}).get('net_return_pct', 0):+.2f}%; "
+                    f"BUY&HOLD holdout {item['benchmarks'].get('independent_holdout', {}).get('always_long', {}).get('net_return_pct', 0):+.2f}%; "
+                    f"AUC {item['auc_oos'] if item['auc_oos'] is not None else 'n/a'}; shadow only)"
                     + (("\nПричина: " + "; ".join(item["reasons"][:2])) if item["reasons"] else "")
                     for item in trained
                 )
@@ -779,7 +809,7 @@ def build_app(s, engine, exchange):
                 log.error("Could not pause after cycle failure: %s", type(stop_exc).__name__)
             log.error("Trading cycle failed: %s", type(exc).__name__)
             try:
-                await send_topic(context, s.topic_errors_id, format_error(exc, "автоматический торговый цикл"))
+                await send_topic(context, s.topic_errors_id, format_error(exc, "автоматический торговый цикл"), parse_mode="HTML")
             except Exception:
                 log.error("Could not send error notification to Telegram topic")
             return
@@ -902,6 +932,38 @@ def build_app(s, engine, exchange):
         app.add_handler(CommandHandler(name, fn))
     app.add_handler(CallbackQueryHandler(callback))
 
+    async def external_monitor_job(context):
+        """Poll optional Render/GitHub APIs and route status changes to Telegram."""
+        if not (s.render_api_key and s.render_service_id or s.github_token and s.github_repository):
+            return
+        try:
+            from .monitoring import poll_external_events
+            state = context.application.bot_data.setdefault("external_monitor_state", {})
+            events = await context.application.bot_data["run_blocking"].run(
+                lambda: poll_external_events(s, state)
+            )
+            for event in events:
+                source = html.escape(event["source"])
+                status = html.escape(event["status"])
+                title = html.escape(event["title"])
+                detail = html.escape(event["detail"][:700])
+                url = event.get("url", "")
+                link = f'\n<a href="{html.escape(url, quote=True)}">Открыть событие</a>' if url.startswith("https://") else ""
+                successful = event["status"] in {"LIVE", "SUCCESS"}
+                heading = "🟢 СИСТЕМНОЕ ИЗВЕЩЕНИЕ" if successful else "🚨 СБОЙ ВНЕШНЕГО СЕРВИСА"
+                message = (
+                    f"<b>{heading}</b>\n"
+                    f"🕒 Время: <code>{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</code>\n"
+                    f"🧩 Источник: <b>{source}</b>\n"
+                    f"📌 Событие: <b>{title}</b>\n"
+                    f"⚠️ Статус: <code>{status}</code>\n"
+                    f"📝 Описание: {detail}{link}"
+                )
+                topic = s.topic_general_id if successful else s.topic_errors_id
+                await send_topic(context, topic, message, parse_mode="HTML")
+        except Exception as exc:
+            log.warning("External monitoring job failed: %s", type(exc).__name__)
+
     async def application_error_handler(update, context):
         error = context.error
         # Do not log exception strings: HTTP request exceptions can contain
@@ -911,12 +973,15 @@ def build_app(s, engine, exchange):
         try:
             await send_topic(
                 context, s.topic_errors_id,
-                f"🚨 Ошибка Telegram: {error_name}"
+                format_error(error, "обработчик Telegram", getattr(update, "effective_user", None), source="Telegram"),
+                parse_mode="HTML",
             )
         except Exception:
             log.error("Could not notify Telegram error topic")
 
     app.add_error_handler(application_error_handler)
+    # Optional API polling is enabled only when both credentials and resource IDs are configured.
+    app.job_queue.run_repeating(external_monitor_job, interval=90, first=25, name="external-platform-monitor")
     # Start once, then cycle_job schedules the next scan after completion.
     # This fixed-delay cadence avoids overlapping jobs and skipped scans.
     app.job_queue.run_once(cycle_job, when=10, name="paper-cycle")

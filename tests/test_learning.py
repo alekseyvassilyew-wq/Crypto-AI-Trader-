@@ -148,3 +148,41 @@ def test_research_reports_probability_distribution_and_threshold_sweep():
     for metrics in diagnostics["thresholds"].values():
         assert "trades" in metrics and "net_return_pct" in metrics
     assert "same OOS/holdout data" in result["probability_diagnostics"]["warning"]
+
+def test_fit_balances_imbalanced_training_labels_and_marks_scores_uncalibrated():
+    from src.trader.learning import _fit
+
+    samples = [[float(i), float(i % 3)] for i in range(20)]
+    labels = [1] * 2 + [0] * 18
+    model = _fit(samples, labels, epochs=5)
+
+    assert model["training_class_counts"] == {"negative": 18, "positive": 2}
+    assert model["training_class_weights"]["0"] == pytest.approx(20 / 36)
+    assert model["training_class_weights"]["1"] == pytest.approx(5.0)
+    assert model["score_type"] == "class_weighted_probability_score_not_calibrated_probability"
+
+def test_research_reports_unfitted_baselines_and_oos_ranking_metrics():
+    result = research_candidate(sample_candles(), fee_rate=0.001, slippage_bps=2)
+
+    benchmarks = result["benchmark_metrics"]
+    assert set(benchmarks) == {"walk_forward_oos", "independent_holdout"}
+    for period in benchmarks.values():
+        assert set(period) == {"always_long", "positive_24h_momentum"}
+        for metrics in period.values():
+            assert metrics["trades"] >= 0
+            assert "net_return_pct" in metrics
+
+    ranking = result["score_ranking"]
+    assert ranking["interpretation"] == "RANKING_METRIC_ONLY_NOT_PROBABILITY_CALIBRATION"
+    assert ranking["walk_forward_oos_roc_auc"] is None or 0 <= ranking["walk_forward_oos_roc_auc"] <= 1
+    assert ranking["independent_holdout_roc_auc"] is None or 0 <= ranking["independent_holdout_roc_auc"] <= 1
+    assert "benchmark_metrics" in result
+    reason_codes = set(result["diagnostics"]["reason_codes"])
+    assert ("DOES_NOT_BEAT_ALWAYS_LONG" in reason_codes) == (
+        result["out_of_sample"]["net_return_pct"]
+        <= benchmarks["walk_forward_oos"]["always_long"]["net_return_pct"]
+    )
+    assert ("DOES_NOT_BEAT_ALWAYS_LONG_HOLDOUT" in reason_codes) == (
+        result["independent_holdout"]["net_return_pct"]
+        <= benchmarks["independent_holdout"]["always_long"]["net_return_pct"]
+    )
