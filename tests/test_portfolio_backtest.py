@@ -213,3 +213,26 @@ def test_portfolio_backtest_reports_same_window_buy_and_hold_benchmark():
     )
     assert result["buy_hold_return_pct"] == pytest.approx(10.0)
     assert result["buy_hold_final_equity_eur"] == pytest.approx(110.0)
+
+
+def test_portfolio_final_candle_high_activates_trailing_stop_before_low():
+    rows = flat_candles(62)
+    rows[61] = [61.0, 100.0, 110.0, 104.0, 105.0, 1000.0]
+    result = run_portfolio_backtest(
+        {"BTCEUR": rows},
+        quote_currencies={"BTCEUR": "EUR"},
+        fx_rates={"EUR": 1.0},
+        initial_cash_eur=100,
+        max_trade_eur=20,
+        max_positions=1,
+        risk_per_trade_pct=2,
+        fee_rate=0,
+        slippage_bps=0,
+        stop_loss_pct=20,
+        take_profit_pct=50,
+        trailing_stop_pct=5,
+        signal_fn=buy_on_first_eligible_close,
+    )
+    trade = result["trades_detail"][0]
+    assert trade["reason"] == "TRAILING_STOP"
+    assert trade["exit_price"] == pytest.approx(104.5)
