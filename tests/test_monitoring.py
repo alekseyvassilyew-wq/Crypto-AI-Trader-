@@ -166,3 +166,36 @@ def test_render_deploy_success_is_reported_as_recovery(monkeypatch):
     assert events[0]["title"] == "DEPLOY ENDED"
     assert events[0]["status"] == "RECOVERED"
     assert "succeeded" in events[0]["detail"]
+
+
+
+def test_github_monitor_detects_new_run_with_same_timestamp_as_baseline(monkeypatch):
+    settings = SimpleNamespace(
+        render_api_key="",
+        render_service_id="",
+        github_token="",
+        github_repository="owner/repo",
+    )
+    state = {}
+    payloads = [
+        {"workflow_runs": [
+            {"id": 20, "status": "completed", "conclusion": "success",
+             "created_at": "2026-11-04T10:00:00Z", "name": "CI"}
+        ]},
+        {"workflow_runs": [
+            {"id": 21, "status": "completed", "conclusion": "failure",
+             "created_at": "2026-11-04T10:00:00Z", "name": "CI"},
+            {"id": 20, "status": "completed", "conclusion": "success",
+             "created_at": "2026-11-04T10:00:00Z", "name": "CI"},
+        ]},
+    ]
+
+    def fake_get(*args, **kwargs):
+        return Response(payloads.pop(0))
+
+    monkeypatch.setattr("src.trader.monitoring.requests.get", fake_get)
+
+    assert poll_external_events(settings, state) == []
+    events = poll_external_events(settings, state)
+    assert len(events) == 1
+    assert events[0]["status"] == "FAILURE"
