@@ -240,3 +240,43 @@ def test_monitor_status_reports_last_success_and_errors():
     assert "Новых событий в последнем цикле: 2" in report
     assert "Последняя отправка уведомления" in report
     assert "secret-value" not in report
+
+
+
+def test_health_state_persists_without_advancing_failed_delivery_cursors():
+    from src.trader.monitoring import merge_monitor_health_state
+
+    persisted = {
+        "render_event_ids": ["old-render"],
+        "github_status": {"1": "in_progress"},
+        "last_poll_at": "old-poll",
+        "last_alert_delivery_at": "old-delivery",
+        "render_last_error": "Timeout",
+    }
+    observed = {
+        "render_event_ids": ["new-render", "old-render"],
+        "github_status": {"2": "completed"},
+        "render_last_success_at": "2026-11-04T15:00:00+00:00",
+        "github_last_success_at": "2026-11-04T15:00:01+00:00",
+    }
+
+    merged = merge_monitor_health_state(persisted, observed)
+
+    assert merged["render_last_success_at"] == observed["render_last_success_at"]
+    assert merged["github_last_success_at"] == observed["github_last_success_at"]
+    assert "render_last_error" not in merged
+    assert merged["render_event_ids"] == ["old-render"]
+    assert merged["github_status"] == {"1": "in_progress"}
+    assert merged["last_poll_at"] == "old-poll"
+    assert merged["last_alert_delivery_at"] == "old-delivery"
+
+
+def test_health_state_keeps_api_error_and_previous_success():
+    from src.trader.monitoring import merge_monitor_health_state
+
+    persisted = {"github_last_success_at": "yesterday"}
+    observed = {"github_last_error": "Timeout"}
+    merged = merge_monitor_health_state(persisted, observed)
+
+    assert merged["github_last_success_at"] == "yesterday"
+    assert merged["github_last_error"] == "Timeout"
