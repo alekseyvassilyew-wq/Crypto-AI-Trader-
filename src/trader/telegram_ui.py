@@ -940,7 +940,18 @@ def build_app(s, engine, exchange):
         connect_timeout=10, read_timeout=30, write_timeout=30, pool_timeout=10,
         connection_pool_size=16,
     )
-    app = Application.builder().token(s.bot_token).request(telegram_request).build()
+    async def close_monitor_db(application):
+        if monitor_db is not engine.db:
+            import asyncio
+            await asyncio.to_thread(monitor_db.close)
+
+    app = (
+        Application.builder()
+        .token(s.bot_token)
+        .request(telegram_request)
+        .post_shutdown(close_monitor_db)
+        .build()
+    )
     # Keep exchange/engine work serialized on its own connection. External
     # monitor state uses a second SQLite connection and runner so network/API
     # monitoring never queues behind a full market scan.
