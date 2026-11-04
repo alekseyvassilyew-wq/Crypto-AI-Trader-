@@ -52,7 +52,7 @@ def build_app(s, engine, exchange):
             f"Позиции: {len(engine.paper.positions)}/{s.max_positions}\nP/L сегодня: {engine.daily_pnl():.2f} EUR*\n"
             f"Рынок Kraken: {len(engine.market_pairs)} пар; котировок получено: {engine.market_ticker_count}\n"
             f"Мониторинг всех котировок; анализ свечей: до {s.max_candle_pairs} пар за цикл.\n"
-            "* P/L в EUR пока не включает переоценку валют, отличных от EUR."
+            "* P/L рассчитан в EUR с учётом доступных валютных курсов Kraken."
         )
 
     async def scan(update, context):
@@ -158,7 +158,7 @@ def build_app(s, engine, exchange):
 
     async def help_cmd(update, context):
         if not await authorized(update): return await deny(update)
-        await update.effective_message.reply_text("/start — меню\n/status — состояние и P/L\n/scan — сканирование\n/account — баланс Kraken (только чтение)\n/portfolio — PAPER-позиции\n/interval 1m|5m|15m|30m|1h|4h|24h — интервал\n/run — запуск PAPER\n/pause — пауза\n/stop — аварийная остановка\n/topicid — ID группы и темы\n/testtopics или /test_topics — проверка тем")
+        await update.effective_message.reply_text("/start — меню\n/status — состояние и P/L\n/scan — сканирование\n/account — виртуальные остатки PAPER\n/portfolio — PAPER-позиции\n/interval 1m|5m|15m|30m|1h|4h|24h — интервал\n/run — запуск PAPER\n/pause — пауза\n/stop — аварийная остановка\n/topicid — ID группы и темы\n/testtopics или /test_topics — проверка тем")
 
     async def callback(update, context):
         q = update.callback_query
@@ -189,13 +189,13 @@ def build_app(s, engine, exchange):
                     for item in sorted(engine.last_signals, key=lambda item: item.get("score", 0), reverse=True)[:15]
                 ]
                 position_lines = [
-                    f"{symbol}: {position['qty']:.8f} @ {position['avg_price']:.2f}"
+                    f"{symbol}: {position['qty']:.8f} @ {position['avg_price']:.8g} {position.get('quote_currency', 'EUR')}"
                     for symbol, position in engine.paper.positions.items()
                 ]
                 report = (
                     "🟢 PAPER — автоматический отчёт\n"
                     f"Последнее успешное сканирование: {scan_time}\n"
-                    f"Виртуальный баланс: {engine.paper.cash:.2f} EUR\n"
+                    f"Виртуальные средства: {engine.paper.cash_by_currency}\n"
                     f"Открытые позиции: {len(engine.paper.positions)}/{s.max_positions}\n"
                     f"P/L сегодня: {engine.daily_pnl(engine.last_prices):.2f} EUR\n"
                     "Рыночные сигналы:\n" + ("\n".join(signal_lines) or "Нет данных") +
@@ -219,7 +219,7 @@ def build_app(s, engine, exchange):
                     positions = len(engine.paper.positions)
                     portfolio_message = (
                         "💼 PAPER — обновление портфеля\n"
-                        f"Доступно: {engine.paper.cash:.2f} EUR\n"
+                        f"Доступно: {engine.paper.cash_by_currency}\n"
                         f"Открытых позиций: {positions}/{s.max_positions}\n"
                         f"P/L сегодня: {engine.daily_pnl():.2f} EUR"
                     )
