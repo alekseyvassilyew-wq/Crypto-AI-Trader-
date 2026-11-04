@@ -186,23 +186,27 @@ def run_portfolio_backtest(
             _, op, high, low, close_price, _ = row
             pos = positions[symbol]
             stop_price = pos["entry_price"] * (1 - stop)
-            trailing_price = pos["peak"] * (1 - trail) if pos["peak"] > pos["entry_price"] else 0.0
-            active_stop = max(stop_price, trailing_price)
+            prior_trailing = pos["peak"] * (1 - trail) if pos["peak"] > pos["entry_price"] else 0.0
+            prior_stop = max(stop_price, prior_trailing)
             target_price = pos["entry_price"] * (1 + target)
             reason = None
             exit_price = None
-            if op <= active_stop:
-                reason, exit_price = ("STOP_LOSS" if active_stop == stop_price else "TRAILING_STOP"), op
+            if op <= prior_stop:
+                reason, exit_price = ("STOP_LOSS" if prior_stop == stop_price else "TRAILING_STOP"), op
             elif op >= target_price:
                 reason, exit_price = "TAKE_PROFIT", op
-            elif low <= active_stop:
-                reason, exit_price = ("STOP_LOSS" if active_stop == stop_price else "TRAILING_STOP"), active_stop
-            elif high >= target_price:
-                reason, exit_price = "TAKE_PROFIT", target_price
+            else:
+                # Assume high precedes low within a candle; this activates a
+                # newly-raised trailing stop before checking the candle low.
+                pos["peak"] = max(pos["peak"], high)
+                trailing_price = pos["peak"] * (1 - trail) if pos["peak"] > pos["entry_price"] else 0.0
+                active_stop = max(stop_price, trailing_price)
+                if low <= active_stop:
+                    reason, exit_price = ("STOP_LOSS" if active_stop == stop_price else "TRAILING_STOP"), active_stop
+                elif high >= target_price:
+                    reason, exit_price = "TAKE_PROFIT", target_price
             if reason:
                 close(symbol, exit_price, timestamp, reason)
-            else:
-                pos["peak"] = max(pos["peak"], high)
 
         # Mark remaining positions at both candle extremes. Using the
         # high before the low is a conservative worst-case drawdown assumption.
@@ -311,19 +315,23 @@ def run_portfolio_backtest(
         _, op, high, low, close_price, _ = markets[symbol]["rows"][-1]
         pos = positions[symbol]
         stop_price = pos["entry_price"] * (1 - stop)
-        trailing_price = pos["peak"] * (1 - trail) if pos["peak"] > pos["entry_price"] else 0.0
-        active_stop = max(stop_price, trailing_price)
+        prior_trailing = pos["peak"] * (1 - trail) if pos["peak"] > pos["entry_price"] else 0.0
+        prior_stop = max(stop_price, prior_trailing)
         target_price = pos["entry_price"] * (1 + target)
-        if op <= active_stop:
-            reason, exit_price = ("STOP_LOSS" if active_stop == stop_price else "TRAILING_STOP"), op
+        if op <= prior_stop:
+            reason, exit_price = ("STOP_LOSS" if prior_stop == stop_price else "TRAILING_STOP"), op
         elif op >= target_price:
             reason, exit_price = "TAKE_PROFIT", op
-        elif low <= active_stop:
-            reason, exit_price = ("STOP_LOSS" if active_stop == stop_price else "TRAILING_STOP"), active_stop
-        elif high >= target_price:
-            reason, exit_price = "TAKE_PROFIT", target_price
         else:
-            reason, exit_price = "END_OF_DATA", close_price
+            pos["peak"] = max(pos["peak"], high)
+            trailing_price = pos["peak"] * (1 - trail) if pos["peak"] > pos["entry_price"] else 0.0
+            active_stop = max(stop_price, trailing_price)
+            if low <= active_stop:
+                reason, exit_price = ("STOP_LOSS" if active_stop == stop_price else "TRAILING_STOP"), active_stop
+            elif high >= target_price:
+                reason, exit_price = "TAKE_PROFIT", target_price
+            else:
+                reason, exit_price = "END_OF_DATA", close_price
         close(symbol, exit_price, last_timestamp, reason)
     final_rates = rates_at(last_timestamp)
     final_equity = sum(amount * final_rates.get(currency, 0.0) for currency, amount in cash.items())
