@@ -85,35 +85,47 @@ def poll_external_events(settings, state: dict) -> list[dict[str, str]]:
         except Exception as exc:
             log.warning("Render event polling failed: %s", type(exc).__name__)
 
-    if settings.github_token and settings.github_repository:
+    if settings.github_repository:
         try:
+            headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
+            if settings.github_token:
+                headers["Authorization"] = "Bearer " + settings.github_token
             payload = _get_json(
-                f"https://api.github.com/repos/{settings.github_repository}/actions/runs",
-                {"Authorization": f"Bearer {settings.github_token}", "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"},
-                params={"per_page": 20},
+                "https://api.github.com/repos/" + settings.github_repository + "/actions/runs",
+                headers, params={"per_page": 20},
             )
             rows = payload.get("workflow_runs", []) if isinstance(payload, dict) else []
             previous = state.get("github_status")
             current = {}
+            baseline = state.get("github_baseline_created_at")
+            latest_created_at = baseline
             for run in rows if isinstance(rows, list) else []:
                 run_id = str(run.get("id") or "")
                 if not run_id:
                     continue
                 status = str(run.get("status") or "").lower()
                 conclusion = str(run.get("conclusion") or "").lower()
+                created_at = str(run.get("created_at") or "")
                 old_status = previous.get(run_id) if isinstance(previous, dict) else None
-                if old_status not in (None, "completed") and status == "completed":
+                is_new_after_baseline = bool(baseline and created_at and created_at > baseline)
+                completed_now = status == "completed" and (
+                    old_status not in (None, "completed") or
+                    (old_status is None and is_new_after_baseline)
+                )
+                if completed_now:
+                    detail = "Branch: {}; commit: {}".format(run.get("head_branch") or "—", str(run.get("head_sha") or "")[:10])
                     events.append({
                         "source": "GitHub Actions",
                         "status": (conclusion or "completed").upper(),
                         "title": str(run.get("name") or "Workflow"),
-                        "detail": f"Ветка: {run.get('head_branch') or '—'}; commit: {str(run.get('head_sha') or '')[:10]}",
+                        "detail": detail,
                         "url": str(run.get("html_url") or ""),
                     })
                 current[run_id] = status
-            # The API returns newest runs first; retain only this bounded recent window.
+                if created_at and (latest_created_at is None or created_at > latest_created_at):
+                    latest_created_at = created_at
+            state["github_baseline_created_at"] = latest_created_at
             state["github_status"] = current
         except Exception as exc:
             log.warning("GitHub event polling failed: %s", type(exc).__name__)
-
     return events
