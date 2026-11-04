@@ -127,6 +127,18 @@ def build_app(s, engine, exchange):
         message = await context.application.bot_data["run_blocking"].run(read_status)
         await update.effective_message.reply_text(message)
 
+    async def monitorstatus(update, context):
+        if not await authorized(update): return await deny(update)
+        def read_monitor_status():
+            from .db import get_state
+            from .monitoring import format_monitor_status
+            state = get_state(engine.db, "external_monitor_state", {})
+            if not isinstance(state, dict):
+                state = {}
+            return format_monitor_status(s, state)
+        message = await context.application.bot_data["run_blocking"].run(read_monitor_status)
+        await update.effective_message.reply_text(message)
+
     async def scan(update, context):
         if not await authorized(update): return await deny(update)
         await update.effective_message.reply_text("Сканирование рынка…")
@@ -666,7 +678,7 @@ def build_app(s, engine, exchange):
     async def help_cmd(update, context):
         if not await authorized(update): return await deny(update)
         await update.effective_message.reply_text(
-            "/start — меню\n/status — состояние и P/L\n/scan — сканирование\n"
+            "/start — меню\n/status — состояние и P/L\n/monitorstatus — диагностика Render/GitHub/Telegram\n/scan — сканирование\n"
             "/account — виртуальные остатки PAPER\n/realbalance — реальные остатки Kraken (только чтение)\n"
             "/portfolio — PAPER-позиции\n/paperreport [часы] — статистика автономного PAPER-теста\n"
             "/learn XBTEUR — обучение/проверка ML-кандидата без торговли\n/learning — текущие кандидаты и shadow-тест\n"
@@ -927,7 +939,7 @@ def build_app(s, engine, exchange):
     # one requests.Session, engine state and SQLite connection.
     from .worker import SerializedRunner
     app.bot_data["run_blocking"] = SerializedRunner()
-    for name, fn in [("start", start), ("status", status), ("scan", scan), ("account", account), ("realbalance", realbalance), ("paperreport", paperreport), ("learn", learn), ("learning", learning), ("research", research_history_cmd), ("backtest", backtest), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
+    for name, fn in [("start", start), ("status", status), ("monitorstatus", monitorstatus), ("scan", scan), ("account", account), ("realbalance", realbalance), ("paperreport", paperreport), ("learn", learn), ("learning", learning), ("research", research_history_cmd), ("backtest", backtest), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
                      ("run", run), ("pause", pause), ("stop", stop), ("help", help_cmd)]:
         app.add_handler(CommandHandler(name, fn))
     app.add_handler(CallbackQueryHandler(callback))
@@ -976,6 +988,12 @@ def build_app(s, engine, exchange):
 
             # Commit only after all sends succeeded. Empty event batches still
             # commit polling cursors so the initial baseline is persisted.
+            from datetime import datetime, timezone
+            state["last_poll_at"] = datetime.now(timezone.utc).isoformat()
+            state["last_events_count"] = len(events)
+            if events:
+                state["last_alert_delivery_at"] = state["last_poll_at"]
+            log.info("External monitoring cycle succeeded: new_events=%d", len(events))
             def persist_monitor_state():
                 from .db import set_state
                 set_state(engine.db, "external_monitor_state", state)

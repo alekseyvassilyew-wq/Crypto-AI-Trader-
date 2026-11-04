@@ -38,6 +38,44 @@ def _render_detail(details) -> str:
     return str(details or "Render service event")[:900]
 
 
+def format_monitor_status(settings, state: dict) -> str:
+    """Build a safe owner-facing health summary without exposing credentials."""
+    render_ready = bool(getattr(settings, "render_api_key", "") and getattr(settings, "render_service_id", ""))
+    github_ready = bool(getattr(settings, "github_repository", ""))
+    telegram_ready = bool(getattr(settings, "telegram_group_chat_id", 0))
+    lines = [
+        "🛰 МОНИТОРИНГ ВНЕШНИХ СЕРВИСОВ",
+        f"Render API: {'ПОДКЛЮЧЁН' if render_ready else 'НЕ НАСТРОЕН'}",
+        f"GitHub Actions: {'ПОДКЛЮЧЁН' if github_ready else 'НЕ НАСТРОЕН'}",
+        f"Telegram-группа: {'ПОДКЛЮЧЕНА' if telegram_ready else 'НЕ НАСТРОЕНА'}",
+    ]
+    if render_ready:
+        saved = state.get("render_event_ids")
+        lines.append(f"Render: сохранено событий — {len(saved) if isinstance(saved, list) else 0}")
+        if state.get("render_last_error"):
+            lines.append(f"Последняя ошибка Render API: {state['render_last_error']}")
+        elif state.get("render_last_success_at"):
+            lines.append(f"Последняя успешная проверка Render: {state['render_last_success_at']}")
+        else:
+            lines.append("Последняя успешная проверка Render: ещё не зафиксирована")
+    if github_ready:
+        tracked = state.get("github_status")
+        lines.append(f"GitHub: отслеживается запусков — {len(tracked) if isinstance(tracked, dict) else 0}")
+        if state.get("github_last_error"):
+            lines.append(f"Последняя ошибка GitHub API: {state['github_last_error']}")
+        elif state.get("github_last_success_at"):
+            lines.append(f"Последняя успешная проверка GitHub: {state['github_last_success_at']}")
+        else:
+            lines.append("Последняя успешная проверка GitHub: ещё не зафиксирована")
+    if state.get("last_poll_at"):
+        lines.append(f"Последний завершённый цикл мониторинга: {state['last_poll_at']}")
+        lines.append(f"Новых событий в последнем цикле: {int(state.get('last_events_count') or 0)}")
+    if state.get("last_alert_delivery_at"):
+        lines.append(f"Последняя отправка уведомления: {state['last_alert_delivery_at']}")
+    lines.append("API-ключи не отображаются. Доставка считается успешной только после ответа Telegram.")
+    return "\n".join(lines)
+
+
 def poll_external_events(settings, state: dict) -> list[dict[str, str]]:
     """Return newly observed events; caller persists state to SQLite."""
     events: list[dict[str, str]] = []
@@ -82,7 +120,11 @@ def poll_external_events(settings, state: dict) -> list[dict[str, str]]:
             # First poll establishes a baseline and avoids replaying old history.
             # Persist a bounded window so restarts do not duplicate notifications.
             state["render_event_ids"] = list(dict.fromkeys(current + (seen or [])))[:300]
+            from datetime import datetime, timezone
+            state["render_last_success_at"] = datetime.now(timezone.utc).isoformat()
+            state.pop("render_last_error", None)
         except Exception as exc:
+            state["render_last_error"] = type(exc).__name__
             log.warning("Render event polling failed: %s", type(exc).__name__)
 
     if settings.github_repository:
@@ -126,6 +168,10 @@ def poll_external_events(settings, state: dict) -> list[dict[str, str]]:
                     latest_created_at = created_at
             state["github_baseline_created_at"] = latest_created_at
             state["github_status"] = current
+            from datetime import datetime, timezone
+            state["github_last_success_at"] = datetime.now(timezone.utc).isoformat()
+            state.pop("github_last_error", None)
         except Exception as exc:
+            state["github_last_error"] = type(exc).__name__
             log.warning("GitHub event polling failed: %s", type(exc).__name__)
     return events
