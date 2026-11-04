@@ -276,10 +276,47 @@ class Engine:
                 if not quote_to_eur or quote_to_eur <= 0:
                     audit(self.db, "ENTRY_SKIPPED", f"{signal['symbol']}: no EUR valuation rate for {quote_currency}")
                     continue
-                # Spend only the balance already held in this market's quote currency.
-                # Never silently convert EUR to fund an individual trade.
+                # Autonomously route existing PAPER cash into the market's
+                # quote currency when needed. Convert only enough to reach the
+                # per-trade EUR cap; never use leverage or create a negative balance.
                 quote_balance = self.paper.balance(quote_currency)
-                allocation = min(float(self.s.max_trade) / quote_to_eur, quote_balance / 2.0)
+                target_allocation = float(self.s.max_trade) / quote_to_eur
+                target_shortfall = max(0.0, target_allocation - quote_balance)
+                if target_shortfall > 1e-12:
+                    rates = self._fx_rates(prices)
+                    for source_currency in sorted(
+                        (currency for currency, amount in self.paper.cash_by_currency.items()
+                         if currency != quote_currency and amount > 1e-12),
+                        key=lambda currency: (currency != "EUR", currency),
+                    ):
+                        source_to_eur = rates.get(source_currency)
+                        if not source_to_eur or source_to_eur <= 0:
+                            continue
+                        # Conversion fee is charged in the destination currency.
+                        source_needed = (
+                            target_shortfall / (1.0 - self.paper.fee_rate)
+                            * quote_to_eur / source_to_eur
+                        )
+                        source_amount = min(self.paper.balance(source_currency), source_needed)
+                        if source_amount <= 1e-12:
+                            continue
+                        conversion = self.paper.convert(
+                            source_currency, quote_currency, source_amount,
+                            source_to_eur / quote_to_eur,
+                        )
+                        audit(
+                            self.db, "PAPER_FX_CONVERSION",
+                            f"{conversion['from']}->{conversion['to']} "
+                            f"spent={conversion['spent']:.8f} received={conversion['received']:.8f}",
+                        )
+                        quote_balance = self.paper.balance(quote_currency)
+                        target_shortfall = max(0.0, target_allocation - quote_balance)
+                        if target_shortfall <= 1e-12:
+                            break
+                allocation = min(
+                    target_allocation,
+                    quote_balance / (1.0 + self.paper.fee_rate),
+                )
                 if allocation <= 0:
                     audit(self.db, "ENTRY_SKIPPED", f"{signal['symbol']}: no PAPER funds in {quote_currency}")
                     continue
