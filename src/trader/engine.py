@@ -364,9 +364,15 @@ class Engine:
             if len(self.paper.positions) >= self.s.max_positions:
                 break
             try:
-                check_order(self.s.max_trade, signal["spread_bps"], signal.get("turnover_eur", signal["turnover"]), len(self.paper.positions),
+                rates = self._fx_rates(prices)
+                equity_eur = self.paper.equity(prices, rates)
+                atr_percent = max(0.0, float(signal.get("atr_percent") or 0.0))
+                stop_distance_pct = max(float(self.s.stop_loss_pct), atr_percent * 1.5, 0.5)
+                risk_budget_eur = equity_eur * float(getattr(self.s, "risk_per_trade_pct", 0.5)) / 100.0
+                trade_budget_eur = min(float(self.s.max_trade), risk_budget_eur / (stop_distance_pct / 100.0))
+                check_order(trade_budget_eur, signal["spread_bps"], signal.get("turnover_eur", signal["turnover"]), len(self.paper.positions),
                             self.daily_pnl(prices), self.limits)
-                quote_to_eur = self._fx_rates(prices).get(quote_currency)
+                quote_to_eur = rates.get(quote_currency)
                 if not quote_to_eur or quote_to_eur <= 0:
                     audit(self.db, "ENTRY_SKIPPED", f"{signal['symbol']}: no EUR valuation rate for {quote_currency}")
                     continue
@@ -374,10 +380,9 @@ class Engine:
                 # quote currency when needed. Convert only enough to reach the
                 # per-trade EUR cap; never use leverage or create a negative balance.
                 quote_balance = self.paper.balance(quote_currency)
-                target_allocation = float(self.s.max_trade) / quote_to_eur
+                target_allocation = trade_budget_eur / quote_to_eur
                 target_shortfall = max(0.0, target_allocation - quote_balance)
                 if target_shortfall > 1e-12:
-                    rates = self._fx_rates(prices)
                     for source_currency in sorted(
                         (currency for currency, amount in self.paper.cash_by_currency.items()
                          if currency != quote_currency and amount > 1e-12),
