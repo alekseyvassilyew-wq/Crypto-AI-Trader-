@@ -142,6 +142,31 @@ class Engine:
             raise ValueError("Invalid PAPER sell fill price")
         return price
 
+    def _paper_trade_eur_values(self, quote_currency, fee, prices, *, position=None, qty=None, exit_price=None):
+        """Convert PAPER fees and realized round-trip PnL to EUR using fresh FX only."""
+        currency = str(quote_currency or "EUR").upper()
+        rate = self._fresh_fx_rates(prices).get(currency)
+        if rate is None:
+            return None, None
+        rate = float(rate)
+        fee_value = float(fee)
+        if not math.isfinite(rate) or rate <= 0 or not math.isfinite(fee_value) or fee_value < 0:
+            return None, None
+        fee_eur = fee_value * rate
+        realized_pnl_eur = None
+        if position is not None and qty is not None and exit_price is not None:
+            quantity = float(qty)
+            entry_price = float(position["avg_price"])
+            exit_value = float(exit_price)
+            if not all(math.isfinite(value) and value > 0 for value in (quantity, entry_price, exit_value)):
+                raise ValueError("Invalid PAPER realized PnL inputs")
+            entry_fee = quantity * entry_price * self.paper.fee_rate
+            exit_fee = quantity * exit_value * self.paper.fee_rate
+            realized_pnl_eur = (quantity * (exit_value - entry_price) - entry_fee - exit_fee) * rate
+            if not math.isfinite(realized_pnl_eur):
+                raise ValueError("PAPER realized EUR PnL is not finite")
+        return fee_eur, realized_pnl_eur
+
     def _equity_after_liquidation(self, prices=None, fx_rates=None):
         """Estimate net liquidation value after exit fee and slippage on holdings."""
         prices = self.last_prices if prices is None else prices
@@ -655,8 +680,17 @@ class Engine:
                 else None
             )
             if reason:
+                position_before_exit = dict(pos)
                 fill = self.paper.sell(symbol, pos["qty"], exit_price)
-                save_trade(self.db, "PAPER", symbol, "Sell", fill["qty"], fill["quote"], fill["fee"], fill["price"], "FILLED")
+                fee_eur, realized_pnl_eur = self._paper_trade_eur_values(
+                    position_before_exit.get("quote_currency", "EUR"), fill["fee"], prices,
+                    position=position_before_exit, qty=fill["qty"], exit_price=fill["price"],
+                )
+                save_trade(
+                    self.db, "PAPER", symbol, "Sell", fill["qty"], fill["quote"],
+                    fill["fee"], fill["price"], "FILLED",
+                    fee_eur=fee_eur, realized_pnl_eur=realized_pnl_eur,
+                )
                 realized_pct = (exit_price / entry - 1) * 100
                 audit(
                     self.db, reason,
@@ -676,8 +710,17 @@ class Engine:
             for symbol, pos in list(self.paper.positions.items()):
                 quote_row = result_by_symbol[str(symbol).upper()]
                 exit_price = self._paper_sell_price(float(quote_row["bid"]))
+                position_before_exit = dict(pos)
                 fill = self.paper.sell(symbol, pos["qty"], exit_price)
-                save_trade(self.db, "PAPER", symbol, "Sell", fill["qty"], fill["quote"], fill["fee"], fill["price"], "FILLED")
+                fee_eur, realized_pnl_eur = self._paper_trade_eur_values(
+                    position_before_exit.get("quote_currency", "EUR"), fill["fee"], prices,
+                    position=position_before_exit, qty=fill["qty"], exit_price=fill["price"],
+                )
+                save_trade(
+                    self.db, "PAPER", symbol, "Sell", fill["qty"], fill["quote"],
+                    fill["fee"], fill["price"], "FILLED",
+                    fee_eur=fee_eur, realized_pnl_eur=realized_pnl_eur,
+                )
                 realized_pct = (exit_price / pos["avg_price"] - 1.0) * 100.0
                 audit(
                     self.db, "DAILY_LOSS_LIQUIDATION",
@@ -796,7 +839,11 @@ class Engine:
                 # A PAPER buy crosses the spread and therefore fills at ask.
                 entry_price = self._paper_buy_price(float(signal.get("ask") or signal["price"]))
                 fill = self.paper.buy(signal["symbol"], allocation, entry_price, currency=quote_currency)
-                save_trade(self.db, "PAPER", signal["symbol"], "Buy", fill["qty"], fill["quote"], fill["fee"], fill["price"], "FILLED")
+                fee_eur, _ = self._paper_trade_eur_values(quote_currency, fill["fee"], prices)
+                save_trade(
+                    self.db, "PAPER", signal["symbol"], "Buy", fill["qty"],
+                    fill["quote"], fill["fee"], fill["price"], "FILLED", fee_eur=fee_eur,
+                )
                 actions.append(f"{signal['symbol']} BUY {fill['qty']:.8f} @ {fill['price']}")
             except (ValueError, PermissionError) as exc:
                 audit(self.db, "ENTRY_SKIPPED", f"{signal['symbol']}: {exc}")
