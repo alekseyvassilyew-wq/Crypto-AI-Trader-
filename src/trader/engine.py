@@ -2,7 +2,8 @@ from datetime import datetime, timezone
 import math
 from .risk import Limits, check_order
 from .indicators import analyze, confirm_multi_timeframe
-from .db import audit, save_trade, get_state, set_state, save_paper_snapshot
+from .learning import extract_features, predict_probability
+from .db import audit, save_trade, get_state, set_state, save_paper_snapshot, record_shadow_prediction, settle_shadow_predictions
 
 
 class Engine:
@@ -151,6 +152,32 @@ class Engine:
                 "price": last, "bid": bid, "ask": ask, "spread_bps": spread, "turnover": turnover, "turnover_eur": turnover_eur,
                 "reasons": [f"Candle data unavailable: {type(exc).__name__}"],
             }
+        # Research candidates run in shadow only: their forecasts and later
+        # realized outcomes are stored, but never modify BUY/HOLD decisions.
+        try:
+            candidate = get_state(self.db, "ml_candidate_" + str(symbol).upper(), {})
+            model = candidate.get("model") if isinstance(candidate, dict) else None
+            if model and len(base_candles) >= 60:
+                settle_shadow_predictions(
+                    self.db, symbol=symbol, candles=base_candles,
+                    fee_rate=self.s.fee_rate, slippage_bps=5.0,
+                )
+                features = extract_features(base_candles)
+                if features is not None:
+                    probability = predict_probability(model, features)
+                    threshold = float(candidate.get("probability_threshold", 0.58))
+                    latest = base_candles[-1]
+                    record_shadow_prediction(
+                        self.db, symbol=symbol, signal_ts=float(latest[0]),
+                        target_ts=float(latest[0]) + int(candidate.get("horizon_candles", 3)) * 3600,
+                        probability=probability, threshold=threshold,
+                        entry_price=float(latest[4]),
+                    )
+                    result["ml_shadow_probability"] = probability
+                    result["ml_shadow_threshold"] = threshold
+                    result["ml_shadow_candidate"] = probability >= threshold
+        except Exception as shadow_exc:
+            audit(self.db, "ML_SHADOW_ERROR", f"{symbol}: {type(shadow_exc).__name__}: {shadow_exc}")
         result.update(symbol=symbol, price=last or result.get("price", 0), bid=bid, ask=ask, spread_bps=spread, turnover=turnover, turnover_eur=turnover_eur, quote=quote_currency)
         if spread > self.s.max_spread_bps:
             result["signal"] = "HOLD"
