@@ -63,14 +63,18 @@ def test_ohlc_requests_are_spaced_at_least_one_second(monkeypatch):
 
     client = KrakenSpot()
     client._pair_cache["XBTEUR"] = ("XXBTZEUR", {})
+    client._last_ohlc_request_at = 100.0
     monkeypatch.setattr(client, "_request", lambda *a, **k: {
         "XXBTZEUR": [[1, "10", "12", "9", "11", "0", "4.5"], [2, "11", "13", "10", "12", "0", "5.5"]],
         "last": "2",
     })
-    clock = iter([100.0, 100.0, 100.0, 100.0])
+    clock = [100.0]
     sleeps = []
-    monkeypatch.setattr(exchange_module.time, "monotonic", lambda: next(clock))
-    monkeypatch.setattr(exchange_module.time, "sleep", sleeps.append)
+    monkeypatch.setattr(exchange_module.time, "monotonic", lambda: clock[0])
+    def advance(seconds):
+        sleeps.append(seconds)
+        clock[0] += seconds
+    monkeypatch.setattr(exchange_module.time, "sleep", advance)
 
     client.candles("XBTEUR")
     client.candles("XBTEUR")
