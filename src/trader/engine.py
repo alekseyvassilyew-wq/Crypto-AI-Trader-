@@ -130,7 +130,7 @@ class Engine:
             result["reasons"].append("Turnover too low")
         return result
 
-    def scan(self):
+    def scan(self, seed_wallet=False):
         # Modern Kraken client: discover all online spot pairs and fetch the
         # complete ticker snapshot with one public API request.
         if hasattr(self.exchange, "discover_pairs"):
@@ -146,7 +146,10 @@ class Engine:
                 for item in tickers if float(item.get("lastPrice") or 0) > 0
             }
             fx_rates = self._fx_rates(snapshot_prices)
-            self._seed_multicurrency_wallet(fx_rates)
+            # Market inspection must be side-effect free. Seed the virtual
+            # multi-currency portfolio only inside an active PAPER cycle.
+            if seed_wallet:
+                self._seed_multicurrency_wallet(fx_rates)
             eligible = []
             results_by_symbol = {}
             for pair in pairs:
@@ -232,7 +235,7 @@ class Engine:
             return []
         self._ensure_day()
         try:
-            results = self.scan()
+            results = self.scan(seed_wallet=True)
             self.last_scan_at = datetime.now(timezone.utc)
             self.last_prices = {x["symbol"]: float(x.get("price") or 0) for x in results if float(x.get("price") or 0) > 0}
             self.last_signals = results
