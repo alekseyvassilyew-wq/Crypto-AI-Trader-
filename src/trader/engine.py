@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 import math
 from .risk import Limits, check_order
-from .indicators import analyze
+from .indicators import analyze, confirm_multi_timeframe
 from .db import audit, save_trade, get_state, set_state
 
 
@@ -127,7 +127,19 @@ class Engine:
         quote_currency = str(quote_currency or t.get("quote") or "EUR").upper()
         turnover_eur = turnover * (fx_rates or {"EUR": 1.0}).get(quote_currency, 0.0)
         try:
-            result = analyze(self.exchange.candles(symbol))
+            result = analyze(self.exchange.candles(symbol, interval="60", limit=120))
+            # Higher-timeframe requests are made only for potential entries,
+            # limiting Kraken REST load while refusing unconfirmed BUY signals.
+            if result.get("signal") == "BUY" and getattr(self.s, "enable_multi_timeframe", False):
+                try:
+                    candles_4h = self.exchange.candles(symbol, interval="240", limit=100)
+                    candles_1d = self.exchange.candles(symbol, interval="1440", limit=100)
+                    result = confirm_multi_timeframe(result, candles_4h, candles_1d)
+                except Exception as mtf_exc:
+                    result["signal"] = "HOLD"
+                    result.setdefault("reasons", []).append(
+                        f"Multi-timeframe confirmation unavailable: {type(mtf_exc).__name__}"
+                    )
         except Exception as exc:
             return {
                 "symbol": symbol, "signal": "HOLD", "score": 0,
