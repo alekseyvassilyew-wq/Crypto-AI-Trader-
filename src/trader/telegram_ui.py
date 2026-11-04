@@ -61,16 +61,39 @@ def build_app(s, engine, exchange):
         try:
             rows = await context.application.bot_data["run_blocking"].run(engine.scan)
             buy_rows = [x for x in rows if x.get("signal") == "BUY"]
-            analyzed = [x for x in rows if "Ticker monitored; OHLC analysis deferred by rotating scan budget" not in x.get("reasons", []) and x.get("quote") in engine.paper.cash_by_currency]
-            ranked = sorted(analyzed, key=lambda x: (x.get("score", 0), x.get("turnover", 0)), reverse=True)[:12]
+            scan_prices = {
+                x["symbol"]: float(x.get("price") or 0)
+                for x in rows if x.get("symbol") and float(x.get("price") or 0) > 0
+            }
+            fx_rates = engine._fx_rates(scan_prices)
+            analyzed = [
+                x for x in rows
+                if "Ticker monitored; OHLC analysis deferred by rotating scan budget" not in x.get("reasons", [])
+                and (
+                    engine.paper.balance(str(x.get("quote") or "EUR").upper()) > 0
+                    or (
+                        engine.paper.balance("EUR") > 0
+                        and fx_rates.get(str(x.get("quote") or "EUR").upper(), 0) > 0
+                    )
+                )
+            ]
+            ranked = sorted(
+                analyzed,
+                key=lambda x: (x.get("score", 0), x.get("turnover_eur", 0)),
+                reverse=True,
+            )[:12]
             lines = [
                 f"Всего рынков Kraken: {len(engine.market_pairs)}",
                 f"Тикеров получено: {engine.market_ticker_count}",
-                f"Пар с валютой кошелька в индикаторном анализе: {len(analyzed)}",
+                f"Пар с доступным PAPER-финансированием, прошедших анализ свечей: {len(analyzed)}",
                 f"Сигналов BUY: {len(buy_rows)}",
                 "",
             ]
-            lines.extend(f"{x['symbol']}: {x['signal']} ({x.get('score', 0)}/5), цена {x.get('price', 0):,.8g}" for x in ranked)
+            lines.extend(
+                f"{x['symbol']}: {x['signal']} ({x.get('score', 0)}/5), "
+                f"оборот {x.get('turnover_eur', 0):,.0f} EUR/24ч, цена {x.get('price', 0):,.8g}"
+                for x in ranked
+            )
             lines.append("Все рынки получают мониторинг котировок; анализ свечей ограничен бюджетом запросов.")
             await update.effective_message.reply_text("\n".join(lines)[:3900])
         except Exception as exc:
