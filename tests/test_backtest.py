@@ -67,3 +67,40 @@ def test_backtest_rejects_unsorted_or_invalid_candles():
 def test_backtest_rejects_invalid_cost_assumptions(fee, slippage):
     with pytest.raises(ValueError):
         run_backtest(candles(), fee_rate=fee, slippage_bps=slippage)
+
+
+def test_backtest_charges_fee_on_gross_notional_and_reconciles_round_trip():
+    result = run_backtest(
+        candles(), initial_cash=100, max_trade=50, fee_rate=0.01,
+        slippage_bps=0, signal_fn=buy_once,
+    )
+    trade = result["trades_detail"][0]
+    assert trade["gross_entry_notional"] == pytest.approx(50)
+    assert trade["entry_fee"] == pytest.approx(0.5)
+    assert trade["gross_exit_notional"] == pytest.approx(50)
+    assert trade["exit_fee"] == pytest.approx(0.5)
+    assert result["fees_paid"] == pytest.approx(1.0)
+    assert result["fees_paid"] == pytest.approx(result["gross_turnover"] * result["fee_rate"])
+    assert result["final_equity"] == pytest.approx(99.0)
+
+
+def test_backtest_reports_same_window_buy_and_hold_benchmark():
+    rows = candles()
+    rows[-1] = [69.0, 100.0, 111.0, 99.0, 110.0, 1000.0]
+    result = run_backtest(
+        rows, initial_cash=100, max_trade=50, fee_rate=0.01,
+        slippage_bps=0, signal_fn=lambda history: {"signal": "HOLD"},
+    )
+    assert result["trades"] == 0
+    assert result["return_pct"] == pytest.approx(0)
+    assert result["buy_hold_return_pct"] > 0
+    assert result["buy_hold_final_equity"] > 100
+
+
+def test_backtest_fee_total_reconciles_to_gross_turnover():
+    result = run_backtest(
+        candles(), initial_cash=20, max_trade=5, fee_rate=0.0026,
+        slippage_bps=5, signal_fn=buy_once,
+    )
+    assert result["fees_paid"] <= result["gross_turnover"] * result["fee_rate"] + 1e-12
+    assert result["fees_paid"] == pytest.approx(result["entry_fees_paid"] + result["exit_fees_paid"])
