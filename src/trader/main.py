@@ -25,6 +25,13 @@ def main():
     else:
         logging.warning("Kraken API credentials not set; public market data only. Add credentials to enable balance check.")
     broker = PaperBroker(settings.paper_start, settings.fee_rate, db=db)
+    if broker.restored_from_db:
+        logging.info(
+            "PAPER wallet restored from persistent SQLite: currencies=%d positions=%d",
+            len(broker.cash_by_currency), len(broker.positions),
+        )
+    else:
+        logging.warning("No saved PAPER wallet found; initialized configured starting balance")
     engine = Engine(settings, db, exchange, broker)
     logging.info("Starting PAPER-only service. Real exchange order placement is not implemented.")
     build_app(settings, engine, exchange).run_polling(drop_pending_updates=True)
