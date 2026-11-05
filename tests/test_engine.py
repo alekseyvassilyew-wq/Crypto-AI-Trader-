@@ -1065,3 +1065,18 @@ def test_shadow_research_uses_configured_paper_slippage(tmp_path, monkeypatch):
         shadow_error["details"] if shadow_error else "shadow settlement was not called"
     )
     db.close()
+
+
+def test_paper_slippage_rate_converts_and_rejects_out_of_range_values(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.s.paper_slippage_bps = 17.0
+    assert engine._slippage_rate() == pytest.approx(0.0017)
+
+    engine.s.paper_slippage_bps = 100.0
+    assert engine._slippage_rate() == pytest.approx(0.01)
+
+    for invalid in (-0.01, 100.01, float("nan"), float("inf")):
+        engine.s.paper_slippage_bps = invalid
+        with pytest.raises(ValueError):
+            engine._slippage_rate()
+    db.close()
