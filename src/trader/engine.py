@@ -342,14 +342,36 @@ class Engine:
         rates["EUR"] = 1.0
         return rates
 
-    def _save_cycle_snapshot(self, results, prices):
-        """Persist successful PAPER telemetry after positions and cash are updated."""
+    def _save_cycle_snapshot(self, results, prices, *, require_fresh_fx=False):
+        """Persist PAPER telemetry only when every non-zero balance is valuated."""
         try:
             analyzed = sum(1 for item in results if item.get("ohlc_analyzed") is True)
+            rates = self._fresh_fx_rates(prices) if require_fresh_fx else self._fx_rates(prices)
+            if require_fresh_fx:
+                required = {
+                    str(currency).upper()
+                    for currency, amount in self.paper.cash_by_currency.items()
+                    if float(amount) > 1e-12
+                }
+                required.update(
+                    str(position.get("quote_currency", "EUR")).upper()
+                    for position in self.paper.positions.values()
+                )
+                missing_rates = sorted(currency for currency in required if currency not in rates)
+                missing_prices = sorted(
+                    symbol for symbol in self.paper.positions
+                    if not prices.get(str(symbol).upper()) or float(prices.get(str(symbol).upper()) or 0) <= 0
+                )
+                if missing_rates or missing_prices:
+                    raise ValueError(
+                        "fresh PAPER valuation incomplete: "
+                        f"missing FX={','.join(missing_rates) or 'none'}; "
+                        f"missing prices={','.join(missing_prices) or 'none'}"
+                    )
             save_paper_snapshot(
                 self.db,
                 ts=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-                equity_eur=self._equity_after_liquidation(prices, self._fx_rates(prices)),
+                equity_eur=self._equity_after_liquidation(prices, rates),
                 cash=self.paper.cash_by_currency,
                 open_positions=len(self.paper.positions),
                 analyzed_markets=analyzed,
@@ -700,6 +722,9 @@ class Engine:
             self.last_signals = results
             set_state(self.db, "paper_fx_rates", self._fx_rates(self.last_prices))
             if self.paused:
+                # Keep the dashboard snapshot current while monitoring in PAUSED,
+                # but never value non-EUR balances or positions with cached FX.
+                self._save_cycle_snapshot(results, self.last_prices, require_fresh_fx=True)
                 return []
         except Exception as exc:
             # Never trade on partial or stale market data after an exchange failure.
