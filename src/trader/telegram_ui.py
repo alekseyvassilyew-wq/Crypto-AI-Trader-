@@ -7,6 +7,20 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 from telegram.request import HTTPXRequest
 from .db import backup_database, save_telegram_report_pages, get_telegram_report_pages
 
+
+async def _save_report_pages(runner, db, report_key, pages):
+    """Persist Telegram pagination data under the same lock as engine SQLite work."""
+    return await runner.run(
+        lambda: save_telegram_report_pages(db, report_key, pages)
+    )
+
+
+async def _load_report_pages(runner, db, report_key):
+    """Load Telegram pagination data under the same lock as engine SQLite work."""
+    return await runner.run(
+        lambda: get_telegram_report_pages(db, report_key)
+    )
+
 log = logging.getLogger(__name__)
 
 def _format_scan_report(rows, pair_count, ticker_count):
@@ -494,7 +508,7 @@ def build_app(s, engine, exchange):
         message = await context.bot.send_message(**kwargs)
         if len(pages) > 1:
             key = f"{message.chat_id}:{message.message_id}"
-            save_telegram_report_pages(engine.db, key, pages)
+            await _save_report_pages(context.application.bot_data["run_blocking"], engine.db, key, pages)
             await message.edit_reply_markup(reply_markup=_report_page_keyboard(message.message_id, 0, len(pages)))
 
     async def send_report(update, context, report_text, parse_mode=None):
@@ -505,7 +519,7 @@ def build_app(s, engine, exchange):
         message = await update.effective_message.reply_text(pages[0])
         if len(pages) > 1:
             key = f"{message.chat_id}:{message.message_id}"
-            save_telegram_report_pages(engine.db, key, pages)
+            await _save_report_pages(context.application.bot_data["run_blocking"], engine.db, key, pages)
             await message.edit_reply_markup(reply_markup=_report_page_keyboard(message.message_id, 0, len(pages)))
         return message
 
@@ -1327,7 +1341,7 @@ def build_app(s, engine, exchange):
                 _, message_id_text, page_text = q.data.split(":", 2)
                 message_id, page_index = int(message_id_text), int(page_text)
                 key = f"{q.message.chat_id}:{message_id}"
-                pages = get_telegram_report_pages(engine.db, key)
+                pages = await _load_report_pages(context.application.bot_data["run_blocking"], engine.db, key)
                 if not pages or not 0 <= page_index < len(pages):
                     await q.answer("Страницы отчёта больше недоступны", show_alert=True)
                     return
