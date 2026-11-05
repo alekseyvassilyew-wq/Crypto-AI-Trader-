@@ -126,6 +126,23 @@ def select_sharp_decliners(tickers, *, min_drop_pct=-5.0, min_turnover_eur=10000
     return candidates[:max(0, int(limit))]
 
 
+def should_alert_dip_status(previous, status, now_epoch, *, cooldown_seconds=21600):
+    """Alert on a new classification or repeat it only after a bounded cooldown."""
+    if status not in {"POTENTIAL_BUY", "WATCH", "REJECT"}:
+        return False
+    try:
+        now = float(now_epoch)
+        cooldown = float(cooldown_seconds)
+        last_alert = float((previous or {}).get("last_alert_epoch", 0.0))
+    except (TypeError, ValueError, OverflowError, AttributeError):
+        return True
+    if not all(math.isfinite(value) for value in (now, cooldown, last_alert)) or cooldown < 0:
+        return True
+    if (previous or {}).get("status") != status:
+        return True
+    return now - last_alert >= cooldown
+
+
 def evaluate_dip_candidate(ticker, frames, *, min_turnover_eur=10000.0,
                            max_spread_bps=25.0):
     """Classify a falling asset without creating or authorizing an order."""
