@@ -128,6 +128,76 @@ def _format_scan_report(rows, pair_count, ticker_count):
     report = "\n".join(lines)
     return report
 
+def _format_market_report(summary, pair_count, ticker_count, generated_at=None):
+    """Render the broad Kraken market summary as one paginatable Telegram report."""
+    regime_labels = {
+        "BULLISH_BREADTH": "🟢 ПРЕОБЛАДАЕТ РОСТ",
+        "BEARISH_BREADTH": "🔴 ПРЕОБЛАДАЕТ СНИЖЕНИЕ",
+        "MIXED": "🟡 СМЕШАННЫЙ РЫНОК",
+        "INSUFFICIENT_DATA": "⚪ НЕДОСТАТОЧНО ДАННЫХ",
+    }
+
+    def pct(value):
+        try:
+            number = float(value)
+            return f"{number:+.2f}%" if math.isfinite(number) else "н/д"
+        except (TypeError, ValueError, OverflowError):
+            return "н/д"
+
+    timestamp = generated_at or datetime.now(timezone.utc)
+    trends = summary.get("trend_counts") or {}
+    lines = [
+        "🌐 ОБЗОР КРИПТОРЫНКА · KRAKEN",
+        "━━━━━━━━━━━━━━━━━━",
+        f"🕒 Сформирован: {timestamp.strftime('%Y-%m-%d %H:%M UTC')}",
+        f"📚 Spot-пары: {int(pair_count):,}  •  Тикеры: {int(ticker_count):,}",
+        f"🪙 Уникальные активы с дневным изменением: {summary.get('asset_count', 0)}",
+        "",
+        "🧭 ШИРИНА РЫНКА",
+        regime_labels.get(summary.get("market_regime"), "⚪ НЕТ ДАННЫХ"),
+        f"🟢 Растут: {summary.get('up', 0)}  •  🔴 Снижаются: {summary.get('down', 0)}  •  ⚪ Без движения: {summary.get('flat', 0)}",
+        f"Доля растущих: {pct(summary.get('breadth_pct'))}",
+        f"Среднее изменение: {pct(summary.get('mean_change_pct'))}  •  Медиана: {pct(summary.get('median_change_pct'))}",
+        "Изменение считается от открытия текущего UTC-дня Kraken, не за скользящие 24 часа.",
+        "",
+        "📈 ЛИДЕРЫ РОСТА",
+    ]
+    gainers = summary.get("gainers") or []
+    if gainers:
+        lines.extend(
+            f"🟢 {item.get('base', '—')}: {pct(item.get('dayChangePct'))}  ·  {item.get('symbol', '—')}"
+            for item in gainers
+        )
+    else:
+        lines.append("Нет данных об открытии UTC-дня.")
+    lines.extend(["", "📉 ЛИДЕРЫ СНИЖЕНИЯ"])
+    losers = summary.get("losers") or []
+    if losers:
+        lines.extend(
+            f"🔴 {item.get('base', '—')}: {pct(item.get('dayChangePct'))}  ·  {item.get('symbol', '—')}"
+            for item in losers
+        )
+    else:
+        lines.append("Нет данных.")
+    lines.extend([
+        "",
+        "🕯 ТЕХНИЧЕСКАЯ КАРТИНА · ЧАСОВЫЕ СВЕЧИ",
+        f"Проанализировано: {summary.get('analyzed_count', 0)} рынков",
+        f"🟢 Восходящий тренд: {trends.get('BULLISH', 0)}  •  🔴 Нисходящий: {trends.get('BEARISH', 0)}  •  ⚪ Нейтральный: {trends.get('NEUTRAL', 0)}",
+    ])
+    regimes = summary.get("regime_counts") or {}
+    if regimes:
+        lines.append("Режимы: " + " · ".join(
+            f"{name}: {count}" for name, count in sorted(regimes.items())
+        ))
+    lines.extend([
+        "",
+        "ℹ️ Для подробного разбора монеты: /analyze XBTEUR",
+        "Дневная ширина рынка — обзор, а не торговый сигнал. Свечи анализируются в пределах API-бюджета.",
+    ])
+    return "\\n".join(lines)
+
+
 def _paginate_report_text(text, max_chars=3400):
     """Split a Telegram report into readable pages without splitting lines where possible."""
     source = str(text or "").strip()
@@ -749,65 +819,7 @@ def build_app(s, engine, exchange):
                 return summary, len(engine.market_pairs), engine.market_ticker_count
 
             summary, pair_count, ticker_count = await context.application.bot_data["run_blocking"].run(build_market_report)
-            regime_labels = {
-                "BULLISH_BREADTH": "🟢 ПРЕОБЛАДАЕТ РОСТ",
-                "BEARISH_BREADTH": "🔴 ПРЕОБЛАДАЕТ СНИЖЕНИЕ",
-                "MIXED": "🟡 СМЕШАННЫЙ РЫНОК",
-                "INSUFFICIENT_DATA": "⚪ НЕДОСТАТОЧНО ДАННЫХ",
-            }
-            def pct(value):
-                return "н/д" if value is None else f"{float(value):+.2f}%"
-            lines = [
-                "🌐 ОБЗОР КРИПТОРЫНКА · KRAKEN",
-                "━━━━━━━━━━━━━━━━━━",
-                f"🕒 Сформирован: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
-                f"📚 Spot-пары: {pair_count:,}  •  Тикеры: {ticker_count:,}",
-                f"🪙 Уникальные активы с дневным изменением: {summary['asset_count']}",
-                "",
-                "🧭 ШИРИНА РЫНКА",
-                regime_labels[summary["market_regime"]],
-                f"🟢 Растут: {summary['up']}  •  🔴 Снижаются: {summary['down']}  •  ⚪ Без движения: {summary['flat']}",
-                f"Доля растущих: {pct(summary['breadth_pct'])}",
-                f"Среднее изменение: {pct(summary['mean_change_pct'])}  •  Медиана: {pct(summary['median_change_pct'])}",
-                "Изменение считается от открытия текущего UTC-дня Kraken, не за скользящие 24 часа.",
-                "",
-                "📈 ЛИДЕРЫ РОСТА",
-            ]
-            if summary["gainers"]:
-                lines.extend(
-                    f"🟢 {item['base']}: {pct(item['dayChangePct'])}  ·  {item['symbol']}"
-                    for item in summary["gainers"]
-                )
-            else:
-                lines.append("Нет данных об открытии UTC-дня.")
-            lines.append("")
-            lines.append("📉 ЛИДЕРЫ СНИЖЕНИЯ")
-            if summary["losers"]:
-                lines.extend(
-                    f"🔴 {item['base']}: {pct(item['dayChangePct'])}  ·  {item['symbol']}"
-                    for item in summary["losers"]
-                )
-            else:
-                lines.append("Нет данных.")
-            trends = summary["trend_counts"]
-            lines.extend([
-                "",
-                "🕯 ТЕХНИЧЕСКАЯ КАРТИНА · ЧАСОВЫЕ СВЕЧИ",
-                f"Проанализировано: {summary['analyzed_count']} рынков",
-                f"🟢 Восходящий тренд: {trends['BULLISH']}  •  🔴 Нисходящий: {trends['BEARISH']}  •  ⚪ Нейтральный: {trends['NEUTRAL']}",
-            ])
-            if summary["regime_counts"]:
-                lines.append("Режимы: " + " · ".join(
-                    f"{name}: {count}" for name, count in sorted(summary["regime_counts"].items())
-                ))
-            lines.extend([
-                "",
-                "ℹ️ Для подробного разбора монеты: /analyze XBTEUR",
-                "Дневная ширина рынка — обзор, а не торговый сигнал. Свечи анализируются в пределах API-бюджета.",
-            ])
-            return "\n".join(lines)
-
-            message = await context.application.bot_data["run_blocking"].run(build_market_report)
+            message = _format_market_report(summary, pair_count, ticker_count)
             await send_report(update, context, message)
         except Exception as exc:
             log.error("Broad market analysis failed: %s", type(exc).__name__)
