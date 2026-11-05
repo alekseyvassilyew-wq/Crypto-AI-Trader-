@@ -275,27 +275,33 @@ def build_app(s, engine, exchange):
     async def monitorstatus(update, context):
         if not await authorized(update): return await deny(update)
         def read_monitor_status():
-            from .db import get_state
+            from .db import get_state, get_backup_health
             from .monitoring import format_monitor_status
             state = get_state(monitor_db, "external_monitor_state", {})
             if not isinstance(state, dict):
                 state = {}
             report = format_monitor_status(s, state)
-            from .db import get_backup_health
             backup = get_backup_health(Path(s.db_path).expanduser().parent / "backups", max_age_hours=26, keep=7)
             if backup["count"] == 0:
-                backup_line = "SQLite backup: НЕ НАЙДЕНА"
+                backup_block = (
+                    "🗄 <b>SQLITE BACKUP</b>\n"
+                    "🔴 <b>РЕЗЕРВНАЯ КОПИЯ НЕ НАЙДЕНА</b>\n"
+                    "Проверка: <code>нет данных</code>  •  Копий: <b>0/7</b>"
+                )
             else:
                 age_hours = backup["age_seconds"] / 3600.0
-                backup_line = (
-                    f"SQLite backup: {backup['latest_at']} UTC; возраст {age_hours:.1f} ч; "
-                    f"integrity {backup['integrity']}; копий {backup['count']}/7"
+                healthy = bool(backup["healthy"])
+                backup_block = (
+                    "🗄 <b>SQLITE BACKUP</b>\n"
+                    f"{'🟢 <b>РЕЗЕРВНАЯ КОПИЯ В ПОРЯДКЕ</b>' if healthy else '🔴 <b>ТРЕБУЕТСЯ ПРОВЕРКА</b>'}\n"
+                    f"🕒 Дата: <code>{html.escape(str(backup['latest_at']))} UTC</code>\n"
+                    f"⏱ Возраст: <b>{age_hours:.1f} ч</b>  •  "
+                    f"Integrity: <b>{html.escape(str(backup['integrity']))}</b>  •  "
+                    f"Копий: <b>{backup['count']}/7</b>"
                 )
-                if not backup["healthy"]:
-                    backup_line += " — ВНИМАНИЕ: ПРОВЕРКА НЕ ПРОЙДЕНА"
-            return report + "\n" + backup_line
+            return report + "\n━━━━━━━━━━━━━━━━━━\n" + backup_block
         message = await context.application.bot_data["monitor_runner"].run(read_monitor_status)
-        await update.effective_message.reply_text(message)
+        await update.effective_message.reply_text(message, parse_mode="HTML")
 
     async def dbhealth(update, context):
         if not await authorized(update): return await deny(update)
