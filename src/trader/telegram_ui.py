@@ -101,6 +101,92 @@ def _format_report(title, body):
     return f"{title}\n━━━━━━━━━━━━━━━━━━\n{content}\n━━━━━━━━━━━━━━━━━━"
 
 
+
+def _format_paper_forward_report(metrics, hours, by_symbol_text, span_text, coverage_pct):
+    """Render /paperreport as a compact, sectioned Telegram plain-text report."""
+    def value(key, digits=2, signed=False, suffix=""):
+        raw = metrics.get(key)
+        try:
+            number = float(raw)
+            if number != number:
+                return "н/д"
+            rendered = f"{number:+.{digits}f}" if signed else f"{number:.{digits}f}"
+            return rendered + suffix
+        except (TypeError, ValueError, OverflowError):
+            return "н/д"
+
+    def profit_factor():
+        raw = metrics.get("profit_factor")
+        if raw in ("INF", "inf", float("inf")):
+            return "∞"
+        try:
+            number = float(raw)
+            if number == float("inf"):
+                return "∞"
+            if number != number:
+                return "н/д"
+            return f"{number:.2f}"
+        except (TypeError, ValueError, OverflowError):
+            return "н/д"
+
+    def timestamp(raw):
+        if not raw:
+            return "н/д"
+        try:
+            parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc).strftime("%d.%m.%Y %H:%M")
+        except (TypeError, ValueError, OverflowError):
+            return str(raw)
+
+    change = metrics.get("change_pct")
+    try:
+        change_icon = "🟢" if float(change) > 0 else "🔴" if float(change) < 0 else "⚪"
+    except (TypeError, ValueError, OverflowError):
+        change_icon = "⚪"
+
+    period = f"{timestamp(metrics.get('first_ts'))} — {timestamp(metrics.get('last_ts'))} UTC"
+    lines = [
+        "📈 PAPER FORWARD-TEST",
+        "━━━━━━━━━━━━━━━━━━",
+        f"🕒 ОКНО: {hours} ч.  •  Наблюдение: {span_text}",
+        f"Покрытие окна: {coverage_pct:.1f}%  (не гарантия непрерывной работы)",
+        f"Измерений: {metrics.get('samples', 0)}",
+        "",
+        "💼 КАПИТАЛ",
+        f"Начало: {value('start_equity_eur', 4)} EUR",
+        f"Текущая оценка: {value('end_equity_eur', 4)} EUR",
+        f"{change_icon} Результат: {value('change_eur', 4, True)} EUR  ({value('change_pct', 2, True, '%')})",
+        "",
+        "📉 РИСК И ПОЗИЦИИ",
+        f"Макс. наблюдаемая просадка: {value('max_observed_drawdown_pct', 2, suffix='%')}",
+        f"Среднее число открытых позиций: {value('avg_open_positions', 2)}",
+        "",
+        "🔎 АКТИВНОСТЬ СКАНЕРА",
+        f"Сигналов BUY: {metrics.get('buy_signals', 0)}",
+        f"Рынков в анализе за цикл (среднее): {value('avg_analyzed_markets', 1)}",
+        "",
+        "📊 ЗАКРЫТЫЕ СДЕЛКИ",
+        f"Всего: {metrics.get('closed_trades', 0)}",
+        f"🟢 Прибыльных: {metrics.get('winning_trades', 0)}  •  🔴 Убыточных: {metrics.get('losing_trades', 0)}",
+        f"Win rate: {value('win_rate_pct', 1, suffix='%')}  •  Profit factor: {profit_factor()}",
+        f"Реализованный P/L: {value('realized_pnl_eur', 4, True)} EUR",
+        "",
+        "💸 КОМИССИИ И ОЦЕНКА",
+        f"Комиссии исполнений: {value('total_fees_eur', 4)} EUR",
+        f"Сделок без EUR-оценки: {metrics.get('closed_trades_without_eur_valuation', 0)}",
+        f"Исполнений без EUR-оценки комиссии: {metrics.get('fills_without_eur_fee_valuation', 0)}",
+        "",
+        "🪙 РЕЗУЛЬТАТ ПО МОНЕТАМ",
+        by_symbol_text or "Пока нет закрытых сделок",
+        "",
+        f"Период UTC: {period}",
+        "━━━━━━━━━━━━━━━━━━",
+        "ℹ️ Это изменение оценочной стоимости PAPER-портфеля, а не доказательство будущей доходности.",
+    ]
+    return "\\n".join(lines)
+
 def _format_automatic_research_report(trained):
     """Render compact, readable HTML cards for the scheduled ML research report."""
     def pct(value):
@@ -1032,25 +1118,10 @@ def build_app(s, engine, exchange):
                 if span_hours else f"{span_minutes} мин"
             )
             coverage_pct = min(100.0, span_seconds / (hours * 3600) * 100.0)
-            await update.effective_message.reply_text(
-                f"📈 PAPER FORWARD-TEST — окно {hours} ч.\n"
-                f"Измерений: {metrics['samples']}\n"
-                f"Размах измерений: {span_text} ({coverage_pct:.1f}% окна; не гарантия непрерывной работы)\n"
-                f"Капитал: {metrics['start_equity_eur']:.4f} → {metrics['end_equity_eur']:.4f} EUR\n"
-                f"Изменение: {metrics['change_eur']:+.4f} EUR ({metrics['change_pct']:+.2f}%)\n"
-                f"Макс. наблюдаемая просадка: {metrics['max_observed_drawdown_pct']:.2f}%\n"
-                f"Среднее число позиций: {metrics['avg_open_positions']:.2f}\n"
-                f"Сигналов BUY: {metrics['buy_signals']}\n"
-                f"Среднее число анализируемых рынков за цикл: {metrics['avg_analyzed_markets']:.1f}\n"
-                f"Закрытых сделок: {metrics['closed_trades']} | без EUR-оценки: {metrics['closed_trades_without_eur_valuation']}\n"
-                f"Прибыльных: {metrics['winning_trades']} | убыточных: {metrics['losing_trades']}\n"
-                f"Win rate: {metrics['win_rate_pct']:.1f}% | Profit factor: {metrics['profit_factor']}\n"
-                f"Реализованный P/L: {metrics['realized_pnl_eur']:+.4f} EUR\n"
-                f"Комиссии по исполнениям: {metrics['total_fees_eur']:.4f} EUR | без EUR-оценки: {metrics['fills_without_eur_fee_valuation']}\n"
-                f"По монетам: {by_symbol_text}\n"
-                f"Период: {metrics['first_ts']} — {metrics['last_ts']} UTC\n"
-                "━━━━━━━━━━━━━━━━━━\nЭто изменение стоимости PAPER-портфеля, а не доказательство будущей доходности."
+            report = _format_paper_forward_report(
+                metrics, hours, by_symbol_text, span_text, coverage_pct
             )
+            await update.effective_message.reply_text(report)
         except Exception as exc:
             await update.effective_message.reply_text(f"Ошибка отчёта: {safe_error_message(exc)}")
 
