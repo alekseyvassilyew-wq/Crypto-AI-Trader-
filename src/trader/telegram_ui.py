@@ -1133,7 +1133,7 @@ def build_app(s, engine, exchange):
         lines = await context.application.bot_data["run_blocking"].run(read_models)
         if len(lines) == 3:
             return await update.effective_message.reply_text("Исследовательских моделей пока нет. Запусти /learn XBTEUR.")
-        await update.effective_message.reply_text("\n".join(lines)[:3900])
+        await send_report(update, context, "\n".join(lines))
 
     async def research_history_cmd(update, context):
         if not await authorized(update): return await deny(update)
