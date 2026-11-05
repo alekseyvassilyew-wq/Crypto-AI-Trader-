@@ -1474,7 +1474,7 @@ def build_app(s, engine, exchange):
     async def help_cmd(update, context):
         if not await authorized(update): return await deny(update)
         await update.effective_message.reply_text(
-            "/start — меню\n/status — состояние и P/L\n/dbhealth — целостность SQLite и свежесть резервной копии\n/monitorstatus — диагностика Render/GitHub/Telegram\n/scan — сканирование\n"
+            "/start — меню\n/status — состояние и P/L\n/dbhealth — целостность SQLite и свежесть резервной копии\n/monitorstatus — диагностика Render/GitHub/Telegram\n/scan — сканирование\n/market — обзор всего рынка и ширины роста/падения\n/analyze XBTEUR — подробный анализ 1h/4h/1d\n"
             "/account — виртуальные остатки PAPER\n/realbalance — реальные остатки Kraken (только чтение)\n/walletcheck — пары, минимумы и комиссии Kraken (только чтение)\n"
             "/portfolio — PAPER-позиции\n/paperreport [часы] — статистика автономного PAPER-теста\n"
             "/learn XBTEUR — обучение/проверка ML-кандидата без торговли\n/learning — текущие кандидаты и shadow-тест\n"
