@@ -826,6 +826,79 @@ def build_app(s, engine, exchange):
             log.error("Broad market analysis failed: %s", type(exc).__name__)
             await update.effective_message.reply_text(format_error(exc, "/market", update.effective_user), parse_mode="HTML")
 
+    async def dips(update, context):
+        if not await authorized(update): return await deny(update)
+        await update.effective_message.reply_text("📉 Ищу резко упавшие монеты и проверяю признаки восстановления…")
+        try:
+            def build_dip_report():
+                from .indicators import analyze as analyze_candles
+                from .market_analysis import select_sharp_decliners, evaluate_dip_candidate
+                tickers = exchange.tickers()
+                candidates = select_sharp_decliners(
+                    tickers,
+                    min_drop_pct=-5.0,
+                    min_turnover_eur=float(s.min_turnover),
+                    max_spread_bps=float(s.max_spread_bps),
+                    limit=5,
+                )
+                if not candidates:
+                    return [], len(tickers)
+                results = []
+                for ticker in candidates:
+                    symbol = ticker["symbol"]
+                    try:
+                        frames = {
+                            "1h": analyze_candles(exchange.candles(symbol, interval="60", limit=120)),
+                            "4h": analyze_candles(exchange.candles(symbol, interval="240", limit=100)),
+                            "1d": analyze_candles(exchange.candles(symbol, interval="1440", limit=100)),
+                        }
+                        evaluation = evaluate_dip_candidate(
+                            {**ticker, "turnover_eur": ticker.get("turnover24h", 0.0)},
+                            frames,
+                            min_turnover_eur=float(s.min_turnover),
+                            max_spread_bps=float(s.max_spread_bps),
+                        )
+                    except Exception as exc:
+                        evaluation = {
+                            "status": "WATCH", "score": 0,
+                            "reasons": [f"Не удалось получить все свечи: {type(exc).__name__}"],
+                        }
+                    results.append((ticker, evaluation))
+                return results, len(tickers)
+
+            results, ticker_count = await context.application.bot_data["run_blocking"].run(build_dip_report)
+            labels = {
+                "POTENTIAL_BUY": "🟢 ПОТЕНЦИАЛЬНЫЙ ОТСКОК",
+                "WATCH": "🟡 НАБЛЮДАТЬ",
+                "REJECT": "🔴 НЕ РАССМАТРИВАТЬ",
+            }
+            lines = [
+                "📉 СКАНЕР РЕЗКО УПАВШИХ МОНЕТ · KRAKEN",
+                "━━━━━━━━━━━━━━━━━━",
+                f"📚 Проверено тикеров: {ticker_count:,}",
+                "Фильтр: падение от открытия UTC-дня не менее 5%, EUR-пара, ликвидность и спред.",
+                "Проверка: закрытые свечи 1h / 4h / 1d.",
+                "",
+            ]
+            if not results:
+                lines.append("Подходящих ликвидных монет с падением от 5% сейчас не найдено.")
+            for ticker, evaluation in results:
+                lines.extend([
+                    f"{labels[evaluation['status']]} · {ticker['symbol']}",
+                    f"📉 Изменение UTC-дня: {float(ticker['dayChangePct']):+.2f}%  •  Оценка: {evaluation['score']}/8",
+                    f"💧 Оборот 24ч: {float(ticker['turnover24h']):,.0f} EUR  •  Спред: {float(ticker['spread_bps']):.1f} bps",
+                ])
+                lines.extend(f"  • {reason}" for reason in evaluation["reasons"][:5])
+                lines.append("")
+            lines.extend([
+                "⚠️ POTENTIAL BUY означает только предварительный аналитический интерес, не гарантию прибыли и не приказ на покупку.",
+                "Сканер не открывает сделки и не меняет PAPER-портфель.",
+            ])
+            await send_report(update, context, "\n".join(lines))
+        except Exception as exc:
+            log.error("Dip scanner failed: %s", type(exc).__name__)
+            await update.effective_message.reply_text(format_error(exc, "/dips", update.effective_user), parse_mode="HTML")
+
     async def analyze_market(update, context):
         import math
         if not await authorized(update): return await deny(update)
@@ -1487,7 +1560,7 @@ def build_app(s, engine, exchange):
     async def help_cmd(update, context):
         if not await authorized(update): return await deny(update)
         await update.effective_message.reply_text(
-            "/start — меню\n/status — состояние и P/L\n/dbhealth — целостность SQLite и свежесть резервной копии\n/monitorstatus — диагностика Render/GitHub/Telegram\n/scan — сканирование\n/market — обзор всего рынка и ширины роста/падения\n/analyze XBTEUR — подробный анализ 1h/4h/1d\n"
+            "/start — меню\n/status — состояние и P/L\n/dbhealth — целостность SQLite и свежесть резервной копии\n/monitorstatus — диагностика Render/GitHub/Telegram\n/scan — сканирование\n/market — обзор всего рынка и ширины роста/падения\n/dips — поиск резко упавших монет и оценка отскока\n/analyze XBTEUR — подробный анализ 1h/4h/1d\n"
             "/account — виртуальные остатки PAPER\n/realbalance — реальные остатки Kraken (только чтение)\n/walletcheck — пары, минимумы и комиссии Kraken (только чтение)\n"
             "/portfolio — PAPER-позиции\n/paperreport [часы] — статистика автономного PAPER-теста\n"
             "/learn XBTEUR — обучение/проверка ML-кандидата без торговли\n/learning — текущие кандидаты и shadow-тест\n"
@@ -1787,7 +1860,7 @@ def build_app(s, engine, exchange):
     app.bot_data["monitor_db"] = monitor_db
     app.bot_data["monitor_runner"] = monitor_runner
     app.bot_data["research_runner"] = research_runner
-    for name, fn in [("start", start), ("status", status), ("dbhealth", dbhealth), ("monitorstatus", monitorstatus), ("scan", scan), ("market", market), ("analyze", analyze_market), ("account", account), ("realbalance", realbalance), ("walletcheck", walletcheck), ("paperreport", paperreport), ("learn", learn), ("learning", learning), ("research", research_history_cmd), ("backtest", backtest), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
+    for name, fn in [("start", start), ("status", status), ("dbhealth", dbhealth), ("monitorstatus", monitorstatus), ("scan", scan), ("market", market), ("dips", dips), ("analyze", analyze_market), ("account", account), ("realbalance", realbalance), ("walletcheck", walletcheck), ("paperreport", paperreport), ("learn", learn), ("learning", learning), ("research", research_history_cmd), ("backtest", backtest), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
                      ("run", run), ("pause", pause), ("stop", stop), ("help", help_cmd)]:
         app.add_handler(CommandHandler(name, fn))
     app.add_handler(CommandHandler("test_topics", testtopics))  # Backwards-compatible alias shown in /help.
