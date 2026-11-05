@@ -38,3 +38,12 @@ def test_market_breadth_handles_missing_or_invalid_day_change():
     assert result["asset_count"] == 0
     assert result["market_regime"] == "INSUFFICIENT_DATA"
     assert result["mean_change_pct"] is None
+
+
+def test_market_leaders_do_not_label_negative_assets_as_gainers():
+    result = summarize_market_snapshot([
+        {"symbol": "XBTEUR", "base": "XBT", "quote": "EUR", "lastPrice": 90, "turnover24h": 100, "dayChangePct": -1.0},
+        {"symbol": "ETHEUR", "base": "ETH", "quote": "EUR", "lastPrice": 80, "turnover24h": 100, "dayChangePct": -2.0},
+    ])
+    assert result["gainers"] == []
+    assert [item["symbol"] for item in result["losers"]] == ["ETHEUR", "XBTEUR"]
