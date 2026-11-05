@@ -266,3 +266,40 @@ def test_latest_paper_snapshot_returns_newest_timestamp_and_equity():
     assert snapshot["open_positions"] == 2
     assert snapshot["cash"] == {"EUR": 9.0}
     db.close()
+
+
+def test_paper_fill_persists_wallet_and_trade_atomically(tmp_path):
+    from src.trader.db import connect, get_state, save_paper_fill
+
+    db = connect(tmp_path / "atomic-fill.sqlite3")
+    wallet = {"cash": 9.9, "cash_by_currency": {"EUR": 9.9},
+              "positions": {"XBTEUR": {"qty": 5.0, "avg_price": 2.0}}}
+    save_paper_fill(
+        db, cash_by_currency=wallet["cash_by_currency"], positions=wallet["positions"],
+        symbol="XBTEUR", side="Buy", qty=5, quote=10, fee=0.1, price=2,
+        fee_eur=0.1,
+    )
+    assert get_state(db, "paper_broker") == wallet
+    row = db.execute("SELECT mode,side,qty,status FROM trades").fetchone()
+    assert tuple(row) == ("PAPER", "Buy", 5.0, "FILLED")
+    db.close()
+
+
+def test_paper_fill_rolls_back_wallet_if_trade_insert_fails(tmp_path):
+    import sqlite3
+    from src.trader.db import connect, get_state, set_state, save_paper_fill
+
+    db = connect(tmp_path / "atomic-rollback.sqlite3")
+    original = {"cash": 20.0, "cash_by_currency": {"EUR": 20.0}, "positions": {}}
+    set_state(db, "paper_broker", original)
+    db.execute("CREATE TRIGGER reject_paper_trade BEFORE INSERT ON trades BEGIN SELECT RAISE(ABORT, 'test failure'); END")
+    db.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        save_paper_fill(
+            db, cash_by_currency={"EUR": 9.9},
+            positions={"XBTEUR": {"qty": 5.0, "avg_price": 2.0}},
+            symbol="XBTEUR", side="Buy", qty=5, quote=10, fee=0.1, price=2,
+        )
+    assert get_state(db, "paper_broker") == original
+    assert db.execute("SELECT COUNT(*) FROM trades").fetchone()[0] == 0
+    db.close()
