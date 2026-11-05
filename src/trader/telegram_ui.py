@@ -624,7 +624,7 @@ def build_app(s, engine, exchange):
                 f"Оборот: {result['gross_turnover']:.4f}; ставка: {result['fee_rate'] * 100:.3f}% на сторону\n"
                 "Издержки: комиссия на вход/выход + проскальзывание 5 bps на сторону. "
                 "Исполнение моделируется по открытию следующей свечи. "
-                "Это тест одного рынка, не прогноз и не гарантия будущей прибыли."
+"━━━━━━━━━━━━━━━━━━\\nЭто тест одного рынка, не прогноз и не гарантия будущей прибыли."
             )
         except Exception as exc:
             log.error("Historical backtest failed for %s: %s", symbol, type(exc).__name__)
@@ -863,7 +863,7 @@ def build_app(s, engine, exchange):
                 )
             return lines
         lines = await context.application.bot_data["run_blocking"].run(read_models)
-        if len(lines) == 1:
+        if len(lines) == 3:
             return await update.effective_message.reply_text("Исследовательских моделей пока нет. Запусти /learn XBTEUR.")
         await update.effective_message.reply_text("\n".join(lines)[:3900])
 
@@ -879,7 +879,7 @@ def build_app(s, engine, exchange):
                 return await update.effective_message.reply_text(
                     "История исследований пока пуста. Запусти /learn XBTEUR или дождись автоматического исследования."
                 )
-            lines = ["🧠 ИСТОРИЯ ИССЛЕДОВАНИЙ — SHADOW ONLY", "━━━━━━━━━━━━━━━━━━"]
+            lines = ["🧠 ИСТОРИЯ ИССЛЕДОВАНИЙ — SHADOW ONLY", "━━━━━━━━━━━━━━━━━━", "Последние 10 запусков; результаты не торгуют автоматически."]
             for item in rows:
                 report = item.get("report") or {}
                 oos = report.get("out_of_sample") or {}
