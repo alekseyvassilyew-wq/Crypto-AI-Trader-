@@ -9,6 +9,8 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY, ts TEXT DEFAULT CURRENT_TIMESTAMP, event TEXT NOT NULL, details TEXT);
 CREATE TABLE IF NOT EXISTS trades(id INTEGER PRIMARY KEY, ts TEXT DEFAULT CURRENT_TIMESTAMP, mode TEXT NOT NULL, symbol TEXT NOT NULL, side TEXT NOT NULL, qty REAL NOT NULL, quote REAL NOT NULL, fee REAL NOT NULL, price REAL NOT NULL, status TEXT NOT NULL, order_id TEXT, fee_eur REAL, realized_pnl_eur REAL);
 CREATE TABLE IF NOT EXISTS app_state(key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS telegram_report_pages(report_key TEXT PRIMARY KEY, pages_json TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_telegram_report_pages_updated ON telegram_report_pages(updated_at);
 CREATE INDEX IF NOT EXISTS idx_trades_ts ON trades(ts);
 CREATE TABLE IF NOT EXISTS paper_snapshots(
     id INTEGER PRIMARY KEY,
@@ -430,3 +432,47 @@ def get_shadow_metrics(db, symbol, model_version=None):
             (str(symbol).upper(), str(model_version)) if model_version is not None else (str(symbol).upper(),),
         ).fetchone()["n"],
     }
+
+
+def save_telegram_report_pages(db, report_key, pages, *, keep=100):
+    """Persist Telegram report pages so inline navigation survives process restarts."""
+    if not isinstance(report_key, str) or not report_key.strip() or len(report_key) > 128:
+        raise ValueError("Telegram report key must be a non-empty string of at most 128 characters")
+    if not isinstance(pages, (list, tuple)) or not pages or any(not isinstance(page, str) for page in pages):
+        raise ValueError("Telegram report pages must be a non-empty sequence of strings")
+    if isinstance(keep, bool) or not isinstance(keep, int) or keep < 1:
+        raise ValueError("Telegram report retention must be a positive integer")
+    payload = json.dumps(list(pages), ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    with db:
+        db.execute(
+            "INSERT INTO telegram_report_pages(report_key,pages_json,updated_at) VALUES(?,?,CURRENT_TIMESTAMP) "
+            "ON CONFLICT(report_key) DO UPDATE SET pages_json=excluded.pages_json,updated_at=CURRENT_TIMESTAMP",
+            (report_key, payload),
+        )
+        db.execute(
+            "DELETE FROM telegram_report_pages WHERE report_key IN ("
+            "SELECT report_key FROM telegram_report_pages ORDER BY updated_at DESC, rowid DESC LIMIT -1 OFFSET ?)",
+            (keep,),
+        )
+
+
+def get_telegram_report_pages(db, report_key):
+    """Load persisted Telegram report pages, returning None for expired/unknown keys."""
+    if not isinstance(report_key, str) or not report_key.strip() or len(report_key) > 128:
+        return None
+    row = db.execute(
+        "SELECT pages_json FROM telegram_report_pages WHERE report_key=?", (report_key,)
+    ).fetchone()
+    if row is None:
+        return None
+    try:
+        pages = json.loads(row["pages_json"])
+    except (TypeError, json.JSONDecodeError):
+        with db:
+            db.execute("DELETE FROM telegram_report_pages WHERE report_key=?", (report_key,))
+        return None
+    if not isinstance(pages, list) or not pages or any(not isinstance(page, str) for page in pages):
+        with db:
+            db.execute("DELETE FROM telegram_report_pages WHERE report_key=?", (report_key,))
+        return None
+    return pages
