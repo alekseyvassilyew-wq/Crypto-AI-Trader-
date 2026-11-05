@@ -2197,5 +2197,6 @@ def build_app(s, engine, exchange):
     # Start once, then cycle_job schedules the next scan after completion.
     # This fixed-delay cadence avoids overlapping jobs and skipped scans.
     app.job_queue.run_once(cycle_job, when=10, name="paper-cycle")
+    app.job_queue.run_repeating(automatic_dip_scan_job, interval=900, first=180, name="automatic-dip-monitor")
     app.job_queue.run_repeating(ml_research_job, interval=3600, first=60, name="hourly-ml-research")
     return app
