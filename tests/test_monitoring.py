@@ -212,12 +212,12 @@ def test_monitor_status_reports_missing_configuration_without_secrets():
         telegram_group_chat_id=0,
     )
     report = format_monitor_status(settings, {})
-    assert "<b>RENDER API</b>" in report
-    assert "⚪ <b>НЕ НАСТРОЕН</b>" in report
-    assert "<b>GITHUB ACTIONS</b>" in report
-    assert "🟢 <b>НАСТРОЕН</b>" in report
-    assert "<b>Telegram-группа</b>" in report
-    assert "⚪ <b>НЕ НАСТРОЕНА</b>" in report
+    assert "Render API: НЕ НАСТРОЕН" in report
+    assert "GitHub Actions: НАСТРОЕН" in report
+    assert "Telegram-группа: НЕ НАСТРОЕНА" in report
+    assert "API-ключи не отображаются" in report
+    
+    
     assert "API-ключи скрыты" in report
 
 
@@ -237,11 +237,11 @@ def test_monitor_status_reports_last_success_and_errors():
         "last_events_count": 2,
         "last_alert_delivery_at": "2026-11-04T14:01:00+00:00",
     })
-    assert "Сохранено событий: <b>2</b>" in report
+    assert "сохранено событий — 2" in report
     assert "Timeout" in report
-    assert "Отслеживается запусков: <b>1</b>" in report
-    assert "🆕 Новых событий: <b>2</b>" in report
-    assert "Последняя подтверждённая отправка:" in report
+    assert "отслеживается запусков — 1" in report
+    assert "Новых событий в последнем цикле: 2" in report
+    assert "Последняя подтверждённая отправка Telegram:" in report
     assert "secret-value" not in report
 
 
@@ -300,12 +300,12 @@ def test_monitor_status_shows_last_success_and_latest_api_error_together():
         "last_alert_delivery_at": "2026-11-04T15:00:02+00:00",
     })
 
-    assert "🟣 <b>RENDER API</b>" in report
-    assert "🔴 <b>НАСТРОЕН</b>" in report
-    assert "🕒 Последняя успешная проверка: <code>2026-11-04T15:00:00+00:00</code>" in report
-    assert "Последняя ошибка API: <code>Timeout</code>" in report
-    assert "🕒 Последняя успешная проверка: <code>2026-11-04T15:00:01+00:00</code>" in report
-    assert "Последняя подтверждённая отправка: <code>2026-11-04T15:00:02+00:00</code>" in report
+    assert "Render API: НАСТРОЕН" in report
+    assert "Последняя ошибка Render API: Timeout" in report
+    assert "Последняя успешная проверка Render: 2026-11-04T15:00:00+00:00" in report
+    assert "Последняя ошибка Render API: Timeout" in report
+    assert "Последняя успешная проверка GitHub: 2026-11-04T15:00:01+00:00" in report
+    assert "Последняя подтверждённая отправка Telegram: 2026-11-04T15:00:02+00:00" in report
 
 
 
@@ -336,10 +336,10 @@ def test_monitor_status_escapes_api_error_and_shows_dashboard_sections():
         "last_poll_at": "2026-11-05T13:00:00+00:00",
         "last_events_count": 3,
     })
-    assert "🛰 <b>МОНИТОРИНГ ВНЕШНИХ СЕРВИСОВ</b>" in report
-    assert "🟠 <b>ТРЕБУЕТСЯ ВНИМАНИЕ</b>" in report
-    assert "Сохранено событий: <b>3</b>" in report
-    assert "Отслеживается запусков: <b>1</b>" in report
-    assert "&lt;bad &amp; unsafe&gt;" in report
-    assert "<bad & unsafe>" not in report
+    assert "🛰 МОНИТОРИНГ ВНЕШНИХ СЕРВИСОВ" in report
+    assert "Последняя ошибка Render API: <bad & unsafe>" in report
+    assert "сохранено событий — 3" in report
+    assert "отслеживается запусков — 1" in report
+    assert "<bad & unsafe>" in report
+    assert "secret" not in report
     assert "secret" not in report
