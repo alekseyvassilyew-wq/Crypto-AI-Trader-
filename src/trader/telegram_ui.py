@@ -106,7 +106,31 @@ def _format_scan_report(rows, pair_count, ticker_count):
         "ℹ️ Котировки мониторятся по всем рынкам; анализ свечей ограничен API-бюджетом.",
     ])
     report = "\n".join(lines)
-    return report if len(report) <= 3900 else report[:3880].rsplit("\n", 1)[0] + "\n… Остальное скрыто."
+    return report
+
+def _paginate_report_text(text, max_chars=3400):
+    """Split a Telegram report into readable pages without splitting lines where possible."""
+    source = str(text or "").strip()
+    if not source:
+        return ["Нет данных."]
+    pages = []
+    current = ""
+    for line in source.splitlines():
+        while len(line) > max_chars:
+            if current:
+                pages.append(current)
+                current = ""
+            pages.append(line[:max_chars])
+            line = line[max_chars:]
+        candidate = line if not current else current + "\n" + line
+        if len(candidate) > max_chars:
+            pages.append(current)
+            current = line
+        else:
+            current = candidate
+    if current:
+        pages.append(current)
+    return pages or ["Нет данных."]
 
 def _telegram_plain(value):
     """Convert Telegram HTML markup to safe, readable plain text."""
@@ -462,10 +486,44 @@ def build_app(s, engine, exchange):
                 + (("\n" + remainder) if separator else "")
                 + "\n━━━━━━━━━━━━━━━━━━"
             )
-        kwargs = {"chat_id": s.telegram_group_chat_id, "text": plain_text[:3900]}
+        is_error_topic = bool(topic_id and topic_id == s.topic_errors_id)
+        pages = [plain_text[:3900]] if is_error_topic else _paginate_report_text(plain_text)
+        kwargs = {"chat_id": s.telegram_group_chat_id, "text": pages[0]}
         if topic_id:
             kwargs["message_thread_id"] = topic_id
-        await context.bot.send_message(**kwargs)
+        message = await context.bot.send_message(**kwargs)
+        if len(pages) > 1:
+            key = f"{message.chat_id}:{message.message_id}"
+            page_store = context.application.bot_data.setdefault("report_pages", {})
+            page_store[key] = {"pages": pages, "parse_mode": None}
+            while len(page_store) > 100:
+                page_store.pop(next(iter(page_store)))
+            await message.edit_reply_markup(reply_markup=_report_page_keyboard(message.message_id, 0, len(pages)))
+
+    async def send_report(update, context, report_text, parse_mode=None):
+        """Send a report in one message, switching pages by editing that message."""
+        # Split only plain text: HTML tags must never be cut across page boundaries.
+        plain_text = _telegram_plain(report_text) if parse_mode else str(report_text or "")
+        pages = _paginate_report_text(plain_text)
+        message = await update.effective_message.reply_text(pages[0])
+        if len(pages) > 1:
+            page_store = context.application.bot_data.setdefault("report_pages", {})
+            key = f"{message.chat_id}:{message.message_id}"
+            page_store[key] = {"pages": pages, "parse_mode": None}
+            # Bound in-memory state so long-running bots do not accumulate old reports forever.
+            while len(page_store) > 100:
+                page_store.pop(next(iter(page_store)))
+            await message.edit_reply_markup(reply_markup=_report_page_keyboard(message.message_id, 0, len(pages)))
+        return message
+
+    def _report_page_keyboard(message_id, page_index, page_count):
+        buttons = []
+        if page_index > 0:
+            buttons.append(InlineKeyboardButton("‹", callback_data=f"rp:{message_id}:{page_index - 1}"))
+        buttons.append(InlineKeyboardButton(f"{page_index + 1}/{page_count}", callback_data=f"rp:{message_id}:{page_index}"))
+        if page_index + 1 < page_count:
+            buttons.append(InlineKeyboardButton("›", callback_data=f"rp:{message_id}:{page_index + 1}"))
+        return InlineKeyboardMarkup([buttons])
 
     async def authorized(update):
         return bool(update.effective_user and update.effective_user.id == s.admin_id)
@@ -582,7 +640,7 @@ def build_app(s, engine, exchange):
                 "<i>Оценка и P/L доступны только при свежих котировках и FX-курсах всех активов.</i>"
             )
         message = await context.application.bot_data["run_blocking"].run(read_status)
-        await update.effective_message.reply_text(message, parse_mode="HTML")
+        await send_report(update, context, message, parse_mode="HTML")
 
     async def monitorstatus(update, context):
         if not await authorized(update): return await deny(update)
@@ -613,7 +671,7 @@ def build_app(s, engine, exchange):
                 )
             return report + "\n━━━━━━━━━━━━━━━━━━\n" + backup_block
         message = await context.application.bot_data["monitor_runner"].run(read_monitor_status)
-        await update.effective_message.reply_text(message)
+        await send_report(update, context, message)
 
     async def dbhealth(update, context):
         if not await authorized(update): return await deny(update)
@@ -644,7 +702,7 @@ def build_app(s, engine, exchange):
                 f"  Integrity: {backup['integrity']}\n"
                 f"  Лимит возраста: 26 ч  •  Ротация: {'OK' if backup['retention_ok'] else 'ПРЕВЫШЕНА'}\n━━━━━━━━━━━━━━━━━━"
             )
-            await update.effective_message.reply_text(message)
+            await send_report(update, context, message)
         except Exception as exc:
             log.error("Database health check failed: %s", type(exc).__name__)
             await update.effective_message.reply_text(f"🚨 Проверка SQLite не выполнена: {type(exc).__name__}")
@@ -658,7 +716,7 @@ def build_app(s, engine, exchange):
                 return rows, len(engine.market_pairs), engine.market_ticker_count
             rows, pair_count, ticker_count = await context.application.bot_data["run_blocking"].run(run_scan)
             message = _format_scan_report(rows, pair_count, ticker_count)
-            await update.effective_message.reply_text(message)
+            await send_report(update, context, message)
         except Exception as exc:
             log.error("Market scan failed: %s", type(exc).__name__)
             await update.effective_message.reply_text(
@@ -796,7 +854,7 @@ def build_app(s, engine, exchange):
                 ]
                 if failures:
                     lines.append("Рынки, пропущенные при загрузке: " + ", ".join(failures))
-                await update.effective_message.reply_text(_format_report(lines[0], "\n".join(lines))[:3900])
+                await send_report(update, context, _format_report(lines[0], "\n".join(lines)))
             except Exception as exc:
                 log.error("Portfolio historical backtest failed: %s", type(exc).__name__)
                 await update.effective_message.reply_text(format_error(exc, "/backtest portfolio", update.effective_user))
@@ -830,7 +888,7 @@ def build_app(s, engine, exchange):
             result = await context.application.bot_data["run_blocking"].run(run_single_backtest)
             factor = result["profit_factor"]
             factor_text = "∞" if factor == float("inf") else f"{factor:.2f}"
-            await update.effective_message.reply_text(
+            await send_report(update, context,
                 f"📉 ИСТОРИЧЕСКИЙ PAPER-ТЕСТ: {symbol}\n"
                 f"Свечей: {result['candles']} (часовые, закрытые)\n"
                 f"Начальный капитал: {result['initial_cash']:.2f}\n"
@@ -860,7 +918,7 @@ def build_app(s, engine, exchange):
             balances = [f"{currency}: {amount:.8f}" for currency, amount in sorted(engine.paper.cash_by_currency.items())]
             return _format_report("💰 СВОБОДНЫЕ СРЕДСТВА PAPER", "Виртуальные остатки:\n" + ("\n".join(balances) or "Нулевые остатки.") + "\n\nРеальные средства не затрагиваются.")
         message = await context.application.bot_data["run_blocking"].run(read_account)
-        await update.effective_message.reply_text(message)
+        await send_report(update, context, message)
 
     async def realbalance(update, context):
         if not await authorized(update): return await deny(update)
@@ -912,7 +970,7 @@ def build_app(s, engine, exchange):
                         + f'. Известная часть: {inventory["known_total_eur"]:.2f} EUR.'
                     )
 
-            await update.effective_message.reply_text(
+            await send_report(update, context,
                 "🏦 РЕАЛЬНЫЙ БАЛАНС KRAKEN\n"
                 + body
                 + "\n\nТолько чтение. Реальные средства не импортируются в виртуальный PAPER-кошелёк. "
@@ -992,7 +1050,7 @@ def build_app(s, engine, exchange):
             lines.append("Минимумы и комиссии берутся из метаданных Kraken; отсутствующие значения не угадываются.")
             lines.append("Только чтение: реальные ордера, переводы и импорт средств в PAPER отключены.")
             lines.append("━━━━━━━━━━━━━━━━━━")
-            await update.effective_message.reply_text("\n".join(lines)[:3900])
+            await send_report(update, context, "\n".join(lines))
         except Exception as exc:
             log.error("Read-only Kraken wallet preflight failed: %s", type(exc).__name__)
             await update.effective_message.reply_text(format_error(exc, "/walletcheck", update.effective_user))
@@ -1021,7 +1079,7 @@ def build_app(s, engine, exchange):
             def auc_text(value):
                 return "н/д" if value is None else f"{float(value):.3f}"
             gate = "ПРОШЛА исследовательский фильтр" if candidate["research_pass"] else "НЕ прошла исследовательский фильтр"
-            await update.effective_message.reply_text(
+            await send_report(update, context,
                 f"🧠 МОДЕЛЬ {symbol} — {gate}\n"
                 "━━━━━━━━━━━━━━━━━━\n"
                 f"Статус: SHADOW ONLY (не торгует)\n"
@@ -1088,7 +1146,7 @@ def build_app(s, engine, exchange):
         lines = await context.application.bot_data["run_blocking"].run(read_models)
         if len(lines) == 3:
             return await update.effective_message.reply_text("Исследовательских моделей пока нет. Запусти /learn XBTEUR.")
-        await update.effective_message.reply_text("\n".join(lines)[:3900])
+        await send_report(update, context, "\n".join(lines))
 
     async def research_history_cmd(update, context):
         if not await authorized(update): return await deny(update)
@@ -1103,8 +1161,7 @@ def build_app(s, engine, exchange):
                     "История исследований пока пуста. Запусти /learn XBTEUR или дождись автоматического исследования."
                 )
             pages = _format_research_history(rows)
-            for page in pages:
-                await update.effective_message.reply_text(page)
+            await send_report(update, context, "\n\n━━━━━━━━━━━━━━━━━━\n\n".join(pages))
         except Exception as exc:
             await update.effective_message.reply_text(f"Ошибка истории исследований: {safe_error_message(exc)}")
 
@@ -1122,7 +1179,7 @@ def build_app(s, engine, exchange):
                         f"За последние {hours} ч. нет сохранённых PAPER-измерений или закрытых сделок. "
                         "Запусти /run и оставь PAPER работать для сбора статистики."
                     )
-                return await update.effective_message.reply_text(
+                return await send_report(update, context,
                     f"📊 PAPER СДЕЛКИ — {hours} ч.\n"
                     f"Закрытых сделок: {metrics['closed_trades']}\n"
                     f"Прибыльных: {metrics['winning_trades']} | убыточных: {metrics['losing_trades']}\n"
@@ -1145,7 +1202,7 @@ def build_app(s, engine, exchange):
             report = _format_paper_forward_report(
                 metrics, hours, by_symbol_text, span_text, coverage_pct
             )
-            await update.effective_message.reply_text(report)
+            await send_report(update, context, report)
         except Exception as exc:
             await update.effective_message.reply_text(f"Ошибка отчёта: {safe_error_message(exc)}")
 
@@ -1153,11 +1210,11 @@ def build_app(s, engine, exchange):
         if not await authorized(update): return await deny(update)
         allowed = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "24h": 86400}
         if not context.args or context.args[0] not in allowed:
-            return await update.effective_message.reply_text("⏱ ИНТЕРВАЛ СКАНИРОВАНИЯ\n━━━━━━━━━━━━━━━━━━\nИспользование: /interval 1m|5m|15m|30m|1h|4h|24h\nСканер Kraken проверяет рынок по заданному интервалу.\n━━━━━━━━━━━━━━━━━━")
+            return await send_report(update, context, "⏱ ИНТЕРВАЛ СКАНИРОВАНИЯ\n━━━━━━━━━━━━━━━━━━\nИспользование: /interval 1m|5m|15m|30m|1h|4h|24h\nСканер Kraken проверяет рынок по заданному интервалу.\n━━━━━━━━━━━━━━━━━━")
         await context.application.bot_data["run_blocking"].run(
             lambda: setattr(engine, "scan_interval_seconds", allowed[context.args[0]])
         )
-        await update.effective_message.reply_text(f"⏱ ИНТЕРВАЛ СКАНИРОВАНИЯ\n━━━━━━━━━━━━━━━━━━\nУстановлен: {context.args[0]}\nИзменение действует до перезапуска сервиса.\n━━━━━━━━━━━━━━━━━━")
+        await send_report(update, context, f"⏱ ИНТЕРВАЛ СКАНИРОВАНИЯ\n━━━━━━━━━━━━━━━━━━\nУстановлен: {context.args[0]}\nИзменение действует до перезапуска сервиса.\n━━━━━━━━━━━━━━━━━━")
 
     async def portfolio(update, context):
         if not await authorized(update): return await deny(update)
@@ -1197,22 +1254,22 @@ def build_app(s, engine, exchange):
                 fx_text += " Нет свежего рыночного снимка; оценка P/L скрыта."
             return _format_report("💼 ПОРТФЕЛЬ PAPER", "💰 СВОБОДНЫЕ СРЕДСТВА\n" + ("\n".join(balances) or "Нет свободных средств.") + "\n\n🛡 ОЦЕНКА И FX\n" + fx_text + "\n\n📦 ОТКРЫТЫЕ ПОЗИЦИИ\n" + ("\n".join(lines) or "Нет открытых позиций."))
         message = await context.application.bot_data["run_blocking"].run(read_portfolio)
-        await update.effective_message.reply_text(message)
+        await send_report(update, context, message)
 
     async def run(update, context):
         if not await authorized(update): return await deny(update)
         await context.application.bot_data["run_blocking"].run(engine.start)
-        await update.effective_message.reply_text("▶️ PAPER — ЗАПУСК\n━━━━━━━━━━━━━━━━━━\nСтатус: активен\nАвтосканирование включено.\n━━━━━━━━━━━━━━━━━━")
+        await send_report(update, context, "▶️ PAPER — ЗАПУСК\n━━━━━━━━━━━━━━━━━━\nСтатус: активен\nАвтосканирование включено.\n━━━━━━━━━━━━━━━━━━")
 
     async def pause(update, context):
         if not await authorized(update): return await deny(update)
         await context.application.bot_data["run_blocking"].run(lambda: engine.stop("Paused by owner"))
-        await update.effective_message.reply_text("⏸ PAPER — ПАУЗА\n━━━━━━━━━━━━━━━━━━\nНовые сделки остановлены.\nОткрытые позиции сохраняются; мониторинг рынка продолжается.\n━━━━━━━━━━━━━━━━━━")
+        await send_report(update, context, "⏸ PAPER — ПАУЗА\n━━━━━━━━━━━━━━━━━━\nНовые сделки остановлены.\nОткрытые позиции сохраняются; мониторинг рынка продолжается.\n━━━━━━━━━━━━━━━━━━")
 
     async def stop(update, context):
         if not await authorized(update): return await deny(update)
         await context.application.bot_data["run_blocking"].run(lambda: engine.stop("Emergency stop via Telegram"))
-        await update.effective_message.reply_text("⛔ PAPER — STOP\n━━━━━━━━━━━━━━━━━━\nАвтоматические сделки остановлены.\nОткрытые позиции не удалены.\n━━━━━━━━━━━━━━━━━━")
+        await send_report(update, context, "⛔ PAPER — STOP\n━━━━━━━━━━━━━━━━━━\nАвтоматические сделки остановлены.\nОткрытые позиции не удалены.\n━━━━━━━━━━━━━━━━━━")
 
     async def topicid(update, context):
         if not await authorized(update): return await deny(update)
@@ -1272,6 +1329,21 @@ def build_app(s, engine, exchange):
         q = update.callback_query
         if not await authorized(update):
             await q.answer("Доступ запрещён", show_alert=True); return
+        if q.data and q.data.startswith("rp:"):
+            try:
+                _, message_id_text, page_text = q.data.split(":", 2)
+                message_id, page_index = int(message_id_text), int(page_text)
+                key = f"{q.message.chat_id}:{message_id}"
+                saved = context.application.bot_data.get("report_pages", {}).get(key)
+                if not saved or not 0 <= page_index < len(saved["pages"]):
+                    await q.answer("Страницы отчёта больше недоступны", show_alert=True)
+                    return
+                pages = saved["pages"]
+                await q.answer(f"Страница {page_index + 1}/{len(pages)}")
+                await q.edit_message_text(pages[page_index], parse_mode=saved.get("parse_mode"), reply_markup=_report_page_keyboard(message_id, page_index, len(pages)))
+            except (ValueError, IndexError):
+                await q.answer("Не удалось открыть страницу", show_alert=True)
+            return
         await q.answer()
         handlers = {"scan": scan, "portfolio": portfolio, "run": run, "pause": pause, "stop": stop}
         fn = handlers.get(q.data)
