@@ -68,7 +68,8 @@ def test_automatic_research_report_marks_passed_models():
 
 
 
-def test_scan_report_formats_market_stats_and_ton_section():
+
+def test_scan_report_matches_monitor_status_plain_text_layout():
     from src.trader.telegram_ui import _format_scan_report
 
     report = _format_scan_report([
@@ -92,30 +93,11 @@ def test_scan_report_formats_market_stats_and_ton_section():
         },
     ], 1348, 1325)
 
-    assert "🔎 <b>СКАНИРОВАНИЕ РЫНКА KRAKEN</b>" in report
-    assert "BUY-СИГНАЛОВ НЕТ" in report
-    assert "Рынков Kraken: <b>1,348</b>" in report
-    assert "Получено тикеров: <b>1,325</b>" in report
-    assert "KNTQUSD" in report and "141,407 EUR/24ч" in report
-    assert "TONEUR" in report and "19.6 bps" in report
-    assert "TONUSD" in report and "OHLC отложен" in report
-    assert "RSI 52.8 supportive" in report
-
-
-def test_scan_report_escapes_dynamic_html_and_marks_buy_signal():
-    from src.trader.telegram_ui import _format_scan_report
-
-    report = _format_scan_report([{
-        "symbol": "<XBTEUR>",
-        "signal": "BUY",
-        "score": 5,
-        "turnover_eur": 1000,
-        "price": 60000,
-        "ohlc_analyzed": True,
-        "reasons": ["Strong <trend> & momentum"],
-    }], 10, 9)
-
-    assert "🟢 <b>НАЙДЕНЫ BUY-СИГНАЛЫ</b>" in report
-    assert "&lt;XBTEUR&gt;" in report
-    assert "Strong &lt;trend&gt; &amp; momentum" in report
-    assert "<XBTEUR>" not in report
+    assert report.startswith("🔎 СКАНИРОВАНИЕ РЫНКА KRAKEN\\nВсего рынков Kraken: 1,348")
+    assert "Тикеров получено: 1,325" in report
+    assert "Сигналов BUY: 0" in report
+    assert "KNTQUSD: HOLD (3/5), оборот 141,407 EUR/24ч, цена 0.46052" in report
+    assert "  Причина: Trend not bullish; RSI 52.8 supportive" in report
+    assert "Все рынки получают мониторинг котировок; анализ свечей ограничен бюджетом запросов." in report
+    assert "TONEUR: HOLD | спред 19.6 bps | оборот 30,894 EUR/24ч | OHLC проверен" in report
+    assert "TONUSD: HOLD | спред 8.7 bps | оборот 847,000 EUR/24ч | OHLC отложен" in report
