@@ -120,6 +120,48 @@ def test_http_errors_are_propagated():
         client._request("/0/public/SystemStatus")
 
 
+def test_public_request_retries_transient_http_503(monkeypatch):
+    client = KrakenSpot()
+    failed = FakeResponse({}, requests.HTTPError("503 Server Error"))
+    failed.status_code = 503
+    failed.headers = {}
+    failed.status_error.response = failed
+    succeeded = FakeResponse({"error": [], "result": {"ok": True}})
+    session = FakeSession(failed)
+    calls = []
+
+    def get(*args, **kwargs):
+        calls.append((args, kwargs))
+        return failed if len(calls) == 1 else succeeded
+
+    session.get = get
+    client.session = session
+    monkeypatch.setattr("src.trader.exchange.time.sleep", lambda _delay: None)
+
+    assert client._request("/0/public/SystemStatus") == {"ok": True}
+    assert len(calls) == 2
+
+
+def test_public_request_retries_transient_timeout(monkeypatch):
+    client = KrakenSpot()
+    succeeded = FakeResponse({"error": [], "result": {"ok": True}})
+    session = FakeSession(succeeded)
+    calls = []
+
+    def get(*args, **kwargs):
+        calls.append((args, kwargs))
+        if len(calls) == 1:
+            raise requests.Timeout("temporary timeout")
+        return succeeded
+
+    session.get = get
+    client.session = session
+    monkeypatch.setattr("src.trader.exchange.time.sleep", lambda _delay: None)
+
+    assert client._request("/0/public/SystemStatus") == {"ok": True}
+    assert len(calls) == 2
+
+
 def test_ticker_normalizes_kraken_response_and_caches_pair():
     client = KrakenSpot()
     session = FakeSession(FakeResponse({"error": [], "result": {

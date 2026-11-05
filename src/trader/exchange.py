@@ -64,22 +64,42 @@ class KrakenSpot:
                 raise RuntimeError("KRAKEN_API_SECRET must be valid base64") from exc
             signature = hmac.new(secret, message, hashlib.sha512).digest()
             headers = {"API-Key": self.api_key, "API-Sign": base64.b64encode(signature).decode()}
-        try:
-            if private:
+        if private:
+            try:
                 response = self.session.post(url, data=payload, headers=headers, timeout=self.timeout)
-            else:
-                # Kraken public REST endpoints share a per-IP call budget.
-                # Serialize requests and leave a small gap to reduce throttling.
-                with self._public_lock:
-                    # Keep all public Kraken REST calls at least 1.05 s apart.
-                    wait = 1.05 - (time.monotonic() - self._last_public_request)
-                    if wait > 0:
-                        time.sleep(wait)
-                    self._last_public_request = time.monotonic()
-                    response = self.session.get(url, params=data, timeout=self.timeout)
-            response.raise_for_status()
-        except (requests.Timeout, requests.ConnectionError) as exc:
-            raise RuntimeError(f"Kraken network request failed: {exc}") from exc
+                response.raise_for_status()
+            except (requests.Timeout, requests.ConnectionError) as exc:
+                raise RuntimeError(f"Kraken network request failed: {exc}") from exc
+        else:
+            # Public GETs are idempotent. Retry only transient transport and
+            # server/rate-limit failures; never retry private account requests.
+            retry_delays = (0.75, 1.5)
+            for attempt in range(len(retry_delays) + 1):
+                try:
+                    # Kraken public REST endpoints share a per-IP call budget.
+                    # Serialize requests and leave a small gap to reduce throttling.
+                    with self._public_lock:
+                        wait = 1.05 - (time.monotonic() - self._last_public_request)
+                        if wait > 0:
+                            time.sleep(wait)
+                        self._last_public_request = time.monotonic()
+                        response = self.session.get(url, params=data, timeout=self.timeout)
+                    response.raise_for_status()
+                    break
+                except (requests.Timeout, requests.ConnectionError) as exc:
+                    if attempt >= len(retry_delays):
+                        raise RuntimeError(f"Kraken network request failed: {exc}") from exc
+                    time.sleep(retry_delays[attempt])
+                except requests.HTTPError as exc:
+                    status = getattr(getattr(exc, "response", None), "status_code", None)
+                    if status not in {429, 500, 502, 503, 504} or attempt >= len(retry_delays):
+                        raise
+                    retry_after = getattr(getattr(exc, "response", None), "headers", {}).get("Retry-After")
+                    try:
+                        server_delay = max(0.0, float(retry_after))
+                    except (TypeError, ValueError, OverflowError):
+                        server_delay = 0.0
+                    time.sleep(min(8.0, max(retry_delays[attempt], server_delay)))
         try:
             result = response.json()
         except ValueError as exc:
