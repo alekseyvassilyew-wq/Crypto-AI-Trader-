@@ -5,6 +5,7 @@ from pathlib import Path
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from telegram.request import HTTPXRequest
+from telegram.error import NetworkError
 from .db import backup_database
 
 log = logging.getLogger(__name__)
@@ -1380,6 +1381,28 @@ def build_app(s, engine, exchange):
 
     async def application_error_handler(update, context):
         error = context.error
+        # Telegram polling runs through python-telegram-bot's network retry
+        # loop. A transient socket read failure is not an application crash:
+        # report it concisely and rate-limit alerts instead of sending a
+        # misleading full traceback for every reconnect attempt.
+        if isinstance(error, NetworkError):
+            log.warning("Transient Telegram network interruption; polling retry loop will reconnect")
+            import time
+            now = time.monotonic()
+            last_alert = context.application.bot_data.get("last_telegram_network_alert", 0.0)
+            if now - last_alert >= 300:
+                context.application.bot_data["last_telegram_network_alert"] = now
+                try:
+                    await send_topic(
+                        context, s.topic_errors_id,
+                        "⚠️ Временный обрыв соединения с Telegram API. "
+                        "Библиотека повторяет запрос автоматически; "
+                        "торговый процесс и PAPER-цикл продолжают работать.",
+                    )
+                except Exception:
+                    log.warning("Could not send Telegram network interruption notice")
+            return
+
         # Do not log exception strings: HTTP request exceptions can contain
         # credential-bearing request URLs. Keep only the exception class.
         error_name = type(error).__name__ if error else "UnknownError"
