@@ -185,7 +185,7 @@ def _format_paper_forward_report(metrics, hours, by_symbol_text, span_text, cove
         "━━━━━━━━━━━━━━━━━━",
         "ℹ️ Это изменение оценочной стоимости PAPER-портфеля, а не доказательство будущей доходности.",
     ]
-    return "\\n".join(lines)
+    return "\n".join(lines)
 
 def _format_automatic_research_report(trained):
     """Render compact, readable HTML cards for the scheduled ML research report."""
