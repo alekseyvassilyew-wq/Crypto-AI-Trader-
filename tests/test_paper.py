@@ -263,3 +263,23 @@ def test_convert_route_persists_successful_legs_together(tmp_path):
     assert saved["cash_by_currency"]["USD"] == pytest.approx(0)
     assert saved["cash_by_currency"]["GBP"] == pytest.approx(second["received"])
     db.close()
+
+
+def test_multiple_buys_accumulate_eur_basis_and_partial_sell_allocates_proportionally():
+    broker = PaperBroker(balance=200, fee_rate=0.01)
+    broker.cash_by_currency["USD"] = 100
+    broker._persist()
+
+    broker.buy("ETHEUR", 20, 10, currency="USD", quote_to_eur_rate=0.90)
+    broker.buy("ETHEUR", 30, 15, currency="USD", quote_to_eur_rate=0.95)
+
+    position = broker.positions["ETHEUR"]
+    assert position["qty"] == pytest.approx(20 / 10 + 30 / 15)
+    assert position["cost_basis_eur"] == pytest.approx(20 * 0.90 + 30 * 0.95)
+    assert position["entry_fees_eur"] == pytest.approx((20 + 30) * 0.01 * 0.90 + 30 * 0.01 * (0.95 - 0.90))
+
+    broker.sell("ETHEUR", 1.0, 16)
+    remaining = broker.positions["ETHEUR"]
+    assert remaining["qty"] == pytest.approx(2.0)
+    assert remaining["cost_basis_eur"] == pytest.approx((20 * 0.90 + 30 * 0.95) * 2 / 3)
+    assert remaining["entry_fees_eur"] == pytest.approx(((20 * 0.90 + 30 * 0.95) * 0.01) * 2 / 3)
