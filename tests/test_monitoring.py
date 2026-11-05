@@ -238,7 +238,7 @@ def test_monitor_status_reports_last_success_and_errors():
     assert "Timeout" in report
     assert "отслеживается запусков — 1" in report
     assert "Новых событий в последнем цикле: 2" in report
-    assert "Последняя подтверждённая отправка Telegram" in report
+    assert "Последняя подтверждённая отправка Telegram:" in report
     assert "secret-value" not in report
 
 
@@ -315,3 +315,26 @@ def test_backup_health_transition_alerts_only_on_changes():
     assert backup_health_transition("stale", "corrupt") == "failure"
     assert backup_health_transition("corrupt", "fresh") == "recovered"
     assert backup_health_transition(None, "missing") == "failure"
+
+
+
+def test_monitor_status_escapes_api_error_and_shows_dashboard_sections():
+    settings = SimpleNamespace(
+        render_api_key="secret",
+        render_service_id="service",
+        github_repository="owner/repo",
+        telegram_group_chat_id=-100123,
+    )
+    report = format_monitor_status(settings, {
+        "render_last_error": "<bad & unsafe>",
+        "render_event_ids": ["1", "2", "3"],
+        "github_status": {"1": "completed"},
+        "last_poll_at": "2026-11-05T13:00:00+00:00",
+        "last_events_count": 3,
+    })
+    assert "🛰 МОНИТОРИНГ ВНЕШНИХ СЕРВИСОВ" in report
+    assert "Последняя ошибка Render API: <bad & unsafe>" in report
+    assert "сохранено событий — 3" in report
+    assert "отслеживается запусков — 1" in report
+    assert "<bad & unsafe>" in report
+    assert "secret" not in report

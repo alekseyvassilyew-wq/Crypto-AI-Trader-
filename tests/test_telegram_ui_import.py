@@ -66,3 +66,38 @@ def test_automatic_research_report_marks_passed_models():
     assert "PF: <b>∞</b>" in report
     assert "Все исследовательские критерии пройдены." in report
 
+
+
+
+def test_scan_report_matches_monitor_status_plain_text_layout():
+    from src.trader.telegram_ui import _format_scan_report
+
+    report = _format_scan_report([
+        {
+            "symbol": "KNTQUSD", "signal": "HOLD", "score": 3,
+            "turnover_eur": 141407, "price": 0.46052,
+            "ohlc_analyzed": True,
+            "reasons": ["Trend not bullish", "RSI 52.8 supportive"],
+        },
+        {
+            "symbol": "TONEUR", "signal": "HOLD", "score": 2,
+            "turnover_eur": 30894, "price": 1.14,
+            "spread_bps": 19.6, "ohlc_analyzed": True,
+            "reasons": ["Trend not bullish"],
+        },
+        {
+            "symbol": "TONUSD", "signal": "HOLD", "score": 2,
+            "turnover_eur": 847000, "price": 1.148,
+            "spread_bps": 8.7, "ohlc_analyzed": False,
+            "reasons": ["OHLC analysis deferred"],
+        },
+    ], 1348, 1325)
+
+    assert report.startswith("🔎 СКАНИРОВАНИЕ РЫНКА KRAKEN\n━━━━━━━━━━━━━━━━━━\n🌐 СТАТИСТИКА РЫНКА\nВсего рынков Kraken: 1,348")
+    assert "Тикеров получено: 1,325" in report
+    assert "Сигналов BUY: 0" in report
+    assert "KNTQUSD: HOLD (3/5), оборот 141,407 EUR/24ч, цена 0.46052" in report
+    assert "  Причина: Trend not bullish; RSI 52.8 supportive" in report
+    assert "Все рынки получают мониторинг котировок; анализ свечей ограничен бюджетом запросов." in report
+    assert "TONEUR: HOLD | спред 19.6 bps | оборот 30,894 EUR/24ч | OHLC проверен" in report
+    assert "TONUSD: HOLD | спред 8.7 bps | оборот 847,000 EUR/24ч | OHLC отложен" in report

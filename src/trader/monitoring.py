@@ -59,45 +59,47 @@ def merge_monitor_health_state(persisted: dict, observed: dict) -> dict:
 
 
 def format_monitor_status(settings, state: dict) -> str:
-    """Build a safe owner-facing health summary without exposing credentials."""
+    """Build a concise plain-text service report in the bot's standard layout."""
     render_ready = bool(getattr(settings, "render_api_key", "") and getattr(settings, "render_service_id", ""))
     github_ready = bool(getattr(settings, "github_repository", ""))
     telegram_ready = bool(getattr(settings, "telegram_group_chat_id", 0))
+
+    def stamp(value):
+        return str(value) if value else "ещё не зафиксировано"
+
+    render_error = state.get("render_last_error")
+    github_error = state.get("github_last_error")
     lines = [
         "🛰 МОНИТОРИНГ ВНЕШНИХ СЕРВИСОВ",
+        "━━━━━━━━━━━━━━━━━━",
         f"Render API: {'НАСТРОЕН' if render_ready else 'НЕ НАСТРОЕН'}",
         f"GitHub Actions: {'НАСТРОЕН' if github_ready else 'НЕ НАСТРОЕН'}",
         f"Telegram-группа: {'НАСТРОЕНА' if telegram_ready else 'НЕ НАСТРОЕНА'}",
     ]
+    saved = state.get("render_event_ids")
+    tracked = state.get("github_status")
     if render_ready:
-        saved = state.get("render_event_ids")
         lines.append(f"Render: сохранено событий — {len(saved) if isinstance(saved, list) else 0}")
-        if state.get("render_last_success_at"):
-            lines.append(f"Последняя успешная проверка Render: {state['render_last_success_at']}")
-        else:
-            lines.append("Последняя успешная проверка Render: ещё не зафиксирована")
-        if state.get("render_last_error"):
-            lines.append(f"Последняя ошибка Render API: {state['render_last_error']}")
+        lines.append(f"Последняя успешная проверка Render: {stamp(state.get('render_last_success_at'))}")
+        if render_error:
+            lines.append(f"Последняя ошибка Render API: {str(render_error)[:250]}")
     if github_ready:
-        tracked = state.get("github_status")
         lines.append(f"GitHub: отслеживается запусков — {len(tracked) if isinstance(tracked, dict) else 0}")
-        if state.get("github_last_success_at"):
-            lines.append(f"Последняя успешная проверка GitHub: {state['github_last_success_at']}")
-        else:
-            lines.append("Последняя успешная проверка GitHub: ещё не зафиксирована")
-        if state.get("github_last_error"):
-            lines.append(f"Последняя ошибка GitHub API: {state['github_last_error']}")
+        lines.append(f"Последняя успешная проверка GitHub: {stamp(state.get('github_last_success_at'))}")
+        if github_error:
+            lines.append(f"Последняя ошибка GitHub API: {str(github_error)[:250]}")
     if telegram_ready:
-        if state.get("last_alert_delivery_at"):
-            lines.append(f"Последняя подтверждённая отправка Telegram: {state['last_alert_delivery_at']}")
-        else:
-            lines.append("Подтверждённая отправка Telegram: ещё не зафиксирована")
+        lines.append(f"Последняя подтверждённая отправка Telegram: {stamp(state.get('last_alert_delivery_at'))}")
     if state.get("last_poll_at"):
-        lines.append(f"Последний завершённый цикл мониторинга: {state['last_poll_at']}")
-        lines.append(f"Новых событий в последнем цикле: {int(state.get('last_events_count') or 0)}")
-    lines.append("API-ключи не отображаются. Доставка считается успешной только после ответа Telegram.")
+        lines.extend([
+            f"Последний завершённый цикл мониторинга: {stamp(state.get('last_poll_at'))}",
+            f"Новых событий в последнем цикле: {int(state.get('last_events_count') or 0)}",
+        ])
+    lines.extend([
+        "━━━━━━━━━━━━━━━━━━",
+        "API-ключи не отображаются. Доставка считается успешной только после ответа Telegram.",
+    ])
     return "\n".join(lines)
-
 
 def backup_health_transition(previous_status: str | None, current_status: str) -> str | None:
     """Return an alert class only when SQLite backup health changes."""

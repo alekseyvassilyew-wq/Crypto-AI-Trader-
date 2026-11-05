@@ -9,6 +9,98 @@ from .db import backup_database
 
 log = logging.getLogger(__name__)
 
+def _format_scan_report(rows, pair_count, ticker_count):
+    """Render /scan in the same plain-text, line-by-line style as /monitorstatus."""
+    def number(value, digits=2):
+        try:
+            return f"{float(value):,.{digits}f}"
+        except (TypeError, ValueError, OverflowError):
+            return "н/д"
+
+    buy_rows = [item for item in rows if item.get("signal") == "BUY"]
+    analyzed = [item for item in rows if item.get("ohlc_analyzed") is True]
+    ranked = sorted(
+        analyzed,
+        key=lambda item: (item.get("score", 0), item.get("turnover_eur", 0)),
+        reverse=True,
+    )[:12]
+    lines = [
+        "🔎 СКАНИРОВАНИЕ РЫНКА KRAKEN",
+        "━━━━━━━━━━━━━━━━━━",
+        "🌐 СТАТИСТИКА РЫНКА",
+        f"Всего рынков Kraken: {int(pair_count):,}",
+        f"Тикеров получено: {int(ticker_count):,}",
+        f"Пар с доступным EUR-маршрутом, прошедших анализ свечей: {len(analyzed)}",
+        f"Сигналов BUY: {len(buy_rows)}",
+        "",
+        "📊 РЕЗУЛЬТАТЫ АНАЛИЗА",
+    ]
+    for item in ranked:
+        symbol = str(item.get("symbol") or "—")
+        signal = str(item.get("signal") or "HOLD").upper()
+        score = number(item.get("score", 0), 0)
+        turnover = number(item.get("turnover_eur", 0), 0)
+        price = number(item.get("price"), 8)
+        lines.append(
+            f"{symbol}: {signal} ({score}/5), оборот {turnover} EUR/24ч, цена {price}"
+        )
+        reasons = item.get("reasons") or []
+        if reasons:
+            lines.append("  Причина: " + "; ".join(str(reason) for reason in reasons[:2]))
+    if not ranked:
+        lines.append("Нет пар, прошедших анализ свечей в этом цикле.")
+    lines.extend([
+        "",
+        "Все рынки получают мониторинг котировок; анализ свечей ограничен бюджетом запросов.",
+        "",
+        "━━━━━━━━━━━━━━━━━━",
+        "🪙 ОТДЕЛЬНАЯ ПРОВЕРКА TON",
+    ])
+    ton = {
+        str(item.get("symbol") or "").upper(): item
+        for item in rows
+        if str(item.get("symbol") or "").upper() in {"TONEUR", "TONUSD"}
+    }
+    if ton:
+        for symbol in ("TONEUR", "TONUSD"):
+            item = ton.get(symbol)
+            if item is None:
+                continue
+            spread = item.get("spread_bps")
+            spread_text = f"{number(spread, 1)} bps" if spread is not None else "нет данных"
+            turnover = item.get("turnover_eur")
+            turnover_text = f"{number(turnover, 0)} EUR/24ч" if turnover is not None else "нет данных"
+            status = "OHLC проверен" if item.get("ohlc_analyzed") else "OHLC отложен"
+            lines.append(
+                f"{symbol}: {item.get('signal', 'HOLD')} | спред {spread_text} | "
+                f"оборот {turnover_text} | {status}"
+            )
+            reasons = item.get("reasons") or []
+            if reasons:
+                lines.append("  Причина: " + "; ".join(str(reason) for reason in reasons[:2]))
+    else:
+        lines.append("TONEUR/TONUSD не найдены в текущем снимке Kraken.")
+    return "\n".join(lines)[:3900]
+
+
+
+def _telegram_plain(value):
+    """Convert Telegram HTML markup to safe, readable plain text."""
+    import re
+    text = str(value or "")
+    text = re.sub(r"<a href=\"([^\"]+)\">([^<]*)</a>", lambda match: f"{match.group(2)} ({match.group(1)})", text, flags=re.IGNORECASE)
+    text = re.sub(r"</?(?:b|strong|i|em|u|s|code|pre)>", "", text, flags=re.IGNORECASE)
+    return html.unescape(text)
+
+
+def _format_report(title, body):
+    """Apply the shared Telegram report header and divider layout."""
+    content = str(body or "").strip()
+    if content.startswith(title):
+        content = content[len(title):].lstrip("\n")
+    return f"{title}\n━━━━━━━━━━━━━━━━━━\n{content}\n━━━━━━━━━━━━━━━━━━"
+
+
 def _format_automatic_research_report(trained):
     """Render compact, readable HTML cards for the scheduled ML research report."""
     def pct(value):
@@ -148,9 +240,15 @@ def build_app(s, engine, exchange):
     async def send_topic(context, topic_id, text, parse_mode=None):
         if not s.telegram_group_chat_id:
             return
-        kwargs = {"chat_id": s.telegram_group_chat_id, "text": text[:3900]}
-        if parse_mode:
-            kwargs["parse_mode"] = parse_mode
+        plain_text = _telegram_plain(text).strip()
+        if plain_text and "━━━━━━━━━━━━━━━━━━" not in plain_text:
+            heading, separator, remainder = plain_text.partition("\n")
+            plain_text = (
+                heading + "\n━━━━━━━━━━━━━━━━━━"
+                + (("\n" + remainder) if separator else "")
+                + "\n━━━━━━━━━━━━━━━━━━"
+            )
+        kwargs = {"chat_id": s.telegram_group_chat_id, "text": plain_text[:3900]}
         if topic_id:
             kwargs["message_thread_id"] = topic_id
         await context.bot.send_message(**kwargs)
@@ -275,25 +373,31 @@ def build_app(s, engine, exchange):
     async def monitorstatus(update, context):
         if not await authorized(update): return await deny(update)
         def read_monitor_status():
-            from .db import get_state
+            from .db import get_state, get_backup_health
             from .monitoring import format_monitor_status
             state = get_state(monitor_db, "external_monitor_state", {})
             if not isinstance(state, dict):
                 state = {}
             report = format_monitor_status(s, state)
-            from .db import get_backup_health
             backup = get_backup_health(Path(s.db_path).expanduser().parent / "backups", max_age_hours=26, keep=7)
             if backup["count"] == 0:
-                backup_line = "SQLite backup: НЕ НАЙДЕНА"
+                backup_block = (
+                    "🗄 SQLITE BACKUP\n"
+                    "🔴 РЕЗЕРВНАЯ КОПИЯ НЕ НАЙДЕНА\n"
+                    "Проверка: нет данных  •  Копий: 0/7"
+                )
             else:
                 age_hours = backup["age_seconds"] / 3600.0
-                backup_line = (
-                    f"SQLite backup: {backup['latest_at']} UTC; возраст {age_hours:.1f} ч; "
-                    f"integrity {backup['integrity']}; копий {backup['count']}/7"
+                healthy = bool(backup["healthy"])
+                backup_block = (
+                    "🗄 SQLITE BACKUP\n"
+                    f"{'🟢 РЕЗЕРВНАЯ КОПИЯ В ПОРЯДКЕ' if healthy else '🔴 ТРЕБУЕТСЯ ПРОВЕРКА'}\n"
+                    f"🕒 Дата: {backup['latest_at']} UTC\n"
+                    f"⏱ Возраст: {age_hours:.1f} ч  •  "
+                    f"Integrity: {backup['integrity']}  •  "
+                    f"Копий: {backup['count']}/7"
                 )
-                if not backup["healthy"]:
-                    backup_line += " — ВНИМАНИЕ: ПРОВЕРКА НЕ ПРОЙДЕНА"
-            return report + "\n" + backup_line
+            return report + "\n━━━━━━━━━━━━━━━━━━\n" + backup_block
         message = await context.application.bot_data["monitor_runner"].run(read_monitor_status)
         await update.effective_message.reply_text(message)
 
@@ -317,14 +421,14 @@ def build_app(s, engine, exchange):
             age_text = "нет резервной копии" if age is None else f"{int(age // 3600)} ч {int((age % 3600) // 60)} мин"
             status_text = "OK" if integrity == "ok" and backup["healthy"] else "ТРЕБУЕТ ВНИМАНИЯ"
             message = (
-                "🗄 SQLITE — ДИАГНОСТИКА\n"
-                f"Общий статус: {status_text}\n"
+                "🗄 ДИАГНОСТИКА SQLITE\n━━━━━━━━━━━━━━━━━━\n"
+                f"🛡 Общий статус: {status_text}\n\n💾 РАБОЧАЯ БАЗА ДАННЫХ\n"
                 f"Проверка рабочей БД: {integrity}\n"
-                f"Размер БД: {db_size / 1024 / 1024:.2f} MB | WAL: {wal_size / 1024 / 1024:.2f} MB\n"
-                f"Резервных копий: {backup['count']}/7\n"
-                f"Возраст последней копии: {age_text}\n"
-                f"Integrity последней копии: {backup['integrity']}\n"
-                f"Лимит возраста: 26 ч | Ротация: {'OK' if backup['retention_ok'] else 'ПРЕВЫШЕНА'}"
+                f"  Размер БД: {db_size / 1024 / 1024:.2f} MB  •  WAL: {wal_size / 1024 / 1024:.2f} MB\n\n📦 РЕЗЕРВНЫЕ КОПИИ\n"
+                f"  Количество: {backup['count']}/7\n"
+                f"  Возраст последней: {age_text}\n"
+                f"  Integrity: {backup['integrity']}\n"
+                f"  Лимит возраста: 26 ч  •  Ротация: {'OK' if backup['retention_ok'] else 'ПРЕВЫШЕНА'}\n━━━━━━━━━━━━━━━━━━"
             )
             await update.effective_message.reply_text(message)
         except Exception as exc:
@@ -333,65 +437,15 @@ def build_app(s, engine, exchange):
 
     async def scan(update, context):
         if not await authorized(update): return await deny(update)
-        await update.effective_message.reply_text("Сканирование рынка…")
+        await update.effective_message.reply_text("🔎 Сканирование рынков Kraken…")
         try:
             def run_scan():
                 rows = engine.scan()
                 return rows, len(engine.market_pairs), engine.market_ticker_count
             rows, pair_count, ticker_count = await context.application.bot_data["run_blocking"].run(run_scan)
-            buy_rows = [x for x in rows if x.get("signal") == "BUY"]
-            analyzed = [x for x in rows if x.get("ohlc_analyzed") is True]
-            ranked = sorted(
-                analyzed,
-                key=lambda x: (x.get("score", 0), x.get("turnover_eur", 0)),
-                reverse=True,
-            )[:12]
-            lines = [
-                f"Всего рынков Kraken: {pair_count}",
-                f"Тикеров получено: {ticker_count}",
-                f"Пар с доступным EUR-маршрутом, прошедших анализ свечей: {len(analyzed)}",
-                f"Сигналов BUY: {len(buy_rows)}",
-                "",
-            ]
-            lines.extend(
-                f"{x['symbol']}: {x['signal']} ({x.get('score', 0)}/5), "
-                f"оборот {x.get('turnover_eur', 0):,.0f} EUR/24ч, цена {x.get('price', 0):,.8g}\n"
-                f"  Причина: {'; '.join(x.get('reasons', [])[:2]) or 'Нет дополнительных причин'}"
-                for x in ranked
-            )
-            lines.append("Все рынки получают мониторинг котировок; анализ свечей ограничен бюджетом запросов.")
-
-            # Always surface the specifically requested TON markets, even if
-            # their OHLC analysis is deferred by the rotating scan budget.
-            ton_by_symbol = {
-                str(item.get("symbol") or "").upper(): item
-                for item in rows
-                if str(item.get("symbol") or "").upper() in {"TONEUR", "TONUSD"}
-            }
-            lines.extend(["", "🪙 ОТДЕЛЬНАЯ ПРОВЕРКА TON"])
-            if ton_by_symbol:
-                for symbol in ("TONEUR", "TONUSD"):
-                    item = ton_by_symbol.get(symbol)
-                    if item is None:
-                        continue
-                    spread = item.get("spread_bps")
-                    spread_text = f"{float(spread):.1f} bps" if spread is not None else "нет данных"
-                    turnover = item.get("turnover_eur")
-                    turnover_text = f"{float(turnover):,.0f} EUR/24ч" if turnover is not None else "нет данных"
-                    lines.append(
-                        f"{symbol}: {item.get('signal', 'HOLD')} | "
-                        f"спред {spread_text} | оборот {turnover_text} | "
-                        f"{'OHLC проверен' if item.get('ohlc_analyzed') else 'OHLC отложен'}"
-                    )
-                    reasons = item.get("reasons") or []
-                    if reasons:
-                        lines.append("  Причина: " + "; ".join(str(reason) for reason in reasons[:2]))
-            else:
-                lines.append("TONEUR/TONUSD не найдены в текущем снимке Kraken.")
-            await update.effective_message.reply_text("\n".join(lines)[:3900])
+            message = _format_scan_report(rows, pair_count, ticker_count)
+            await update.effective_message.reply_text(message)
         except Exception as exc:
-            # Keep the full traceback in Render logs and expose the actionable
-            # exception type/message in the private owner Telegram response.
             log.error("Market scan failed: %s", type(exc).__name__)
             await update.effective_message.reply_text(
                 format_error(exc, "/scan", update.effective_user), parse_mode="HTML"
@@ -528,7 +582,7 @@ def build_app(s, engine, exchange):
                 ]
                 if failures:
                     lines.append("Рынки, пропущенные при загрузке: " + ", ".join(failures))
-                await update.effective_message.reply_text("\n".join(lines)[:3900])
+                await update.effective_message.reply_text(_format_report(lines[0], "\n".join(lines))[:3900])
             except Exception as exc:
                 log.error("Portfolio historical backtest failed: %s", type(exc).__name__)
                 await update.effective_message.reply_text(format_error(exc, "/backtest portfolio", update.effective_user))
@@ -578,7 +632,7 @@ def build_app(s, engine, exchange):
                 f"Оборот: {result['gross_turnover']:.4f}; ставка: {result['fee_rate'] * 100:.3f}% на сторону\n"
                 "Издержки: комиссия на вход/выход + проскальзывание 5 bps на сторону. "
                 "Исполнение моделируется по открытию следующей свечи. "
-                "Это тест одного рынка, не прогноз и не гарантия будущей прибыли."
+"━━━━━━━━━━━━━━━━━━\nЭто тест одного рынка, не прогноз и не гарантия будущей прибыли."
             )
         except Exception as exc:
             log.error("Historical backtest failed for %s: %s", symbol, type(exc).__name__)
@@ -590,7 +644,7 @@ def build_app(s, engine, exchange):
         if not await authorized(update): return await deny(update)
         def read_account():
             balances = [f"{currency}: {amount:.8f}" for currency, amount in sorted(engine.paper.cash_by_currency.items())]
-            return "Виртуальные остатки PAPER:\n" + ("\n".join(balances) or "Нулевые остатки.")
+            return _format_report("💰 СВОБОДНЫЕ СРЕДСТВА PAPER", "Виртуальные остатки:\n" + ("\n".join(balances) or "Нулевые остатки.") + "\n\nРеальные средства не затрагиваются.")
         message = await context.application.bot_data["run_blocking"].run(read_account)
         await update.effective_message.reply_text(message)
 
@@ -648,7 +702,7 @@ def build_app(s, engine, exchange):
                 "🏦 РЕАЛЬНЫЙ БАЛАНС KRAKEN\n"
                 + body
                 + "\n\nТолько чтение. Реальные средства не импортируются в виртуальный PAPER-кошелёк. "
-                "Реальные ордера отключены."
+                "Реальные ордера отключены.\\n━━━━━━━━━━━━━━━━━━"
             )
         except Exception as exc:
             log.error("Read-only Kraken balance request failed: %s", type(exc).__name__)
@@ -687,7 +741,7 @@ def build_app(s, engine, exchange):
             routes = build_asset_pair_routes(
                 [item["asset"] for item in inventory["assets"]], pairs
             )
-            lines = ["🏦 ПРЕДТОРГОВАЯ ПРОВЕРКА KRAKEN", 
+            lines = ["🏦 ПРЕДТОРГОВАЯ ПРОВЕРКА KRAKEN", "━━━━━━━━━━━━━━━━━━", "💼 СОСТОЯНИЕ КОШЕЛЬКА",
                      f"Активов с положительным остатком: {inventory['asset_count']}"]
             if inventory["asset_count"] == 0:
                 lines.append("Кошелёк пуст. Проверка торговых маршрутов будет доступна после пополнения.")
@@ -723,6 +777,7 @@ def build_app(s, engine, exchange):
                          f'максимум позиций {s.max_positions}; спред до {s.max_spread_bps:.1f} bps.')
             lines.append("Минимумы и комиссии берутся из метаданных Kraken; отсутствующие значения не угадываются.")
             lines.append("Только чтение: реальные ордера, переводы и импорт средств в PAPER отключены.")
+            lines.append("━━━━━━━━━━━━━━━━━━")
             await update.effective_message.reply_text("\n".join(lines)[:3900])
         except Exception as exc:
             log.error("Read-only Kraken wallet preflight failed: %s", type(exc).__name__)
@@ -754,6 +809,7 @@ def build_app(s, engine, exchange):
             gate = "ПРОШЛА исследовательский фильтр" if candidate["research_pass"] else "НЕ прошла исследовательский фильтр"
             await update.effective_message.reply_text(
                 f"🧠 МОДЕЛЬ {symbol} — {gate}\n"
+                "━━━━━━━━━━━━━━━━━━\n"
                 f"Статус: SHADOW ONLY (не торгует)\n"
                 f"Обучающих/тестовых выборок: {candidate['samples']}\n"
                 f"Walk-forward фолдов: {len(candidate['walk_forward'])}/3\n"
@@ -788,7 +844,7 @@ def build_app(s, engine, exchange):
                    if candidate.get("probability_diagnostics", {}).get("walk_forward_oos", {}).get("min") is not None
                    else "Нет вневыборочных прогнозов.\n")
                 + f"Исторических свечей накоплено: {candidate.get('history_candles', candidate['samples'])}\n"
-                "Модель остаётся SHADOW ONLY: автоматического внедрения в торговлю нет."
+                "Модель остаётся SHADOW ONLY: автоматического внедрения в торговлю нет.\n"
             )
         except Exception as exc:
             log.error("ML research failed for %s: %s", symbol, type(exc).__name__)
@@ -801,7 +857,7 @@ def build_app(s, engine, exchange):
             rows = engine.db.execute(
                 "SELECT key FROM app_state WHERE key LIKE 'ml_candidate_%' ORDER BY updated_at DESC"
             ).fetchall()
-            lines = ["🧠 ИССЛЕДОВАТЕЛЬСКИЕ МОДЕЛИ (не торгуют):"]
+            lines = ["🧠 ИССЛЕДОВАТЕЛЬСКИЕ МОДЕЛИ", "━━━━━━━━━━━━━━━━━━", "Статус: SHADOW ONLY — модели не торгуют"]
             for row in rows[:15]:
                 item = get_state(engine.db, row["key"], {})
                 metric = item.get("out_of_sample", {})
@@ -816,7 +872,7 @@ def build_app(s, engine, exchange):
                 )
             return lines
         lines = await context.application.bot_data["run_blocking"].run(read_models)
-        if len(lines) == 1:
+        if len(lines) == 3:
             return await update.effective_message.reply_text("Исследовательских моделей пока нет. Запусти /learn XBTEUR.")
         await update.effective_message.reply_text("\n".join(lines)[:3900])
 
@@ -832,7 +888,7 @@ def build_app(s, engine, exchange):
                 return await update.effective_message.reply_text(
                     "История исследований пока пуста. Запусти /learn XBTEUR или дождись автоматического исследования."
                 )
-            lines = ["🧠 ИСТОРИЯ ИССЛЕДОВАНИЙ — SHADOW ONLY"]
+            lines = ["🧠 ИСТОРИЯ ИССЛЕДОВАНИЙ — SHADOW ONLY", "━━━━━━━━━━━━━━━━━━", "Последние 10 запусков; результаты не торгуют автоматически."]
             for item in rows:
                 report = item.get("report") or {}
                 oos = report.get("out_of_sample") or {}
@@ -920,7 +976,7 @@ def build_app(s, engine, exchange):
                 f"Комиссии по исполнениям: {metrics['total_fees_eur']:.4f} EUR | без EUR-оценки: {metrics['fills_without_eur_fee_valuation']}\n"
                 f"По монетам: {by_symbol_text}\n"
                 f"Период: {metrics['first_ts']} — {metrics['last_ts']} UTC\n"
-                "Это изменение стоимости PAPER-портфеля, а не доказательство будущей доходности."
+                "━━━━━━━━━━━━━━━━━━\nЭто изменение стоимости PAPER-портфеля, а не доказательство будущей доходности."
             )
         except Exception as exc:
             await update.effective_message.reply_text(f"Ошибка отчёта: {safe_error_message(exc)}")
@@ -929,11 +985,11 @@ def build_app(s, engine, exchange):
         if not await authorized(update): return await deny(update)
         allowed = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "24h": 86400}
         if not context.args or context.args[0] not in allowed:
-            return await update.effective_message.reply_text("Использование: /interval 1m|5m|15m|30m|1h|4h|24h\nСканер Render проверяет рынок по заданному интервалу.")
+            return await update.effective_message.reply_text("⏱ ИНТЕРВАЛ СКАНИРОВАНИЯ\n━━━━━━━━━━━━━━━━━━\nИспользование: /interval 1m|5m|15m|30m|1h|4h|24h\nСканер Kraken проверяет рынок по заданному интервалу.\n━━━━━━━━━━━━━━━━━━")
         await context.application.bot_data["run_blocking"].run(
             lambda: setattr(engine, "scan_interval_seconds", allowed[context.args[0]])
         )
-        await update.effective_message.reply_text(f"Интервал установлен: {context.args[0]}. Изменение действует до перезапуска сервиса.")
+        await update.effective_message.reply_text(f"⏱ ИНТЕРВАЛ СКАНИРОВАНИЯ\n━━━━━━━━━━━━━━━━━━\nУстановлен: {context.args[0]}\nИзменение действует до перезапуска сервиса.\n━━━━━━━━━━━━━━━━━━")
 
     async def portfolio(update, context):
         if not await authorized(update): return await deny(update)
@@ -971,24 +1027,24 @@ def build_app(s, engine, exchange):
             fx_text = "Свежие EUR-курсы для всех валют." if not missing else "Нет свежего EUR-курса: " + ", ".join(missing)
             if not quotes_fresh:
                 fx_text += " Нет свежего рыночного снимка; оценка P/L скрыта."
-            return "PAPER-кошелёк:\n" + ("\n".join(balances) or "Нет свободных средств.") + "\n" + fx_text + "\n\nПозиции:\n" + ("\n".join(lines) or "Нет открытых позиций.")
+            return _format_report("💼 ПОРТФЕЛЬ PAPER", "💰 СВОБОДНЫЕ СРЕДСТВА\n" + ("\n".join(balances) or "Нет свободных средств.") + "\n\n🛡 ОЦЕНКА И FX\n" + fx_text + "\n\n📦 ОТКРЫТЫЕ ПОЗИЦИИ\n" + ("\n".join(lines) or "Нет открытых позиций."))
         message = await context.application.bot_data["run_blocking"].run(read_portfolio)
         await update.effective_message.reply_text(message)
 
     async def run(update, context):
         if not await authorized(update): return await deny(update)
         await context.application.bot_data["run_blocking"].run(engine.start)
-        await update.effective_message.reply_text("▶️ PAPER-торговля запущена. Автосканирование включено.")
+        await update.effective_message.reply_text("▶️ PAPER — ЗАПУСК\n━━━━━━━━━━━━━━━━━━\nСтатус: активен\nАвтосканирование включено.\n━━━━━━━━━━━━━━━━━━")
 
     async def pause(update, context):
         if not await authorized(update): return await deny(update)
         await context.application.bot_data["run_blocking"].run(lambda: engine.stop("Paused by owner"))
-        await update.effective_message.reply_text("⏸ Новые сделки остановлены. Открытые PAPER-позиции сохраняются; мониторинг рынка продолжается.")
+        await update.effective_message.reply_text("⏸ PAPER — ПАУЗА\n━━━━━━━━━━━━━━━━━━\nНовые сделки остановлены.\nОткрытые позиции сохраняются; мониторинг рынка продолжается.\n━━━━━━━━━━━━━━━━━━")
 
     async def stop(update, context):
         if not await authorized(update): return await deny(update)
         await context.application.bot_data["run_blocking"].run(lambda: engine.stop("Emergency stop via Telegram"))
-        await update.effective_message.reply_text("⛔ STOP: автоматические сделки остановлены.")
+        await update.effective_message.reply_text("⛔ PAPER — STOP\n━━━━━━━━━━━━━━━━━━\nАвтоматические сделки остановлены.\nОткрытые позиции не удалены.\n━━━━━━━━━━━━━━━━━━")
 
     async def topicid(update, context):
         if not await authorized(update): return await deny(update)
@@ -1214,13 +1270,16 @@ def build_app(s, engine, exchange):
                     for symbol, position in state["positions"].items()
                 ]
                 report = (
-                    "🟢 PAPER — автоматический отчёт\n"
-                    f"Последнее успешное сканирование: {scan_time}\n"
-                    f"Виртуальные средства: {state['cash']}\n"
-                    f"Открытые позиции: {len(state['positions'])}/{s.max_positions}\n"
-                    f"P/L сегодня: {daily_text}\n"
-                    "Рыночные сигналы:\n" + ("\n".join(signal_lines) or "Нет данных") +
-                    "\nПозиции:\n" + ("\n".join(position_lines) or "Нет открытых позиций")
+                    "📊 CRYPTO AI TRADER — АВТОМАТИЧЕСКИЙ ОТЧЁТ\n"
+                    "━━━━━━━━━━━━━━━━━━\n"
+                    f"🕒 Последнее успешное сканирование: {scan_time}\n\n"
+                    "💼 ПОРТФЕЛЬ PAPER\n"
+                    f"  💰 Свободные средства: {state['cash']}\n"
+                    f"  📦 Открытые позиции: {len(state['positions'])}/{s.max_positions}\n"
+                    f"  📈 Результат за сегодня: {daily_text}\n\n"
+                    "🔎 РЫНОЧНЫЕ СИГНАЛЫ\n" + ("\n".join(signal_lines) or "Нет данных") +
+                    "\n\n📦 ОТКРЫТЫЕ ПОЗИЦИИ\n" + ("\n".join(position_lines) or "Нет открытых позиций") +
+                    "\n━━━━━━━━━━━━━━━━━━"
                 )
                 await send_topic(context, s.topic_general_id, report)
                 context.application.bot_data["last_general_report_at"] = now
