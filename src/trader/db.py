@@ -476,3 +476,39 @@ def get_telegram_report_pages(db, report_key):
             db.execute("DELETE FROM telegram_report_pages WHERE report_key=?", (report_key,))
         return None
     return pages
+
+
+def save_paper_fill(db, *, cash_by_currency, positions, symbol, side, qty, quote, fee, price,
+                    fee_eur=None, realized_pnl_eur=None):
+    """Atomically persist a PAPER wallet mutation and its corresponding trade fill."""
+    if not isinstance(cash_by_currency, dict) or not isinstance(positions, dict):
+        raise ValueError("PAPER wallet state must contain currency balances and positions")
+    normalized_fee_eur = None if fee_eur is None else float(fee_eur)
+    normalized_pnl_eur = None if realized_pnl_eur is None else float(realized_pnl_eur)
+    if normalized_fee_eur is not None and (not math.isfinite(normalized_fee_eur) or normalized_fee_eur < 0):
+        raise ValueError("EUR fee must be finite and non-negative")
+    if normalized_pnl_eur is not None and not math.isfinite(normalized_pnl_eur):
+        raise ValueError("Realized EUR PnL must be finite")
+    wallet = {
+        "cash": float(cash_by_currency.get("EUR", 0.0)),
+        "cash_by_currency": cash_by_currency,
+        "positions": positions,
+    }
+    payload = json.dumps(wallet, separators=(",", ":"), allow_nan=False)
+    numeric = (float(qty), float(quote), float(fee), float(price))
+    if not all(math.isfinite(value) for value in numeric):
+        raise ValueError("PAPER fill values must be finite")
+    if any(value < 0 for value in numeric) or numeric[0] <= 0 or numeric[3] <= 0:
+        raise ValueError("PAPER fill values are outside the valid range")
+    with db:
+        db.execute(
+            "INSERT INTO app_state(key,value,updated_at) VALUES('paper_broker',?,CURRENT_TIMESTAMP) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP",
+            (payload,),
+        )
+        db.execute(
+            "INSERT INTO trades(mode,symbol,side,qty,quote,fee,price,status,fee_eur,realized_pnl_eur) "
+            "VALUES('PAPER',?,?,?,?,?,?, 'FILLED',?,?)",
+            (str(symbol), str(side), numeric[0], numeric[1], numeric[2], numeric[3],
+             normalized_fee_eur, normalized_pnl_eur),
+        )
