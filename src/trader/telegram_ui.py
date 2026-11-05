@@ -10,51 +10,69 @@ from .db import backup_database
 log = logging.getLogger(__name__)
 
 def _format_scan_report(rows, pair_count, ticker_count):
-    """Render /scan in the same plain-text, line-by-line style as /monitorstatus."""
-    def number(value, digits=2):
+    """Render a compact, readable Telegram market-scan report."""
+    def number(value, digits=1):
         try:
             return f"{float(value):,.{digits}f}"
         except (TypeError, ValueError, OverflowError):
             return "н/д"
 
-    buy_rows = [item for item in rows if item.get("signal") == "BUY"]
+    def compact_turnover(value):
+        try:
+            amount = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return "н/д"
+        if amount >= 1_000_000:
+            return f"{amount / 1_000_000:.2f}".rstrip("0").rstrip(".") + "M"
+        if amount >= 1_000:
+            return f"{amount / 1_000:.1f}".rstrip("0").rstrip(".") + "k"
+        return f"{amount:,.0f}"
+
+    def compact_price(value):
+        try:
+            rendered = f"{float(value):.8f}".rstrip("0").rstrip(".")
+            return rendered or "0"
+        except (TypeError, ValueError, OverflowError):
+            return "н/д"
+
+    def reasons_text(item):
+        reasons = item.get("reasons") or []
+        return " · ".join(str(reason).strip() for reason in reasons[:2] if str(reason).strip())
+
+    buy_rows = [item for item in rows if str(item.get("signal") or "").upper() == "BUY"]
     analyzed = [item for item in rows if item.get("ohlc_analyzed") is True]
     ranked = sorted(
         analyzed,
         key=lambda item: (item.get("score", 0), item.get("turnover_eur", 0)),
         reverse=True,
     )[:12]
+
     lines = [
-        "🔎 СКАНИРОВАНИЕ РЫНКА KRAKEN",
+        "🔎 KRAKEN · СКАНИРОВАНИЕ",
         "━━━━━━━━━━━━━━━━━━",
-        "🌐 СТАТИСТИКА РЫНКА",
-        f"Всего рынков Kraken: {int(pair_count):,}",
-        f"Тикеров получено: {int(ticker_count):,}",
-        f"Пар с доступным EUR-маршрутом, прошедших анализ свечей: {len(analyzed)}",
-        f"Сигналов BUY: {len(buy_rows)}",
-        "",
-        "📊 РЕЗУЛЬТАТЫ АНАЛИЗА",
+        f"🌐 {int(pair_count):,} рынков  ·  {int(ticker_count):,} тикеров",
+        f"🕯 EUR + OHLC: {len(analyzed)}  ·  🟢 BUY: {len(buy_rows)}",
+        "━━━━━━━━━━━━━━━━━━",
+        "📊 РЕЗУЛЬТАТЫ · ТОП ПО ОЦЕНКЕ",
     ]
     for item in ranked:
         symbol = str(item.get("symbol") or "—")
         signal = str(item.get("signal") or "HOLD").upper()
+        signal_icon = "🟢" if signal == "BUY" else "🔴" if signal == "SELL" else "🟡"
         score = number(item.get("score", 0), 0)
-        turnover = number(item.get("turnover_eur", 0), 0)
-        price = number(item.get("price"), 8)
-        lines.append(
-            f"{symbol}: {signal} ({score}/5), оборот {turnover} EUR/24ч, цена {price}"
-        )
-        reasons = item.get("reasons") or []
-        if reasons:
-            lines.append("  Причина: " + "; ".join(str(reason) for reason in reasons[:2]))
+        turnover = compact_turnover(item.get("turnover_eur"))
+        price = compact_price(item.get("price"))
+        lines.append(f"{signal_icon} {symbol}  {signal} · {score}/5")
+        lines.append(f"   Оборот €{turnover}/24ч  ·  Цена {price}")
+        reason = reasons_text(item)
+        if reason:
+            lines.append(f"   {reason}")
     if not ranked:
         lines.append("Нет пар, прошедших анализ свечей в этом цикле.")
+
     lines.extend([
-        "",
-        "Все рынки получают мониторинг котировок; анализ свечей ограничен бюджетом запросов.",
-        "",
         "━━━━━━━━━━━━━━━━━━",
-        "🪙 ОТДЕЛЬНАЯ ПРОВЕРКА TON",
+        "🪙 TON · ОТДЕЛЬНАЯ ПРОВЕРКА",
     ])
     ton = {
         str(item.get("symbol") or "").upper(): item
@@ -67,22 +85,28 @@ def _format_scan_report(rows, pair_count, ticker_count):
             if item is None:
                 continue
             spread = item.get("spread_bps")
-            spread_text = f"{number(spread, 1)} bps" if spread is not None else "нет данных"
+            spread_text = f"{number(spread, 1)} bps" if spread is not None else "спред н/д"
             turnover = item.get("turnover_eur")
-            turnover_text = f"{number(turnover, 0)} EUR/24ч" if turnover is not None else "нет данных"
-            status = "OHLC проверен" if item.get("ohlc_analyzed") else "OHLC отложен"
+            turnover_text = f"€{compact_turnover(turnover)}/24ч" if turnover is not None else "оборот н/д"
+            status = "OHLC ✓" if item.get("ohlc_analyzed") else "OHLC отложен"
+            signal = str(item.get("signal") or "HOLD").upper()
+            signal_icon = "🟢" if signal == "BUY" else "🔴" if signal == "SELL" else "🟡"
             lines.append(
-                f"{symbol}: {item.get('signal', 'HOLD')} | спред {spread_text} | "
-                f"оборот {turnover_text} | {status}"
+                f"{signal_icon} {symbol} · {signal}  |  {spread_text}  |  "
+                f"{turnover_text}  |  {status}"
             )
-            reasons = item.get("reasons") or []
-            if reasons:
-                lines.append("  Причина: " + "; ".join(str(reason) for reason in reasons[:2]))
+            reason = reasons_text(item)
+            if reason:
+                lines.append(f"   {reason}")
     else:
-        lines.append("TONEUR/TONUSD не найдены в текущем снимке Kraken.")
-    return "\n".join(lines)[:3900]
+        lines.append("TONEUR и TONUSD не найдены в снимке Kraken.")
 
-
+    lines.extend([
+        "━━━━━━━━━━━━━━━━━━",
+        "ℹ️ Котировки мониторятся по всем рынкам; анализ свечей ограничен API-бюджетом.",
+    ])
+    report = "\n".join(lines)
+    return report if len(report) <= 3900 else report[:3880].rsplit("\n", 1)[0] + "\n… Остальное скрыто."
 
 def _telegram_plain(value):
     """Convert Telegram HTML markup to safe, readable plain text."""
