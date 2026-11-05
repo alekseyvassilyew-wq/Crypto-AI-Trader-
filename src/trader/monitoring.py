@@ -99,7 +99,7 @@ def format_monitor_status(settings, state: dict) -> str:
         "━━━━━━━━━━━━━━━━━━",
         "API-ключи не отображаются. Доставка считается успешной только после ответа Telegram.",
     ])
-    return "\\n".join(lines)
+    return "\n".join(lines)
 
 def backup_health_transition(previous_status: str | None, current_status: str) -> str | None:
     """Return an alert class only when SQLite backup health changes."""
