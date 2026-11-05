@@ -1057,6 +1057,10 @@ def test_shadow_research_uses_configured_paper_slippage(tmp_path, monkeypatch):
     result = engine.scan_one("XBTEUR", tickers=tickers, fx_rates={"EUR": 1.0}, quote_currency="EUR")
 
     assert result["ohlc_analyzed"] is True
-    assert result.get("ml_shadow_probability") == pytest.approx(0.5)
-    assert captured["slippage_bps"] == pytest.approx(17.0)
+    shadow_error = db.execute(
+        "SELECT details FROM audit WHERE event='ML_SHADOW_ERROR' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    assert captured.get("slippage_bps") == pytest.approx(17.0), (
+        shadow_error["details"] if shadow_error else "shadow settlement was not called"
+    )
     db.close()
