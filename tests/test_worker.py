@@ -60,6 +60,10 @@ def test_runner_cancellation_keeps_lock_until_thread_finishes():
         first = asyncio.create_task(runner.run(first_task))
         assert await asyncio.to_thread(started.wait, 1)
         first.cancel()
+        # Give the first cancellation time to enter its worker-drain handler,
+        # then cancel again to verify the lock still protects the shared thread.
+        await asyncio.sleep(0.05)
+        first.cancel()
         second = asyncio.create_task(runner.run(second_task))
         await asyncio.sleep(0.05)
         assert not second_started.is_set()
