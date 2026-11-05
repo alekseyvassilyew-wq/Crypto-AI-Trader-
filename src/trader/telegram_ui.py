@@ -636,7 +636,7 @@ def build_app(s, engine, exchange):
         if not await authorized(update): return await deny(update)
         def read_account():
             balances = [f"{currency}: {amount:.8f}" for currency, amount in sorted(engine.paper.cash_by_currency.items())]
-            return _format_report("💰 СВОБОДНЫЕ СРЕДСТВА PAPER", "Виртуальные остатки:\\n" + ("\\n".join(balances) or "Нулевые остатки.") + "\\n\\nРеальные средства не затрагиваются.")
+            return _format_report("💰 СВОБОДНЫЕ СРЕДСТВА PAPER", "Виртуальные остатки:\n" + ("\n".join(balances) or "Нулевые остатки.") + "\n\nРеальные средства не затрагиваются.")
         message = await context.application.bot_data["run_blocking"].run(read_account)
         await update.effective_message.reply_text(message)
 
@@ -1018,7 +1018,7 @@ def build_app(s, engine, exchange):
             fx_text = "Свежие EUR-курсы для всех валют." if not missing else "Нет свежего EUR-курса: " + ", ".join(missing)
             if not quotes_fresh:
                 fx_text += " Нет свежего рыночного снимка; оценка P/L скрыта."
-            return _format_report("💼 ПОРТФЕЛЬ PAPER", "💰 СВОБОДНЫЕ СРЕДСТВА\\n" + ("\\n".join(balances) or "Нет свободных средств.") + "\\n\\n🛡 ОЦЕНКА И FX\\n" + fx_text + "\\n\\n📦 ОТКРЫТЫЕ ПОЗИЦИИ\\n" + ("\\n".join(lines) or "Нет открытых позиций."))
+            return _format_report("💼 ПОРТФЕЛЬ PAPER", "💰 СВОБОДНЫЕ СРЕДСТВА\n" + ("\n".join(balances) or "Нет свободных средств.") + "\n\n🛡 ОЦЕНКА И FX\n" + fx_text + "\n\n📦 ОТКРЫТЫЕ ПОЗИЦИИ\n" + ("\n".join(lines) or "Нет открытых позиций."))
         message = await context.application.bot_data["run_blocking"].run(read_portfolio)
         await update.effective_message.reply_text(message)
 
