@@ -300,7 +300,8 @@ def test_monitor_status_shows_last_success_and_latest_api_error_together():
         "last_alert_delivery_at": "2026-11-04T15:00:02+00:00",
     })
 
-    assert "Render API: НАСТРОЕН" in report
+    assert "🟣 <b>RENDER API</b>" in report
+    assert "🔴 <b>НАСТРОЕН</b>" in report
     assert "🕒 Последняя успешная проверка: <code>2026-11-04T15:00:00+00:00</code>" in report
     assert "Последняя ошибка API: <code>Timeout</code>" in report
     assert "🕒 Последняя успешная проверка: <code>2026-11-04T15:00:01+00:00</code>" in report
