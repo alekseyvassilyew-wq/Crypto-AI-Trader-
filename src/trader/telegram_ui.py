@@ -76,7 +76,7 @@ def _format_scan_report(rows, pair_count, ticker_count):
                 lines.append("  Причина: " + "; ".join(str(reason) for reason in reasons[:2]))
     else:
         lines.append("TONEUR/TONUSD не найдены в текущем снимке Kraken.")
-    return "\\n".join(lines)[:3900]
+    return "\n".join(lines)[:3900]
 
 
 def _format_automatic_research_report(trained):
