@@ -18,13 +18,20 @@ class SerializedRunner:
             try:
                 return await asyncio.shield(worker)
             except asyncio.CancelledError:
-                # asyncio.to_thread cannot stop a running thread. Keep the lock
-                # until that thread has really finished, otherwise a subsequent
-                # operation could concurrently touch the same engine/connection.
-                try:
-                    await asyncio.shield(worker)
-                except BaseException:
-                    # Preserve cancellation of the caller; worker exceptions
-                    # are observed here so they do not become unhandled tasks.
-                    pass
+                # asyncio.to_thread cannot stop a running thread. Repeated
+                # cancellation requests must not release the lock early either.
+                # Drain the worker until the underlying thread has really ended.
+                while not worker.done():
+                    try:
+                        await asyncio.shield(worker)
+                    except asyncio.CancelledError:
+                        continue
+                    except BaseException:
+                        # Observe worker failures while preserving caller cancellation.
+                        break
+                if worker.done():
+                    try:
+                        worker.result()
+                    except BaseException:
+                        pass
                 raise
