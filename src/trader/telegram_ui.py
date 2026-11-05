@@ -140,7 +140,7 @@ def build_app(s, engine, exchange):
             else:
                 snapshot_text = "ещё нет сохранённых измерений"
             state_label = "🟢 АКТИВЕН" if state == "RUNNING" else "🟡 ПАУЗА"
-            balance_lines = "\\n".join(
+            balance_lines = "\n".join(
                 f"  <code>{html.escape(currency):5}</code> <b>{float(amount):,.6f}</b>"
                 for currency, amount in sorted(engine.paper.cash_by_currency.items())
                 if float(amount) > 1e-12
@@ -148,33 +148,33 @@ def build_app(s, engine, exchange):
             pnl_icon = "🟢" if daily_text.startswith("+") or (daily_text[:1].isdigit()) else "🔴"
             scan = engine.last_scan_metrics
             scan_block = (
-                f"  ⏱ Цикл: <b>{scan['duration_seconds']:.1f} сек.</b>\\n"
-                f"  🕯 Свечи: <b>{scan['ohlc_analyzed']}/{scan['ohlc_budget']}</b>\\n"
-                f"  🎯 Подходящих рынков: <b>{scan['eligible']}</b>\\n"
-                if scan else "  <i>Цикл ещё не завершён</i>\\n"
+                f"  ⏱ Цикл: <b>{scan['duration_seconds']:.1f} сек.</b>\n"
+                f"  🕯 Свечи: <b>{scan['ohlc_analyzed']}/{scan['ohlc_budget']}</b>\n"
+                f"  🎯 Подходящих рынков: <b>{scan['eligible']}</b>\n"
+                if scan else "  <i>Цикл ещё не завершён</i>\n"
             )
             return (
-                "📊 <b>CRYPTO AI TRADER</b>\\n"
-                "━━━━━━━━━━━━━━━━━━\\n"
-                f"🧪 Режим: <b>PAPER</b>  •  {state_label}\\n\\n"
-                "💼 <b>ПОРТФЕЛЬ</b>\\n"
-                f"  💎 Стоимость после расходов: <b>{html.escape(equity_text)}</b>\\n"
-                f"  📦 Открытые позиции: <b>{len(engine.paper.positions)}/{s.max_positions}</b>\\n"
-                f"  {pnl_icon} Результат за сегодня: <b>{html.escape(daily_text)}</b>\\n\\n"
-                "💰 <b>СВОБОДНЫЕ СРЕДСТВА</b>\\n"
-                f"{balance_lines}\\n\\n"
-                "🛡 <b>РИСК-МЕНЕДЖМЕНТ</b>\\n"
-                f"  Риск на сделку: <b>{s.risk_per_trade_pct:.2f}%</b>  •  Лимит сделки: <b>{s.max_trade:.2f} EUR</b>\\n"
-                f"  Stop-Loss: <b>{s.stop_loss_pct:.2f}%</b>  •  Take-Profit: <b>{s.take_profit_pct:.2f}%</b>\\n"
-                f"  Trailing Stop: <b>{getattr(s, 'trailing_stop_pct', 1.5):.2f}%</b>  •  Дневной лимит: <b>{s.max_daily_loss:.2f} EUR</b>\\n\\n"
-                "🌐 <b>РЫНОК KRAKEN</b>\\n"
-                f"  Пар: <b>{len(engine.market_pairs):,}</b>  •  Котировок: <b>{engine.market_ticker_count:,}</b>\\n"
+                "📊 <b>CRYPTO AI TRADER</b>\n"
+                "━━━━━━━━━━━━━━━━━━\n"
+                f"🧪 Режим: <b>PAPER</b>  •  {state_label}\n\n"
+                "💼 <b>ПОРТФЕЛЬ</b>\n"
+                f"  💎 Стоимость после расходов: <b>{html.escape(equity_text)}</b>\n"
+                f"  📦 Открытые позиции: <b>{len(engine.paper.positions)}/{s.max_positions}</b>\n"
+                f"  {pnl_icon} Результат за сегодня: <b>{html.escape(daily_text)}</b>\n\n"
+                "💰 <b>СВОБОДНЫЕ СРЕДСТВА</b>\n"
+                f"{balance_lines}\n\n"
+                "🛡 <b>РИСК-МЕНЕДЖМЕНТ</b>\n"
+                f"  Риск на сделку: <b>{s.risk_per_trade_pct:.2f}%</b>  •  Лимит сделки: <b>{s.max_trade:.2f} EUR</b>\n"
+                f"  Stop-Loss: <b>{s.stop_loss_pct:.2f}%</b>  •  Take-Profit: <b>{s.take_profit_pct:.2f}%</b>\n"
+                f"  Trailing Stop: <b>{getattr(s, 'trailing_stop_pct', 1.5):.2f}%</b>  •  Дневной лимит: <b>{s.max_daily_loss:.2f} EUR</b>\n\n"
+                "🌐 <b>РЫНОК KRAKEN</b>\n"
+                f"  Пар: <b>{len(engine.market_pairs):,}</b>  •  Котировок: <b>{engine.market_ticker_count:,}</b>\n"
                 f"{scan_block}"
-                f"  🔄 Анализ свечей: до <b>{s.max_candle_pairs}</b> пар за цикл\\n\\n"
-                "🕒 <b>ОБНОВЛЕНИЕ ДАННЫХ</b>\\n"
-                f"  Котировки: <code>{html.escape(valuation_time)}</code>\\n"
-                f"  Снимок PAPER: <code>{html.escape(snapshot_text)}</code>\\n"
-                "━━━━━━━━━━━━━━━━━━\\n"
+                f"  🔄 Анализ свечей: до <b>{s.max_candle_pairs}</b> пар за цикл\n\n"
+                "🕒 <b>ОБНОВЛЕНИЕ ДАННЫХ</b>\n"
+                f"  Котировки: <code>{html.escape(valuation_time)}</code>\n"
+                f"  Снимок PAPER: <code>{html.escape(snapshot_text)}</code>\n"
+                "━━━━━━━━━━━━━━━━━━\n"
                 "<i>Оценка и P/L доступны только при свежих котировках и FX-курсах всех активов.</i>"
             )
         message = await context.application.bot_data["run_blocking"].run(read_status)
