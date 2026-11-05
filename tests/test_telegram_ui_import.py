@@ -185,14 +185,14 @@ def test_research_history_splits_long_history_into_telegram_pages():
 def test_telegram_report_pagination_keeps_pages_under_limit_and_preserves_content():
     from src.trader.telegram_ui import _paginate_report_text
 
-    source = "\\n".join([f"Строка {index}: данные отчёта" for index in range(400)])
+    source = "\n".join([f"Строка {index}: данные отчёта" for index in range(400)])
     pages = _paginate_report_text(source, max_chars=500)
 
     assert len(pages) > 1
     assert all(len(page) <= 500 for page in pages)
     assert "Строка 0: данные отчёта" in pages[0]
     assert "Строка 399: данные отчёта" in pages[-1]
-    assert "\\n".join(pages) == source
+    assert "\n".join(pages) == source
 
 
 def test_telegram_report_pagination_handles_empty_and_long_single_line():
