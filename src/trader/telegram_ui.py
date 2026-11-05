@@ -340,7 +340,7 @@ def build_app(s, engine, exchange):
                 "<i>Оценка и P/L доступны только при свежих котировках и FX-курсах всех активов.</i>"
             )
         message = await context.application.bot_data["run_blocking"].run(read_status)
-        await update.effective_message.reply_text(message)
+        await update.effective_message.reply_text(message, parse_mode="HTML")
 
     async def monitorstatus(update, context):
         if not await authorized(update): return await deny(update)
@@ -354,24 +354,24 @@ def build_app(s, engine, exchange):
             backup = get_backup_health(Path(s.db_path).expanduser().parent / "backups", max_age_hours=26, keep=7)
             if backup["count"] == 0:
                 backup_block = (
-                    "🗄 <b>SQLITE BACKUP</b>\n"
-                    "🔴 <b>РЕЗЕРВНАЯ КОПИЯ НЕ НАЙДЕНА</b>\n"
-                    "Проверка: <code>нет данных</code>  •  Копий: <b>0/7</b>"
+                    "🗄 SQLITE BACKUP\n"
+                    "🔴 РЕЗЕРВНАЯ КОПИЯ НЕ НАЙДЕНА\n"
+                    "Проверка: нет данных  •  Копий: 0/7"
                 )
             else:
                 age_hours = backup["age_seconds"] / 3600.0
                 healthy = bool(backup["healthy"])
                 backup_block = (
                     "🗄 <b>SQLITE BACKUP</b>\n"
-                    f"{'🟢 <b>РЕЗЕРВНАЯ КОПИЯ В ПОРЯДКЕ</b>' if healthy else '🔴 <b>ТРЕБУЕТСЯ ПРОВЕРКА</b>'}\n"
-                    f"🕒 Дата: <code>{html.escape(str(backup['latest_at']))} UTC</code>\n"
-                    f"⏱ Возраст: <b>{age_hours:.1f} ч</b>  •  "
-                    f"Integrity: <b>{html.escape(str(backup['integrity']))}</b>  •  "
-                    f"Копий: <b>{backup['count']}/7</b>"
+                    f"{'🟢 РЕЗЕРВНАЯ КОПИЯ В ПОРЯДКЕ' if healthy else '🔴 ТРЕБУЕТСЯ ПРОВЕРКА'}\n"
+                    f"🕒 Дата: {backup['latest_at']} UTC\n"
+                    f"⏱ Возраст: {age_hours:.1f} ч  •  "
+                    f"Integrity: {backup['integrity']}  •  "
+                    f"Копий: {backup['count']}/7"
                 )
             return report + "\n━━━━━━━━━━━━━━━━━━\n" + backup_block
         message = await context.application.bot_data["monitor_runner"].run(read_monitor_status)
-        await update.effective_message.reply_text(message, parse_mode="HTML")
+        await update.effective_message.reply_text(message)
 
     async def dbhealth(update, context):
         if not await authorized(update): return await deny(update)
@@ -393,14 +393,14 @@ def build_app(s, engine, exchange):
             age_text = "нет резервной копии" if age is None else f"{int(age // 3600)} ч {int((age % 3600) // 60)} мин"
             status_text = "OK" if integrity == "ok" and backup["healthy"] else "ТРЕБУЕТ ВНИМАНИЯ"
             message = (
-                "🗄 SQLITE — ДИАГНОСТИКА\n"
-                f"Общий статус: {status_text}\n"
+                "🗄 ДИАГНОСТИКА SQLITE\n━━━━━━━━━━━━━━━━━━\n"
+                f"🛡 Общий статус: {status_text}\n\n💾 РАБОЧАЯ БАЗА ДАННЫХ\n"
                 f"Проверка рабочей БД: {integrity}\n"
-                f"Размер БД: {db_size / 1024 / 1024:.2f} MB | WAL: {wal_size / 1024 / 1024:.2f} MB\n"
-                f"Резервных копий: {backup['count']}/7\n"
-                f"Возраст последней копии: {age_text}\n"
-                f"Integrity последней копии: {backup['integrity']}\n"
-                f"Лимит возраста: 26 ч | Ротация: {'OK' if backup['retention_ok'] else 'ПРЕВЫШЕНА'}"
+                f"  Размер БД: {db_size / 1024 / 1024:.2f} MB  •  WAL: {wal_size / 1024 / 1024:.2f} MB\n\n📦 РЕЗЕРВНЫЕ КОПИИ\n"
+                f"  Количество: {backup['count' ]}/7\n"
+                f"  Возраст последней: {age_text}\n"
+                f"  Integrity: {backup['integrity']}\n"
+                f"  Лимит возраста: 26 ч  •  Ротация: {'OK' if backup['retention_ok'] else 'ПРЕВЫШЕНА'}\n━━━━━━━━━━━━━━━━━━"
             )
             await update.effective_message.reply_text(message)
         except Exception as exc:
@@ -416,7 +416,7 @@ def build_app(s, engine, exchange):
                 return rows, len(engine.market_pairs), engine.market_ticker_count
             rows, pair_count, ticker_count = await context.application.bot_data["run_blocking"].run(run_scan)
             message = _format_scan_report(rows, pair_count, ticker_count)
-            await update.effective_message.reply_text(message, parse_mode="HTML")
+            await update.effective_message.reply_text(message)
         except Exception as exc:
             log.error("Market scan failed: %s", type(exc).__name__)
             await update.effective_message.reply_text(
