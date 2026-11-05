@@ -805,7 +805,7 @@ def build_app(s, engine, exchange):
                 "ℹ️ Для подробного разбора монеты: /analyze XBTEUR",
                 "Дневная ширина рынка — обзор, а не торговый сигнал. Свечи анализируются в пределах API-бюджета.",
             ])
-            return "\\n".join(lines)
+            return "\n".join(lines)
 
             message = await context.application.bot_data["run_blocking"].run(build_market_report)
             await send_report(update, context, message)
@@ -821,6 +821,7 @@ def build_app(s, engine, exchange):
         await update.effective_message.reply_text(f"🧠 Анализ {symbol}: загружаю закрытые свечи 1h / 4h / 1d…")
         try:
             def build_analysis():
+                import math
                 from .indicators import analyze as analyze_candles
                 ticker_rows = exchange.tickers([symbol])
                 ticker = ticker_rows[0]
