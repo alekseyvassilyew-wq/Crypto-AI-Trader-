@@ -192,7 +192,7 @@ def test_telegram_report_pagination_keeps_pages_under_limit_and_preserves_conten
     assert all(len(page) <= 500 for page in pages)
     assert "Строка 0: данные отчёта" in pages[0]
     assert "Строка 399: данные отчёта" in pages[-1]
-    assert "".join(pages).replace("Строка", "Строка")
+    assert "\\n".join(pages) == source
 
 
 def test_telegram_report_pagination_handles_empty_and_long_single_line():
