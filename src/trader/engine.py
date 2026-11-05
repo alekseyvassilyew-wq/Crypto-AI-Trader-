@@ -964,25 +964,28 @@ class Engine:
                         if source_amount <= 1e-12:
                             continue
                         if fee_legs == 2:
-                            first_leg = self.paper.convert(
-                                source_currency, "EUR", source_amount, source_to_eur,
-                            )
-                            second_leg = self.paper.convert(
-                                "EUR", quote_currency, first_leg["received"], quote_units_per_eur,
-                            )
+                            # Compute the second leg from the first leg's actual
+                            # post-fee proceeds, then commit both legs together.
+                            first_amount = source_amount
+                            first_gross = first_amount * source_to_eur
+                            first_received = first_gross * (1.0 - self.paper.fee_rate)
+                            first_leg, second_leg = self.paper.convert_route([
+                                (source_currency, "EUR", source_amount, source_to_eur),
+                                ("EUR", quote_currency, first_received, quote_units_per_eur),
+                            ])
                             conversion = {
                                 "from": source_currency, "to": quote_currency,
                                 "spent": source_amount, "received": second_leg["received"],
                                 "fee": first_leg["fee"] + second_leg["fee"], "legs": 2,
                             }
                         elif source_currency == "EUR":
-                            conversion = self.paper.convert(
-                                "EUR", quote_currency, source_amount, quote_units_per_eur,
-                            )
+                            (conversion,) = self.paper.convert_route([
+                                ("EUR", quote_currency, source_amount, quote_units_per_eur),
+                            ])
                         else:
-                            conversion = self.paper.convert(
-                                source_currency, "EUR", source_amount, source_to_eur,
-                            )
+                            (conversion,) = self.paper.convert_route([
+                                (source_currency, "EUR", source_amount, source_to_eur),
+                            ])
                         audit(
                             self.db, "PAPER_FX_CONVERSION",
                             f"{conversion['from']}->{conversion['to']} legs={fee_legs} "

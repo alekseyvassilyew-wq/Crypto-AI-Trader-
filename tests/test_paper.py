@@ -211,3 +211,55 @@ def test_eur_cost_basis_survives_restart_and_partial_exit(tmp_path):
     assert restarted_again.positions["ETHUSD"]["cost_basis_eur"] == pytest.approx(9.0)
     assert restarted_again.positions["ETHUSD"]["entry_fees_eur"] == pytest.approx(0.09)
     db.close()
+
+
+
+def test_convert_can_defer_persistence(tmp_path):
+    from src.trader.db import connect, get_state
+
+    db = connect(tmp_path / "deferred-conversion.sqlite3")
+    broker = PaperBroker(balance=20, fee_rate=0.01, db=db)
+    persisted_before = get_state(db, "paper_broker")
+    broker.convert("EUR", "USD", 10, 1.1, persist=False)
+    assert broker.balance("EUR") == pytest.approx(10)
+    assert broker.balance("USD") == pytest.approx(10.89)
+    assert get_state(db, "paper_broker") == persisted_before
+    broker._persist()
+    assert get_state(db, "paper_broker")["cash_by_currency"]["USD"] == pytest.approx(10.89)
+    db.close()
+
+
+def test_convert_route_rolls_back_all_legs_when_later_leg_fails(tmp_path):
+    from src.trader.db import connect, get_state
+
+    db = connect(tmp_path / "atomic-conversion.sqlite3")
+    broker = PaperBroker(balance=20, fee_rate=0.01, db=db)
+    before = get_state(db, "paper_broker")
+    with pytest.raises(ValueError, match="conversion rate"):
+        broker.convert_route([
+            ("EUR", "USD", 10, 1.1),
+            ("USD", "GBP", 5, 0),
+        ])
+    assert broker.cash_by_currency == {"EUR": 20.0}
+    assert broker.cash == pytest.approx(20)
+    assert get_state(db, "paper_broker") == before
+    db.close()
+
+
+def test_convert_route_persists_successful_legs_together(tmp_path):
+    from src.trader.db import connect, get_state
+
+    db = connect(tmp_path / "atomic-conversion-success.sqlite3")
+    broker = PaperBroker(balance=20, fee_rate=0.01, db=db)
+    first_received = 10 * 1.1 * (1 - broker.fee_rate)
+    first, second = broker.convert_route([
+        ("EUR", "USD", 10, 1.1),
+        ("USD", "GBP", first_received, 0.8),
+    ])
+    saved = get_state(db, "paper_broker")
+    assert first["received"] == pytest.approx(first_received)
+    assert second["received"] == pytest.approx(first_received * 0.8 * (1 - broker.fee_rate))
+    assert saved["cash_by_currency"]["EUR"] == pytest.approx(10)
+    assert saved["cash_by_currency"]["USD"] == pytest.approx(0)
+    assert saved["cash_by_currency"]["GBP"] == pytest.approx(second["received"])
+    db.close()
