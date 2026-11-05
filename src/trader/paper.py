@@ -98,7 +98,7 @@ class PaperBroker:
                 "positions": self.positions,
             })
 
-    def convert(self, from_currency, to_currency, amount, rate):
+    def convert(self, from_currency, to_currency, amount, rate, *, persist=True):
         """Convert virtual cash only; rate is destination units per source unit."""
         source = self._validate_currency(from_currency)
         target = self._validate_currency(to_currency)
@@ -120,9 +120,31 @@ class PaperBroker:
         self.cash_by_currency[source] = max(0.0, new_source_balance)
         self.cash_by_currency[target] = new_target_balance
         self._sync_cash()
-        self._persist()
+        if persist:
+            self._persist()
         return {"from": source, "to": target, "spent": amount, "received": received,
                 "fee": fee, "rate": rate}
+
+    def convert_route(self, legs):
+        """Apply a multi-leg virtual-cash conversion as one persisted wallet update.
+
+        Each leg is (from_currency, to_currency, amount, rate). If any leg
+        or the final persistence fails, restore the in-memory wallet and leave
+        the persisted wallet at its pre-route state.
+        """
+        cash_before = dict(self.cash_by_currency)
+        try:
+            conversions = [
+                self.convert(source, target, amount, rate, persist=False)
+                for source, target, amount, rate in legs
+            ]
+            self._persist()
+            return conversions
+        except Exception:
+            self.cash_by_currency = cash_before
+            self._sync_cash()
+            self._persist()
+            raise
 
     def buy(self, symbol, quote, price, currency="EUR", quote_to_eur_rate=None, *, persist=True):
         symbol = self._validate_symbol(symbol)
