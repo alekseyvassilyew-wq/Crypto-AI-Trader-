@@ -26,11 +26,14 @@ def _format_scan_report(rows, pair_count, ticker_count):
     )[:12]
     lines = [
         "🔎 СКАНИРОВАНИЕ РЫНКА KRAKEN",
+        "━━━━━━━━━━━━━━━━━━",
+        "🌐 СТАТИСТИКА РЫНКА",
         f"Всего рынков Kraken: {int(pair_count):,}",
         f"Тикеров получено: {int(ticker_count):,}",
         f"Пар с доступным EUR-маршрутом, прошедших анализ свечей: {len(analyzed)}",
         f"Сигналов BUY: {len(buy_rows)}",
         "",
+        "📊 РЕЗУЛЬТАТЫ АНАЛИЗА",
     ]
     for item in ranked:
         symbol = str(item.get("symbol") or "—")
@@ -50,6 +53,7 @@ def _format_scan_report(rows, pair_count, ticker_count):
         "",
         "Все рынки получают мониторинг котировок; анализ свечей ограничен бюджетом запросов.",
         "",
+        "━━━━━━━━━━━━━━━━━━",
         "🪙 ОТДЕЛЬНАЯ ПРОВЕРКА TON",
     ])
     ton = {
@@ -77,6 +81,15 @@ def _format_scan_report(rows, pair_count, ticker_count):
     else:
         lines.append("TONEUR/TONUSD не найдены в текущем снимке Kraken.")
     return "\n".join(lines)[:3900]
+
+
+
+def _format_report(title, body):
+    """Apply the shared Telegram report header and divider layout."""
+    content = str(body or "").strip()
+    if content.startswith(title):
+        content = content[len(title):].lstrip("\n")
+    return f"{title}\n━━━━━━━━━━━━━━━━━━\n{content}\n━━━━━━━━━━━━━━━━━━"
 
 
 def _format_automatic_research_report(trained):
@@ -674,7 +687,7 @@ def build_app(s, engine, exchange):
                 "🏦 РЕАЛЬНЫЙ БАЛАНС KRAKEN\n"
                 + body
                 + "\n\nТолько чтение. Реальные средства не импортируются в виртуальный PAPER-кошелёк. "
-                "Реальные ордера отключены."
+                "Реальные ордера отключены.\\n━━━━━━━━━━━━━━━━━━"
             )
         except Exception as exc:
             log.error("Read-only Kraken balance request failed: %s", type(exc).__name__)
@@ -713,7 +726,7 @@ def build_app(s, engine, exchange):
             routes = build_asset_pair_routes(
                 [item["asset"] for item in inventory["assets"]], pairs
             )
-            lines = ["🏦 ПРЕДТОРГОВАЯ ПРОВЕРКА KRAKEN", 
+            lines = ["🏦 ПРЕДТОРГОВАЯ ПРОВЕРКА KRAKEN", "━━━━━━━━━━━━━━━━━━", "💼 СОСТОЯНИЕ КОШЕЛЬКА",
                      f"Активов с положительным остатком: {inventory['asset_count']}"]
             if inventory["asset_count"] == 0:
                 lines.append("Кошелёк пуст. Проверка торговых маршрутов будет доступна после пополнения.")
@@ -749,6 +762,7 @@ def build_app(s, engine, exchange):
                          f'максимум позиций {s.max_positions}; спред до {s.max_spread_bps:.1f} bps.')
             lines.append("Минимумы и комиссии берутся из метаданных Kraken; отсутствующие значения не угадываются.")
             lines.append("Только чтение: реальные ордера, переводы и импорт средств в PAPER отключены.")
+            lines.append("━━━━━━━━━━━━━━━━━━")
             await update.effective_message.reply_text("\n".join(lines)[:3900])
         except Exception as exc:
             log.error("Read-only Kraken wallet preflight failed: %s", type(exc).__name__)
@@ -827,7 +841,7 @@ def build_app(s, engine, exchange):
             rows = engine.db.execute(
                 "SELECT key FROM app_state WHERE key LIKE 'ml_candidate_%' ORDER BY updated_at DESC"
             ).fetchall()
-            lines = ["🧠 ИССЛЕДОВАТЕЛЬСКИЕ МОДЕЛИ (не торгуют):"]
+            lines = ["🧠 ИССЛЕДОВАТЕЛЬСКИЕ МОДЕЛИ", "━━━━━━━━━━━━━━━━━━", "Статус: SHADOW ONLY — модели не торгуют"]
             for row in rows[:15]:
                 item = get_state(engine.db, row["key"], {})
                 metric = item.get("out_of_sample", {})
@@ -858,7 +872,7 @@ def build_app(s, engine, exchange):
                 return await update.effective_message.reply_text(
                     "История исследований пока пуста. Запусти /learn XBTEUR или дождись автоматического исследования."
                 )
-            lines = ["🧠 ИСТОРИЯ ИССЛЕДОВАНИЙ — SHADOW ONLY"]
+            lines = ["🧠 ИСТОРИЯ ИССЛЕДОВАНИЙ — SHADOW ONLY", "━━━━━━━━━━━━━━━━━━"]
             for item in rows:
                 report = item.get("report") or {}
                 oos = report.get("out_of_sample") or {}
@@ -946,7 +960,7 @@ def build_app(s, engine, exchange):
                 f"Комиссии по исполнениям: {metrics['total_fees_eur']:.4f} EUR | без EUR-оценки: {metrics['fills_without_eur_fee_valuation']}\n"
                 f"По монетам: {by_symbol_text}\n"
                 f"Период: {metrics['first_ts']} — {metrics['last_ts']} UTC\n"
-                "Это изменение стоимости PAPER-портфеля, а не доказательство будущей доходности."
+                "━━━━━━━━━━━━━━━━━━\\nЭто изменение стоимости PAPER-портфеля, а не доказательство будущей доходности."
             )
         except Exception as exc:
             await update.effective_message.reply_text(f"Ошибка отчёта: {safe_error_message(exc)}")
