@@ -84,6 +84,15 @@ def _format_scan_report(rows, pair_count, ticker_count):
 
 
 
+def _telegram_plain(value):
+    """Convert Telegram HTML markup to safe, readable plain text."""
+    import re
+    text = str(value or "")
+    text = re.sub(r'<a href="([^"]+)">([^<]*)</a>', r"\\2 (\\1)", text, flags=re.IGNORECASE)
+    text = re.sub(r"</?(?:b|strong|i|em|u|s|code|pre)>", "", text, flags=re.IGNORECASE)
+    return html.unescape(text)
+
+
 def _format_report(title, body):
     """Apply the shared Telegram report header and divider layout."""
     content = str(body or "").strip()
@@ -231,9 +240,7 @@ def build_app(s, engine, exchange):
     async def send_topic(context, topic_id, text, parse_mode=None):
         if not s.telegram_group_chat_id:
             return
-        kwargs = {"chat_id": s.telegram_group_chat_id, "text": text[:3900]}
-        if parse_mode:
-            kwargs["parse_mode"] = parse_mode
+        kwargs = {"chat_id": s.telegram_group_chat_id, "text": _telegram_plain(text)[:3900]}
         if topic_id:
             kwargs["message_thread_id"] = topic_id
         await context.bot.send_message(**kwargs)
