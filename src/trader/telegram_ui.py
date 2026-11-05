@@ -10,7 +10,7 @@ from .db import backup_database
 log = logging.getLogger(__name__)
 
 def _format_scan_report(rows, pair_count, ticker_count):
-    """Render /scan as a compact Telegram HTML market dashboard."""
+    """Render /scan in the same plain-text, line-by-line style as /monitorstatus."""
     def number(value, digits=2):
         try:
             return f"{float(value):,.{digits}f}"
@@ -25,41 +25,32 @@ def _format_scan_report(rows, pair_count, ticker_count):
         reverse=True,
     )[:12]
     lines = [
-        "🔎 <b>СКАНИРОВАНИЕ РЫНКА KRAKEN</b>",
-        f"{'🟢' if buy_rows else '🟡'} <b>{'НАЙДЕНЫ BUY-СИГНАЛЫ' if buy_rows else 'BUY-СИГНАЛОВ НЕТ'}</b>",
-        "━━━━━━━━━━━━━━━━━━",
-        "📊 <b>ОБЩАЯ СТАТИСТИКА</b>",
-        f"🌐 Рынков Kraken: <b>{int(pair_count)}</b>",
-        f"📡 Получено тикеров: <b>{int(ticker_count)}</b>",
-        f"🕯 Пар с EUR-маршрутом и анализом свечей: <b>{len(analyzed)}</b>",
-        f"🟢 Сигналов BUY: <b>{len(buy_rows)}</b>",
-        "━━━━━━━━━━━━━━━━━━",
-        "📈 <b>РЕЗУЛЬТАТЫ АНАЛИЗА</b>",
+        "🔎 СКАНИРОВАНИЕ РЫНКА KRAKEN",
+        f"Всего рынков Kraken: {int(pair_count):,}",
+        f"Тикеров получено: {int(ticker_count):,}",
+        f"Пар с доступным EUR-маршрутом, прошедших анализ свечей: {len(analyzed)}",
+        f"Сигналов BUY: {len(buy_rows)}",
+        "",
     ]
-    if ranked:
-        for item in ranked:
-            symbol = html.escape(str(item.get("symbol") or "—"))
-            signal = str(item.get("signal") or "HOLD").upper()
-            signal_icon = "🟢" if signal == "BUY" else ("🔴" if signal == "SELL" else "🟡")
-            score = number(item.get("score", 0), 0)
-            turnover = number(item.get("turnover_eur", 0), 0)
-            price = number(item.get("price"), 8)
-            lines.append(
-                f"{signal_icon} <b>{symbol}</b> — <b>{html.escape(signal)} ({score}/5)</b>\n"
-                f"   Оборот: <b>{turnover} EUR/24ч</b>  •  Цена: <code>{price}</code>"
-            )
-            reasons = item.get("reasons") or []
-            if reasons:
-                lines.append("   <i>" + html.escape("; ".join(str(reason) for reason in reasons[:2])) + "</i>")
-    else:
-        lines.append("Пары, прошедшие анализ свечей, не найдены в этом цикле.")
-
+    for item in ranked:
+        symbol = str(item.get("symbol") or "—")
+        signal = str(item.get("signal") or "HOLD").upper()
+        score = number(item.get("score", 0), 0)
+        turnover = number(item.get("turnover_eur", 0), 0)
+        price = number(item.get("price"), 8)
+        lines.append(
+            f"{symbol}: {signal} ({score}/5), оборот {turnover} EUR/24ч, цена {price}"
+        )
+        reasons = item.get("reasons") or []
+        if reasons:
+            lines.append("  Причина: " + "; ".join(str(reason) for reason in reasons[:2]))
+    if not ranked:
+        lines.append("Нет пар, прошедших анализ свечей в этом цикле.")
     lines.extend([
-        "━━━━━━━━━━━━━━━━━━",
-        "🧭 <b>ПОКРЫТИЕ РЫНКА</b>",
-        "<i>Котировки мониторятся по всем рынкам Kraken. Анализ свечей выполняется в пределах бюджета запросов и распределяется между рынками.</i>",
-        "━━━━━━━━━━━━━━━━━━",
-        "🪙 <b>ОТДЕЛЬНАЯ ПРОВЕРКА TON</b>",
+        "",
+        "Все рынки получают мониторинг котировок; анализ свечей ограничен бюджетом запросов.",
+        "",
+        "🪙 ОТДЕЛЬНАЯ ПРОВЕРКА TON",
     ])
     ton = {
         str(item.get("symbol") or "").upper(): item
@@ -75,20 +66,17 @@ def _format_scan_report(rows, pair_count, ticker_count):
             spread_text = f"{number(spread, 1)} bps" if spread is not None else "нет данных"
             turnover = item.get("turnover_eur")
             turnover_text = f"{number(turnover, 0)} EUR/24ч" if turnover is not None else "нет данных"
-            verified = bool(item.get("ohlc_analyzed"))
+            status = "OHLC проверен" if item.get("ohlc_analyzed") else "OHLC отложен"
             lines.append(
-                f"{'🟢' if item.get('signal') == 'BUY' else '🟡'} <b>{symbol}: "
-                f"{html.escape(str(item.get('signal') or 'HOLD'))}</b>  •  "
-                f"Спред: <b>{spread_text}</b>\n"
-                f"   Оборот: <b>{turnover_text}</b>  •  "
-                f"{'OHLC проверен' if verified else 'OHLC отложен'}"
+                f"{symbol}: {item.get('signal', 'HOLD')} | спред {spread_text} | "
+                f"оборот {turnover_text} | {status}"
             )
             reasons = item.get("reasons") or []
             if reasons:
-                lines.append("   <i>" + html.escape("; ".join(str(reason) for reason in reasons[:2])) + "</i>")
+                lines.append("  Причина: " + "; ".join(str(reason) for reason in reasons[:2]))
     else:
-        lines.append("TONEUR и TONUSD не найдены в текущем снимке Kraken.")
-    return "\n".join(lines)[:3900]
+        lines.append("TONEUR/TONUSD не найдены в текущем снимке Kraken.")
+    return "\\n".join(lines)[:3900]
 
 
 def _format_automatic_research_report(trained):
@@ -352,7 +340,7 @@ def build_app(s, engine, exchange):
                 "<i>Оценка и P/L доступны только при свежих котировках и FX-курсах всех активов.</i>"
             )
         message = await context.application.bot_data["run_blocking"].run(read_status)
-        await update.effective_message.reply_text(message, parse_mode="HTML")
+        await update.effective_message.reply_text(message)
 
     async def monitorstatus(update, context):
         if not await authorized(update): return await deny(update)
