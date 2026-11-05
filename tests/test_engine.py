@@ -1047,7 +1047,8 @@ def test_shadow_research_uses_configured_paper_slippage(tmp_path, monkeypatch):
     monkeypatch.setattr(engine_module, "predict_probability", lambda model, features: 0.5)
     monkeypatch.setattr(engine_module, "record_shadow_prediction", lambda *args, **kwargs: None)
 
-    candles = [{} for _ in range(61)]
+    candles = [[float(i), 0.0, 101.0, 99.0, 100.0, 1.0] for i in range(61)]
+    monkeypatch.setattr(engine.exchange, "candles", lambda *args, **kwargs: candles)
     tickers = [{
         "symbol": "XBTEUR", "bid1Price": "99", "ask1Price": "101",
         "lastPrice": "100", "turnover24h": "1000000",
