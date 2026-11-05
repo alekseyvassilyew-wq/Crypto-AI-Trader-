@@ -973,3 +973,53 @@ def test_engine_restarts_paused_with_paper_wallet_restored(tmp_path):
     assert restored_paper.cash_by_currency == expected_cash
     assert restored_paper.positions == expected_positions
     db2.close()
+
+
+def test_engine_paper_fill_commits_wallet_and_trade_together(tmp_path):
+    engine, db = make_engine(tmp_path)
+    before = engine.paper.balance("EUR")
+
+    fill, fee_eur, pnl_eur = engine._execute_paper_fill(
+        "Buy", "XBTEUR", 5.0, 10.0, {}, currency="EUR",
+    )
+
+    from src.trader.db import get_state
+    saved = get_state(db, "paper_broker")
+    row = db.execute(
+        "SELECT side,qty,status,fee_eur FROM trades WHERE symbol='XBTEUR'"
+    ).fetchone()
+    assert fill["status"] == "FILLED"
+    assert engine.paper.balance("EUR") < before
+    assert saved["cash_by_currency"]["EUR"] == pytest.approx(engine.paper.balance("EUR"))
+    assert saved["positions"]["XBTEUR"]["qty"] == pytest.approx(fill["qty"])
+    assert row["side"] == "Buy"
+    assert row["status"] == "FILLED"
+    assert row["fee_eur"] == pytest.approx(fee_eur)
+    assert pnl_eur is None
+    db.close()
+
+
+def test_engine_paper_fill_rolls_back_memory_when_database_commit_fails(tmp_path):
+    import sqlite3
+    engine, db = make_engine(tmp_path)
+    before_cash = dict(engine.paper.cash_by_currency)
+    before_positions = dict(engine.paper.positions)
+    db.execute(
+        "CREATE TRIGGER reject_engine_paper_trade BEFORE INSERT ON trades "
+        "BEGIN SELECT RAISE(ABORT, 'forced persistence failure'); END"
+    )
+    db.commit()
+
+    with pytest.raises(sqlite3.IntegrityError):
+        engine._execute_paper_fill(
+            "Buy", "XBTEUR", 5.0, 10.0, {}, currency="EUR",
+        )
+
+    assert engine.paper.cash_by_currency == before_cash
+    assert engine.paper.positions == before_positions
+    assert db.execute("SELECT COUNT(*) FROM trades").fetchone()[0] == 0
+    from src.trader.db import get_state
+    saved = get_state(db, "paper_broker")
+    assert saved["cash_by_currency"] == before_cash
+    assert saved["positions"] == before_positions
+    db.close()
