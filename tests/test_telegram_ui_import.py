@@ -168,3 +168,42 @@ def test_research_history_splits_long_history_into_telegram_pages():
     assert "ПРОДОЛЖЕНИЕ" in pages[1]
     assert "COIN0EUR" in pages[0]
     assert "COIN9EUR" in pages[-1]
+
+
+def test_paper_forward_report_has_readable_sections_and_warnings():
+    from src.trader.telegram_ui import _format_paper_report
+
+    report = _format_paper_report({
+        "samples": 324,
+        "measurement_span_seconds": 23 * 3600 + 20 * 60,
+        "start_equity_eur": 19.9410,
+        "end_equity_eur": 18.8259,
+        "change_eur": -1.1152,
+        "change_pct": -5.59,
+        "max_observed_drawdown_pct": 5.71,
+        "avg_open_positions": 1.98,
+        "buy_signals": 306,
+        "avg_analyzed_markets": 16.6,
+        "closed_trades": 0,
+        "closed_trades_without_eur_valuation": 2,
+        "winning_trades": 0,
+        "losing_trades": 0,
+        "win_rate_pct": 0,
+        "profit_factor": 0,
+        "realized_pnl_eur": 0,
+        "total_fees_eur": 0.0226,
+        "fills_without_eur_fee_valuation": 2,
+        "by_symbol": [],
+        "first_ts": "2026-11-04 15:13:25",
+        "last_ts": "2026-11-05 14:33:34",
+    }, 24)
+
+    assert report.startswith("📈 <b>PAPER FORWARD-TEST</b>")
+    assert "🔴 <b>РЕЗУЛЬТАТ: СНИЖЕНИЕ</b>" in report
+    assert "АКТИВНОСТЬ ПОРТФЕЛЯ" in report
+    assert "ЗАКРЫТЫЕ СДЕЛКИ" in report
+    assert "−" not in report  # signed numeric values use a consistent ASCII sign
+    assert "+0.0000 EUR" in report
+    assert "НЕТ ЗАКРЫТЫХ СДЕЛОК" in report
+    assert "ЕСТЬ ОПЕРАЦИИ БЕЗ EUR-ОЦЕНКИ" in report
+    assert "не гарантирует непрерывную работу" in report
