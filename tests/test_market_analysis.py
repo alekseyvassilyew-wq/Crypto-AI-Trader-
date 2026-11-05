@@ -90,3 +90,59 @@ def test_market_report_formatter_handles_empty_market_data():
     assert "НЕДОСТАТОЧНО ДАННЫХ" in report
     assert "Доля растущих: н/д" in report
     assert "Нет данных." in report
+
+
+
+def test_select_sharp_decliners_filters_by_drop_liquidity_spread_and_quote():
+    from src.trader.market_analysis import select_sharp_decliners
+
+    tickers = [
+        {"symbol": "XBTEUR", "base": "XBT", "quote": "EUR", "dayChangePct": -8, "turnover24h": 50000, "bid1Price": 99, "ask1Price": 99.1, "lastPrice": 99},
+        {"symbol": "ETHEUR", "base": "ETH", "quote": "EUR", "dayChangePct": -4, "turnover24h": 50000, "bid1Price": 99, "ask1Price": 99.1, "lastPrice": 99},
+        {"symbol": "ADAEUR", "base": "ADA", "quote": "EUR", "dayChangePct": -9, "turnover24h": 500, "bid1Price": 99, "ask1Price": 99.1, "lastPrice": 99},
+        {"symbol": "SOLEUR", "base": "SOL", "quote": "EUR", "dayChangePct": -7, "turnover24h": 50000, "bid1Price": 90, "ask1Price": 91, "lastPrice": 90},
+        {"symbol": "XBTUSD", "base": "XBT", "quote": "USD", "dayChangePct": -10, "turnover24h": 90000, "bid1Price": 99, "ask1Price": 99.1, "lastPrice": 99},
+    ]
+    result = select_sharp_decliners(tickers, min_turnover_eur=10000, max_spread_bps=25)
+    assert [item["symbol"] for item in result] == ["XBTEUR"]
+
+
+def test_dip_candidate_requires_rebound_and_higher_timeframe_context():
+    from src.trader.market_analysis import evaluate_dip_candidate
+
+    ticker = {"dayChangePct": -8.0, "turnover_eur": 50000, "spread_bps": 5}
+    frames = {
+        "1h": {"trend": "BULLISH", "market_regime": "TREND_UP", "rsi": 48, "momentum_24_percent": 1.5, "volume_ratio": 1.5, "atr_percent": 2.0},
+        "4h": {"trend": "NEUTRAL", "market_regime": "RANGE"},
+        "1d": {"trend": "NEUTRAL", "market_regime": "RANGE"},
+    }
+    result = evaluate_dip_candidate(ticker, frames)
+    assert result["status"] == "POTENTIAL_BUY"
+    assert result["score"] >= 5
+
+
+def test_dip_candidate_rejects_continuing_multi_timeframe_downtrend():
+    from src.trader.market_analysis import evaluate_dip_candidate
+
+    ticker = {"dayChangePct": -12.0, "turnover_eur": 50000, "spread_bps": 5}
+    frames = {
+        "1h": {"trend": "BEARISH", "market_regime": "TREND_DOWN", "rsi": 24, "momentum_24_percent": -9, "volume_ratio": 2.0, "atr_percent": 9.0},
+        "4h": {"trend": "BEARISH", "market_regime": "TREND_DOWN"},
+        "1d": {"trend": "BEARISH", "market_regime": "TREND_DOWN"},
+    }
+    result = evaluate_dip_candidate(ticker, frames)
+    assert result["status"] == "REJECT"
+
+
+def test_dip_candidate_rejects_illiquid_and_wide_spread_assets():
+    from src.trader.market_analysis import evaluate_dip_candidate
+
+    frames = {"1h": {}, "4h": {}, "1d": {}}
+    low_liquidity = evaluate_dip_candidate(
+        {"dayChangePct": -10, "turnover_eur": 100, "spread_bps": 3}, frames
+    )
+    wide_spread = evaluate_dip_candidate(
+        {"dayChangePct": -10, "turnover_eur": 50000, "spread_bps": 90}, frames
+    )
+    assert low_liquidity["status"] == "REJECT"
+    assert wide_spread["status"] == "REJECT"

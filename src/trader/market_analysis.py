@@ -85,3 +85,132 @@ def summarize_market_snapshot(tickers, analysis_rows=()):
         "analyzed_count": len(rows), "trend_counts": trend_counts,
         "regime_counts": regime_counts,
     }
+
+
+
+def select_sharp_decliners(tickers, *, min_drop_pct=-5.0, min_turnover_eur=10000.0,
+                           max_spread_bps=25.0, limit=5):
+    """Return liquid EUR-quoted assets with a material UTC-day decline."""
+    candidates = []
+    for ticker in tickers or ():
+        if not isinstance(ticker, dict):
+            continue
+        if str(ticker.get("quote") or "").upper() != "EUR":
+            continue
+        base = str(ticker.get("base") or "").upper()
+        if not base or base in _STABLE_OR_FIAT:
+            continue
+        try:
+            change = float(ticker.get("dayChangePct"))
+            turnover = float(ticker.get("turnover24h"))
+            bid = float(ticker.get("bid1Price"))
+            ask = float(ticker.get("ask1Price"))
+            last = float(ticker.get("lastPrice"))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if not all(math.isfinite(x) for x in (change, turnover, bid, ask, last)):
+            continue
+        if change > min_drop_pct or turnover < min_turnover_eur:
+            continue
+        if min(bid, ask, last) <= 0 or ask < bid:
+            continue
+        spread_bps = (ask - bid) / ((ask + bid) / 2.0) * 10000.0
+        if spread_bps > max_spread_bps:
+            continue
+        item = dict(ticker)
+        item["dayChangePct"] = change
+        item["turnover24h"] = turnover
+        item["spread_bps"] = spread_bps
+        candidates.append(item)
+    candidates.sort(key=lambda item: (item["dayChangePct"], -item["turnover24h"]))
+    return candidates[:max(0, int(limit))]
+
+
+def evaluate_dip_candidate(ticker, frames, *, min_turnover_eur=10000.0,
+                           max_spread_bps=25.0):
+    """Classify a falling asset without creating or authorizing an order."""
+    reasons = []
+    try:
+        change = float(ticker.get("dayChangePct"))
+        turnover = float(ticker.get("turnover_eur", ticker.get("turnover24h", 0.0)))
+        spread = float(ticker.get("spread_bps", 999999.0))
+    except (TypeError, ValueError, OverflowError):
+        return {"status": "REJECT", "score": 0, "reasons": ["Некорректные данные рынка"]}
+    if not all(math.isfinite(x) for x in (change, turnover, spread)):
+        return {"status": "REJECT", "score": 0, "reasons": ["Некорректные числовые данные"]}
+    if turnover < min_turnover_eur:
+        return {"status": "REJECT", "score": 0, "reasons": ["Недостаточная ликвидность"]}
+    if spread > max_spread_bps:
+        return {"status": "REJECT", "score": 0, "reasons": ["Слишком широкий спред"]}
+    if not isinstance(frames, dict) or any(
+        not isinstance(frames.get(key), dict) or frames[key].get("market_regime") == "UNKNOWN"
+        for key in ("1h", "4h", "1d")
+    ):
+        return {"status": "WATCH", "score": 0, "reasons": ["Недостаточно качественных данных по таймфреймам"]}
+
+    one, four, daily = frames["1h"], frames["4h"], frames["1d"]
+    score = 0
+    if one.get("trend") == "BULLISH":
+        score += 2
+        reasons.append("1h: восходящий тренд — есть признак восстановления")
+    else:
+        reasons.append("1h: разворот вверх пока не подтверждён")
+    if four.get("trend") in {"BULLISH", "NEUTRAL"}:
+        score += 1
+        reasons.append("4h: давление продавцов ослабевает или нейтрально")
+    else:
+        score -= 2
+        reasons.append("4h: сохраняется нисходящий тренд")
+    if daily.get("trend") in {"BULLISH", "NEUTRAL"}:
+        score += 1
+        reasons.append("1d: нет подтверждённого сильного нисходящего тренда")
+    else:
+        score -= 2
+        reasons.append("1d: дневной тренд остаётся нисходящим")
+    try:
+        rsi_value = float(one.get("rsi"))
+        if math.isfinite(rsi_value) and 35.0 <= rsi_value <= 60.0:
+            score += 1
+            reasons.append(f"RSI 1h {rsi_value:.1f}: зона возможного восстановления")
+        elif math.isfinite(rsi_value) and rsi_value < 30.0:
+            reasons.append(f"RSI 1h {rsi_value:.1f}: перепроданность сама по себе не подтверждает покупку")
+        else:
+            reasons.append("RSI 1h не подтверждает комфортную точку входа")
+    except (TypeError, ValueError, OverflowError):
+        reasons.append("RSI 1h недоступен")
+    try:
+        momentum = float(one.get("momentum_24_percent"))
+        if math.isfinite(momentum) and momentum > 0:
+            score += 2
+            reasons.append(f"Импульс 1h за 24 свечи: {momentum:+.2f}%")
+        elif math.isfinite(momentum) and momentum < -5:
+            score -= 2
+            reasons.append(f"Падение продолжается: импульс {momentum:+.2f}%")
+        else:
+            reasons.append(f"Импульс 1h: {momentum:+.2f}% — отскок ещё слабый")
+    except (TypeError, ValueError, OverflowError):
+        reasons.append("Импульс 1h недоступен")
+    try:
+        volume_ratio = float(one.get("volume_ratio"))
+        if math.isfinite(volume_ratio) and volume_ratio >= 1.2 and one.get("trend") == "BULLISH":
+            score += 1
+            reasons.append(f"Объём подтверждает движение: {volume_ratio:.2f}x")
+    except (TypeError, ValueError, OverflowError):
+        pass
+    try:
+        atr = float(one.get("atr_percent"))
+        if not math.isfinite(atr) or atr >= 8.0:
+            score -= 2
+            reasons.append("Очень высокая волатильность: повышенный риск")
+    except (TypeError, ValueError, OverflowError):
+        score -= 1
+        reasons.append("ATR 1h недоступен")
+    if four.get("trend") == "BEARISH" and daily.get("trend") == "BEARISH":
+        return {"status": "REJECT", "score": score, "reasons": reasons + ["Нисходящий тренд одновременно на 4h и 1d"]}
+    if one.get("trend") == "BULLISH" and four.get("trend") != "BEARISH" and daily.get("trend") != "BEARISH" and score >= 5:
+        status = "POTENTIAL_BUY"
+        reasons.append("Есть предварительное подтверждение отскока; это не торговый приказ")
+    else:
+        status = "WATCH"
+        reasons.append("Наблюдать: условия разворота ещё не собраны")
+    return {"status": status, "score": score, "reasons": reasons}
