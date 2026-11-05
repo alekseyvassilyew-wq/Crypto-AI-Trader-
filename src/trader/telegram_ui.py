@@ -240,7 +240,15 @@ def build_app(s, engine, exchange):
     async def send_topic(context, topic_id, text, parse_mode=None):
         if not s.telegram_group_chat_id:
             return
-        kwargs = {"chat_id": s.telegram_group_chat_id, "text": _telegram_plain(text)[:3900]}
+        plain_text = _telegram_plain(text).strip()
+        if plain_text and "━━━━━━━━━━━━━━━━━━" not in plain_text:
+            heading, separator, remainder = plain_text.partition("\\n")
+            plain_text = (
+                heading + "\\n━━━━━━━━━━━━━━━━━━"
+                + (("\\n" + remainder) if separator else "")
+                + "\\n━━━━━━━━━━━━━━━━━━"
+            )
+        kwargs = {"chat_id": s.telegram_group_chat_id, "text": plain_text[:3900]}
         if topic_id:
             kwargs["message_thread_id"] = topic_id
         await context.bot.send_message(**kwargs)
