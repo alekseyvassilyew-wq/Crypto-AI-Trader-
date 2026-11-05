@@ -69,39 +69,51 @@ def test_automatic_research_report_marks_passed_models():
 
 
 
-def test_scan_report_matches_monitor_status_plain_text_layout():
+def test_scan_report_uses_compact_telegram_layout():
     from src.trader.telegram_ui import _format_scan_report
 
     report = _format_scan_report([
         {
-            "symbol": "KNTQUSD", "signal": "HOLD", "score": 3,
-            "turnover_eur": 141407, "price": 0.46052,
+            "symbol": "AZTECUSD", "signal": "HOLD", "score": 4,
+            "turnover_eur": 95135, "price": 0.01471000,
             "ohlc_analyzed": True,
-            "reasons": ["Trend not bullish", "RSI 52.8 supportive"],
+            "reasons": ["Bullish EMA trend", "RSI 60.2 supportive"],
         },
         {
             "symbol": "TONEUR", "signal": "HOLD", "score": 2,
-            "turnover_eur": 30894, "price": 1.14,
-            "spread_bps": 19.6, "ohlc_analyzed": True,
-            "reasons": ["Trend not bullish"],
+            "turnover_eur": 33243, "price": 1.013,
+            "spread_bps": 19.7, "ohlc_analyzed": True,
+            "reasons": ["Trend not bullish", "RSI outside entry zone: 22.6"],
         },
         {
             "symbol": "TONUSD", "signal": "HOLD", "score": 2,
-            "turnover_eur": 847000, "price": 1.148,
-            "spread_bps": 8.7, "ohlc_analyzed": False,
-            "reasons": ["OHLC analysis deferred"],
+            "turnover_eur": 852319, "price": 1.135,
+            "spread_bps": 8.8, "ohlc_analyzed": False,
+            "reasons": ["Trend not bullish", "RSI outside entry zone: 22.7"],
         },
-    ], 1348, 1325)
+    ], 1348, 1326)
 
-    assert report.startswith("🔎 СКАНИРОВАНИЕ РЫНКА KRAKEN\n━━━━━━━━━━━━━━━━━━\n🌐 СТАТИСТИКА РЫНКА\nВсего рынков Kraken: 1,348")
-    assert "Тикеров получено: 1,325" in report
-    assert "Сигналов BUY: 0" in report
-    assert "KNTQUSD: HOLD (3/5), оборот 141,407 EUR/24ч, цена 0.46052" in report
-    assert "  Причина: Trend not bullish; RSI 52.8 supportive" in report
-    assert "Все рынки получают мониторинг котировок; анализ свечей ограничен бюджетом запросов." in report
-    assert "TONEUR: HOLD | спред 19.6 bps | оборот 30,894 EUR/24ч | OHLC проверен" in report
-    assert "TONUSD: HOLD | спред 8.7 bps | оборот 847,000 EUR/24ч | OHLC отложен" in report
+    assert report.startswith("🔎 KRAKEN · СКАНИРОВАНИЕ\n━━━━━━━━━━━━━━━━━━")
+    assert "🌐 1,348 рынков  ·  1,326 тикеров" in report
+    assert "🕯 EUR + OHLC: 2  ·  🟢 BUY: 0" in report
+    assert "🟡 AZTECUSD  HOLD · 4/5" in report
+    assert "Оборот €95.1k/24ч  ·  Цена 0.01471" in report
+    assert "Bullish EMA trend · RSI 60.2 supportive" in report
+    assert "🪙 TON · ОТДЕЛЬНАЯ ПРОВЕРКА" in report
+    assert "🟡 TONEUR · HOLD  |  19.7 bps  |  €33.2k/24ч  |  OHLC ✓" in report
+    assert "🟡 TONUSD · HOLD  |  8.8 bps  |  €852.3k/24ч  |  OHLC отложен" in report
+    assert "анализ свечей ограничен API-бюджетом" in report
+    assert len(report) < 3900
 
+
+def test_scan_report_handles_missing_rows_and_values():
+    from src.trader.telegram_ui import _format_scan_report
+
+    report = _format_scan_report([], 0, 0)
+
+    assert "0 рынков  ·  0 тикеров" in report
+    assert "Нет пар, прошедших анализ свечей в этом цикле." in report
+    assert "TONEUR и TONUSD не найдены" in report
 
 def test_research_history_uses_readable_blocks_and_status_labels():
     from src.trader.telegram_ui import _format_research_history
