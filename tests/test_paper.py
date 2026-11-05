@@ -276,10 +276,10 @@ def test_multiple_buys_accumulate_eur_basis_and_partial_sell_allocates_proportio
     position = broker.positions["ETHEUR"]
     assert position["qty"] == pytest.approx(20 / 10 + 30 / 15)
     assert position["cost_basis_eur"] == pytest.approx(20 * 0.90 + 30 * 0.95)
-    assert position["entry_fees_eur"] == pytest.approx((20 + 30) * 0.01 * 0.90 + 30 * 0.01 * (0.95 - 0.90))
+    assert position["entry_fees_eur"] == pytest.approx(20 * 0.01 * 0.90 + 30 * 0.01 * 0.95)
 
     broker.sell("ETHEUR", 1.0, 16)
     remaining = broker.positions["ETHEUR"]
-    assert remaining["qty"] == pytest.approx(2.0)
-    assert remaining["cost_basis_eur"] == pytest.approx((20 * 0.90 + 30 * 0.95) * 2 / 3)
-    assert remaining["entry_fees_eur"] == pytest.approx(((20 * 0.90 + 30 * 0.95) * 0.01) * 2 / 3)
+    assert remaining["qty"] == pytest.approx(3.0)
+    assert remaining["cost_basis_eur"] == pytest.approx((20 * 0.90 + 30 * 0.95) * 3 / 4)
+    assert remaining["entry_fees_eur"] == pytest.approx((20 * 0.01 * 0.90 + 30 * 0.01 * 0.95) * 3 / 4)
