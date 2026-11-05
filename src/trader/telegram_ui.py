@@ -1,5 +1,6 @@
 import logging
 import html
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
@@ -195,7 +196,7 @@ def _format_market_report(summary, pair_count, ticker_count, generated_at=None):
         "ℹ️ Для подробного разбора монеты: /analyze XBTEUR",
         "Дневная ширина рынка — обзор, а не торговый сигнал. Свечи анализируются в пределах API-бюджета.",
     ])
-    return "\\n".join(lines)
+    return "\n".join(lines)
 
 
 def _paginate_report_text(text, max_chars=3400):
