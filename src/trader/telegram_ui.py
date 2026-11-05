@@ -574,7 +574,7 @@ def build_app(s, engine, exchange):
                 ]
                 if failures:
                     lines.append("Рынки, пропущенные при загрузке: " + ", ".join(failures))
-                await update.effective_message.reply_text("\n".join(lines)[:3900])
+                await update.effective_message.reply_text(_format_report(lines[0], "\n".join(lines))[:3900])
             except Exception as exc:
                 log.error("Portfolio historical backtest failed: %s", type(exc).__name__)
                 await update.effective_message.reply_text(format_error(exc, "/backtest portfolio", update.effective_user))
@@ -624,7 +624,7 @@ def build_app(s, engine, exchange):
                 f"Оборот: {result['gross_turnover']:.4f}; ставка: {result['fee_rate'] * 100:.3f}% на сторону\n"
                 "Издержки: комиссия на вход/выход + проскальзывание 5 bps на сторону. "
                 "Исполнение моделируется по открытию следующей свечи. "
-"━━━━━━━━━━━━━━━━━━\\nЭто тест одного рынка, не прогноз и не гарантия будущей прибыли."
+"━━━━━━━━━━━━━━━━━━\nЭто тест одного рынка, не прогноз и не гарантия будущей прибыли."
             )
         except Exception as exc:
             log.error("Historical backtest failed for %s: %s", symbol, type(exc).__name__)
