@@ -88,7 +88,7 @@ def _telegram_plain(value):
     """Convert Telegram HTML markup to safe, readable plain text."""
     import re
     text = str(value or "")
-    text = re.sub(r'<a href="([^"]+)">([^<]*)</a>', r"\\2 (\\1)", text, flags=re.IGNORECASE)
+    text = re.sub(r"<a href=\"([^\"]+)\">([^<]*)</a>", lambda match: f"{match.group(2)} ({match.group(1)})", text, flags=re.IGNORECASE)
     text = re.sub(r"</?(?:b|strong|i|em|u|s|code|pre)>", "", text, flags=re.IGNORECASE)
     return html.unescape(text)
 
