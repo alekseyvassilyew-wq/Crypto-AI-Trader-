@@ -59,70 +59,47 @@ def merge_monitor_health_state(persisted: dict, observed: dict) -> dict:
 
 
 def format_monitor_status(settings, state: dict) -> str:
-    """Build a compact Telegram HTML dashboard without exposing credentials."""
-    import html
-
+    """Build a concise plain-text service report in the bot's standard layout."""
     render_ready = bool(getattr(settings, "render_api_key", "") and getattr(settings, "render_service_id", ""))
     github_ready = bool(getattr(settings, "github_repository", ""))
     telegram_ready = bool(getattr(settings, "telegram_group_chat_id", 0))
-    render_error = state.get("render_last_error")
-    github_error = state.get("github_last_error")
-    overall_ok = all((render_ready, github_ready, telegram_ready)) and not render_error and not github_error
 
     def stamp(value):
-        return html.escape(str(value)) if value else "ещё не зафиксировано"
+        return str(value) if value else "ещё не зафиксировано"
 
-    def service_card(icon, name, ready, configured_label, success_at=None, error=None, metric=None):
-        status = "НАСТРОЕН" if ready else "НЕ НАСТРОЕН"
-        color = "🟢" if ready and not error else ("🔴" if error else "⚪")
-        rows = [f"{color} <b>{status}</b>"]
-        if metric:
-            rows.append(metric)
-        if success_at:
-            rows.append(f"🕒 Последняя успешная проверка: <code>{stamp(success_at)}</code>")
-        elif ready:
-            rows.append("🕒 Успешная проверка ещё не зафиксирована")
-        if error:
-            rows.append(f"⚠️ Последняя ошибка API: <code>{html.escape(str(error))}</code>")
-        return f"{icon} <b>{name}</b>\n" + "\n".join(rows)
-
+    render_error = state.get("render_last_error")
+    github_error = state.get("github_last_error")
+    lines = [
+        "🛰 МОНИТОРИНГ ВНЕШНИХ СЕРВИСОВ",
+        "━━━━━━━━━━━━━━━━━━",
+        f"Render API: {'НАСТРОЕН' if render_ready else 'НЕ НАСТРОЕН'}",
+        f"GitHub Actions: {'НАСТРОЕН' if github_ready else 'НЕ НАСТРОЕН'}",
+        f"Telegram-группа: {'НАСТРОЕНА' if telegram_ready else 'НЕ НАСТРОЕНА'}",
+    ]
     saved = state.get("render_event_ids")
     tracked = state.get("github_status")
-    render_metric = f"📦 Сохранено событий: <b>{len(saved) if isinstance(saved, list) else 0}</b>"
-    github_metric = f"▶️ Отслеживается запусков: <b>{len(tracked) if isinstance(tracked, dict) else 0}</b>"
-    telegram_delivery = state.get("last_alert_delivery_at")
-    telegram_card = (
-        "✈️ <b>Telegram-группа</b>\n"
-        f"{'🟢 <b>НАСТРОЕНА</b>' if telegram_ready else '⚪ <b>НЕ НАСТРОЕНА</b>'}\n"
-        f"🕒 Последняя подтверждённая отправка: <code>{stamp(telegram_delivery)}</code>\n"
-        "<i>Успех фиксируется только после ответа Telegram.</i>"
-    )
-
-    lines = [
-        "🛰 <b>МОНИТОРИНГ ВНЕШНИХ СЕРВИСОВ</b>",
-        f"{'🟢' if overall_ok else '🟠'} <b>{'ВСЕ СИСТЕМЫ РАБОТАЮТ' if overall_ok else 'ТРЕБУЕТСЯ ВНИМАНИЕ'}</b>",
-        "━━━━━━━━━━━━━━━━━━",
-        service_card("🟣", "RENDER API", render_ready, "НАСТРОЕН",
-                     state.get("render_last_success_at"), render_error, render_metric),
-        "━━━━━━━━━━━━━━━━━━",
-        service_card("🐙", "GITHUB ACTIONS", github_ready, "НАСТРОЕН",
-                     state.get("github_last_success_at"), github_error, github_metric),
-        "━━━━━━━━━━━━━━━━━━",
-        telegram_card,
-    ]
+    if render_ready:
+        lines.append(f"Render: сохранено событий — {len(saved) if isinstance(saved, list) else 0}")
+        lines.append(f"Последняя успешная проверка Render: {stamp(state.get('render_last_success_at'))}")
+        if render_error:
+            lines.append(f"Последняя ошибка Render API: {str(render_error)[:250]}")
+    if github_ready:
+        lines.append(f"GitHub: отслеживается запусков — {len(tracked) if isinstance(tracked, dict) else 0}")
+        lines.append(f"Последняя успешная проверка GitHub: {stamp(state.get('github_last_success_at'))}")
+        if github_error:
+            lines.append(f"Последняя ошибка GitHub API: {str(github_error)[:250]}")
+    if telegram_ready:
+        lines.append(f"Последняя подтверждённая отправка Telegram: {stamp(state.get('last_alert_delivery_at'))}")
     if state.get("last_poll_at"):
         lines.extend([
-            "━━━━━━━━━━━━━━━━━━",
-            "🔄 <b>ПОСЛЕДНИЙ ЦИКЛ МОНИТОРИНГА</b>",
-            f"🕒 Завершён: <code>{stamp(state.get('last_poll_at'))}</code>",
-            f"🆕 Новых событий: <b>{int(state.get('last_events_count') or 0)}</b>",
+            f"Последний завершённый цикл мониторинга: {stamp(state.get('last_poll_at'))}",
+            f"Новых событий в последнем цикле: {int(state.get('last_events_count') or 0)}",
         ])
     lines.extend([
         "━━━━━━━━━━━━━━━━━━",
-        "🔐 <i>API-ключи скрыты. Статус доставки подтверждается ответом Telegram.</i>",
+        "API-ключи не отображаются. Доставка считается успешной только после ответа Telegram.",
     ])
-    return "\n".join(lines)
-
+    return "\\n".join(lines)
 
 def backup_health_transition(previous_status: str | None, current_status: str) -> str | None:
     """Return an alert class only when SQLite backup health changes."""
