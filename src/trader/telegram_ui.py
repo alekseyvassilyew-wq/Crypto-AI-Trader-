@@ -106,7 +106,7 @@ def _format_scan_report(rows, pair_count, ticker_count):
         "ℹ️ Котировки мониторятся по всем рынкам; анализ свечей ограничен API-бюджетом.",
     ])
     report = "\n".join(lines)
-    return report if len(report) <= 3900 else report[:3880].rsplit("\n", 1)[0] + "\n… Остальное скрыто."
+    return report
 
 def _paginate_report_text(text, max_chars=3400):
     """Split a Telegram report into readable pages without splitting lines where possible."""
@@ -486,10 +486,18 @@ def build_app(s, engine, exchange):
                 + (("\n" + remainder) if separator else "")
                 + "\n━━━━━━━━━━━━━━━━━━"
             )
-        kwargs = {"chat_id": s.telegram_group_chat_id, "text": plain_text[:3900]}
+        is_error_topic = bool(topic_id and topic_id == s.topic_errors_id)
+        pages = [plain_text[:3900]] if is_error_topic else _paginate_report_text(plain_text)
+        kwargs = {"chat_id": s.telegram_group_chat_id, "text": pages[0]}
         if topic_id:
             kwargs["message_thread_id"] = topic_id
-        await context.bot.send_message(**kwargs)
+        if len(pages) > 1:
+            kwargs["reply_markup"] = _report_page_keyboard(0, 0, len(pages))
+        message = await context.bot.send_message(**kwargs)
+        if len(pages) > 1:
+            key = f"{message.chat_id}:{message.message_id}"
+            context.application.bot_data.setdefault("report_pages", {})[key] = {"pages": pages, "parse_mode": None}
+            await message.edit_reply_markup(reply_markup=_report_page_keyboard(message.message_id, 0, len(pages)))
 
     async def send_report(update, context, report_text, parse_mode=None):
         """Send a report in one message, switching pages by editing that message."""
