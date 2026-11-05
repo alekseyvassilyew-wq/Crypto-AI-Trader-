@@ -175,7 +175,8 @@ def build_app(s, engine, exchange):
                 "━━━━━━━━━━━━━━━━━━\n"
                 "ℹ️ <i>Оценка капитала и P/L требуют свежих рыночных котировок и EUR-курсов. "
                 "Все операции выполняются исключительно в PAPER.</i>"
-            )        message = await context.application.bot_data["run_blocking"].run(read_status)
+            )
+        message = await context.application.bot_data["run_blocking"].run(read_status)
         await update.effective_message.reply_text(message, parse_mode="HTML")
 
     async def monitorstatus(update, context):
