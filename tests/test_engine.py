@@ -450,6 +450,59 @@ def test_successful_cycle_persists_paper_snapshot(tmp_path):
     db.close()
 
 
+
+def test_paused_cycle_refreshes_snapshot_using_fresh_market_valuation(tmp_path):
+    from datetime import datetime, timezone
+    from src.trader.db import get_latest_paper_snapshot
+
+    engine, db = make_engine(tmp_path)
+    engine.scan = lambda **kwargs: [{
+        "symbol": "XBTEUR", "quote": "EUR", "signal": "HOLD", "score": 0,
+        "price": 12.0, "bid": 11.99, "ask": 12.01,
+        "spread_bps": 10, "turnover": 50000, "turnover_eur": 50000,
+        "ohlc_analyzed": False, "reasons": [],
+    }]
+    engine.market_pairs = [{"symbol": "XBTEUR", "base": "XBT", "quote": "EUR"}]
+    assert engine.paused is True
+
+    engine.cycle()
+
+    snapshot = get_latest_paper_snapshot(db)
+    assert snapshot is not None
+    assert snapshot["equity_eur"] == pytest.approx(20.0)
+    assert snapshot["open_positions"] == 0
+    assert datetime.now(timezone.utc).replace(tzinfo=None) - datetime.strptime(
+        snapshot["ts"], "%Y-%m-%d %H:%M:%S"
+    ) < __import__("datetime").timedelta(minutes=1)
+    assert engine.paused is True
+    db.close()
+
+
+def test_paused_cycle_does_not_save_snapshot_with_missing_fresh_fx(tmp_path):
+    from src.trader.db import get_latest_paper_snapshot
+
+    engine, db = make_engine(tmp_path)
+    engine.paper.cash_by_currency["USD"] = 5.0
+    engine.paper.cash_by_currency["EUR"] -= 5.0
+    engine.paper._sync_cash()
+    engine.scan = lambda **kwargs: [{
+        "symbol": "XBTEUR", "quote": "EUR", "signal": "HOLD", "score": 0,
+        "price": 12.0, "bid": 11.99, "ask": 12.01,
+        "spread_bps": 10, "turnover": 50000, "turnover_eur": 50000,
+        "ohlc_analyzed": False, "reasons": [],
+    }]
+    engine.market_pairs = [{"symbol": "XBTEUR", "base": "XBT", "quote": "EUR"}]
+
+    engine.cycle()
+
+    assert get_latest_paper_snapshot(db) is None
+    assert engine.paused is True
+    row = db.execute("SELECT details FROM audit WHERE event='PAPER_SNAPSHOT_FAILED'").fetchone()
+    assert row is not None
+    assert "USD" in row["details"]
+    db.close()
+
+
 def test_cached_fx_rate_cannot_authorize_new_conversion(tmp_path):
     engine, db = make_engine(tmp_path)
     engine.market_pairs = [{"symbol": "USDZEUR", "base": "USD", "quote": "EUR"}]
