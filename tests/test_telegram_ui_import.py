@@ -66,3 +66,56 @@ def test_automatic_research_report_marks_passed_models():
     assert "PF: <b>∞</b>" in report
     assert "Все исследовательские критерии пройдены." in report
 
+
+
+def test_scan_report_formats_market_stats_and_ton_section():
+    from src.trader.telegram_ui import _format_scan_report
+
+    report = _format_scan_report([
+        {
+            "symbol": "KNTQUSD", "signal": "HOLD", "score": 3,
+            "turnover_eur": 141407, "price": 0.46052,
+            "ohlc_analyzed": True,
+            "reasons": ["Trend not bullish", "RSI 52.8 supportive"],
+        },
+        {
+            "symbol": "TONEUR", "signal": "HOLD", "score": 2,
+            "turnover_eur": 30894, "price": 1.14,
+            "spread_bps": 19.6, "ohlc_analyzed": True,
+            "reasons": ["Trend not bullish"],
+        },
+        {
+            "symbol": "TONUSD", "signal": "HOLD", "score": 2,
+            "turnover_eur": 847000, "price": 1.148,
+            "spread_bps": 8.7, "ohlc_analyzed": False,
+            "reasons": ["OHLC analysis deferred"],
+        },
+    ], 1348, 1325)
+
+    assert "🔎 <b>СКАНИРОВАНИЕ РЫНКА KRAKEN</b>" in report
+    assert "BUY-СИГНАЛОВ НЕТ" in report
+    assert "Рынков Kraken: <b>1,348</b>" in report
+    assert "Получено тикеров: <b>1,325</b>" in report
+    assert "KNTQUSD" in report and "141,407 EUR/24ч" in report
+    assert "TONEUR" in report and "19.6 bps" in report
+    assert "TONUSD" in report and "OHLC отложен" in report
+    assert "RSI 52.8 supportive" in report
+
+
+def test_scan_report_escapes_dynamic_html_and_marks_buy_signal():
+    from src.trader.telegram_ui import _format_scan_report
+
+    report = _format_scan_report([{
+        "symbol": "<XBTEUR>",
+        "signal": "BUY",
+        "score": 5,
+        "turnover_eur": 1000,
+        "price": 60000,
+        "ohlc_analyzed": True,
+        "reasons": ["Strong <trend> & momentum"],
+    }], 10, 9)
+
+    assert "🟢 <b>НАЙДЕНЫ BUY-СИГНАЛЫ</b>" in report
+    assert "&lt;XBTEUR&gt;" in report
+    assert "Strong &lt;trend&gt; &amp; momentum" in report
+    assert "<XBTEUR>" not in report
