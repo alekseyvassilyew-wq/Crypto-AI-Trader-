@@ -202,3 +202,37 @@ def test_telegram_report_pagination_handles_empty_and_long_single_line():
     pages = _paginate_report_text("x" * 1200, max_chars=400)
     assert [len(page) for page in pages] == [400, 400, 400]
     assert "".join(pages) == "x" * 1200
+
+
+def test_telegram_report_page_storage_uses_serialized_runner():
+    import asyncio
+
+    from src.trader.db import connect
+    from src.trader.telegram_ui import _load_report_pages, _save_report_pages
+    from src.trader.worker import SerializedRunner
+
+    db = connect(":memory:")
+    runner = SerializedRunner()
+
+    async def scenario():
+        await _save_report_pages(runner, db, "chat:123", ["Первая страница", "Вторая страница"])
+        return await _load_report_pages(runner, db, "chat:123")
+
+    try:
+        assert asyncio.run(scenario()) == ["Первая страница", "Вторая страница"]
+    finally:
+        db.close()
+
+
+def test_telegram_report_page_storage_returns_none_for_unknown_message():
+    import asyncio
+
+    from src.trader.db import connect
+    from src.trader.telegram_ui import _load_report_pages
+    from src.trader.worker import SerializedRunner
+
+    db = connect(":memory:")
+    try:
+        assert asyncio.run(_load_report_pages(SerializedRunner(), db, "chat:missing")) is None
+    finally:
+        db.close()
