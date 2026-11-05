@@ -93,7 +93,7 @@ def test_scan_report_matches_monitor_status_plain_text_layout():
         },
     ], 1348, 1325)
 
-    assert report.startswith("🔎 СКАНИРОВАНИЕ РЫНКА KRAKEN\nВсего рынков Kraken: 1,348")
+    assert report.startswith("🔎 СКАНИРОВАНИЕ РЫНКА KRAKEN\n━━━━━━━━━━━━━━━━━━\n🌐 СТАТИСТИКА РЫНКА\nВсего рынков Kraken: 1,348")
     assert "Тикеров получено: 1,325" in report
     assert "Сигналов BUY: 0" in report
     assert "KNTQUSD: HOLD (3/5), оборот 141,407 EUR/24ч, цена 0.46052" in report
