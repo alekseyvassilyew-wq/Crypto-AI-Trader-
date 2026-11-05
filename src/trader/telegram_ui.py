@@ -174,6 +174,108 @@ def _format_automatic_research_report(trained):
     )
 
 
+
+def _format_research_history(rows, max_chars=3800):
+    """Format research history as compact Telegram pages, one run per visual block."""
+    def pct(value):
+        try:
+            return f"{float(value):+.2f}%"
+        except (TypeError, ValueError, OverflowError):
+            return "н/д"
+
+    def metric(value, digits=2):
+        try:
+            return f"{float(value):.{digits}f}"
+        except (TypeError, ValueError, OverflowError):
+            return "н/д"
+
+    blocks = []
+    for item in rows:
+        report = item.get("report") or {}
+        outcome = str(item.get("outcome") or "UNKNOWN").upper()
+        status = ("🟢 ДОПУЩЕНА К SHADOW-ТЕСТУ" if outcome == "PASS"
+                  else "🔴 НЕ ПРОШЛА ФИЛЬТР" if outcome == "NOT_PASS"
+                  else "🟡 НЕДОСТАТОЧНО ДАННЫХ")
+        created = str(item.get("created_at") or "время неизвестно")
+        try:
+            parsed = datetime.fromisoformat(created.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            created = parsed.astimezone(timezone.utc).strftime("%d.%m.%Y %H:%M UTC")
+        except (TypeError, ValueError, OverflowError):
+            created = created.replace("T", " ")[:19] + " UTC"
+
+        pf = item.get("profit_factor", "N/A")
+        try:
+            pf_number = float(pf)
+            pf = "∞" if math.isinf(pf_number) else f"{pf_number:.2f}"
+        except (TypeError, ValueError, OverflowError):
+            pf = "н/д" if pf in (None, "", "N/A") else str(pf)
+
+        oos = report.get("out_of_sample") or {}
+        block = [
+            f"🪙 {str(item.get('symbol') or 'UNKNOWN').upper()}  •  {status}",
+            f"🕒 {created}",
+            f"📈 Walk-forward OOS: {pct(item.get('oos_return_pct'))}  •  Holdout: {pct(item.get('holdout_return_pct'))}",
+            f"🎯 PF: {pf}  •  Просадка: {metric(item.get('max_drawdown_pct'))}%  •  Сделок OOS: {int(oos.get('trades') or item.get('trades') or 0)}",
+        ]
+        reasons = item.get("reasons") or []
+        if reasons:
+            block.append("⛔ Причины отказа:")
+            block.extend(f"  • {str(reason)[:180]}" for reason in reasons[:3])
+
+        probability = (report.get("probability_diagnostics") or {}).get("walk_forward_oos") or {}
+        if probability:
+            if probability.get("min") is not None:
+                block.append(
+                    "🧠 Вероятности: "
+                    f"min {metric(probability.get('min'), 3)}  •  "
+                    f"сред. {metric(probability.get('mean'), 3)}  •  "
+                    f"медиана {metric(probability.get('median'), 3)}  •  "
+                    f"max {metric(probability.get('max'), 3)}"
+                )
+            else:
+                block.append("🧠 Вероятности: нет прогнозов")
+            thresholds = probability.get("thresholds") or {}
+            if thresholds:
+                block.append("Пороговая диагностика (не настройки торговли):")
+                for level, values in list(thresholds.items())[:5]:
+                    block.append(
+                        f"  {level}: {int(values.get('trades') or 0)} сделок  •  "
+                        f"{pct(values.get('net_return_pct'))}"
+                    )
+
+        regimes = report.get("regime_metrics") or {}
+        if regimes:
+            block.append("🌦 Результат по режимам рынка:")
+            for name, values in regimes.items():
+                block.append(
+                    f"  {str(name).upper()}: {pct(values.get('net_return_pct'))}  •  "
+                    f"{int(values.get('observations') or 0)} наблюдений"
+                )
+        blocks.append("\n".join(block))
+
+    heading = "\n".join([
+        "🧠 ИСТОРИЯ ИССЛЕДОВАНИЙ",
+        "━━━━━━━━━━━━━━━━━━",
+        "SHADOW ONLY • результаты не торгуют автоматически",
+        f"Последние {len(rows)} запусков",
+    ])
+    pages = []
+    current = heading
+    for block in blocks:
+        candidate = current + "\n\n" + "─" * 18 + "\n" + block
+        if len(candidate) > max_chars and current != heading:
+            pages.append(current + "\n━━━━━━━━━━━━━━━━━━")
+            current = "🧠 ИСТОРИЯ ИССЛЕДОВАНИЙ — ПРОДОЛЖЕНИЕ\n━━━━━━━━━━━━━━━━━━"
+            candidate = current + "\n\n" + block
+        current = candidate
+    if blocks:
+        pages.append(current + "\n━━━━━━━━━━━━━━━━━━")
+    else:
+        pages.append(heading + "\nИстория пока пуста.")
+    return pages
+
 def build_app(s, engine, exchange):
     def fresh_position_marks():
         """Return recent executable bid-side marks for every open PAPER position."""
@@ -888,40 +990,9 @@ def build_app(s, engine, exchange):
                 return await update.effective_message.reply_text(
                     "История исследований пока пуста. Запусти /learn XBTEUR или дождись автоматического исследования."
                 )
-            lines = ["🧠 ИСТОРИЯ ИССЛЕДОВАНИЙ — SHADOW ONLY", "━━━━━━━━━━━━━━━━━━", "Последние 10 запусков; результаты не торгуют автоматически."]
-            for item in rows:
-                report = item.get("report") or {}
-                oos = report.get("out_of_sample") or {}
-                holdout = report.get("independent_holdout") or {}
-                reasons = item.get("reasons") or []
-                lines.append(
-                    f"{item['created_at']} | {item['symbol']} | {item['outcome']} | "
-                    f"OOS {float(item.get('oos_return_pct') or 0):+.2f}% | "
-                    f"holdout {float(item.get('holdout_return_pct') or 0):+.2f}% | "
-                    f"PF {item.get('profit_factor', 'N/A')} | DD {float(item.get('max_drawdown_pct') or 0):.2f}%"
-                )
-                if reasons:
-                    lines.append("Причина: " + "; ".join(str(reason) for reason in reasons[:3]))
-                probability = report.get("probability_diagnostics", {}).get("walk_forward_oos", {})
-                if probability:
-                    lines.append("Вероятности: " + (
-                        f"min {probability['min']:.3f}, mean {probability['mean']:.3f}, "
-                        f"median {probability['median']:.3f}, max {probability['max']:.3f}"
-                        if probability.get("min") is not None else "нет прогнозов"
-                    ))
-                    thresholds = probability.get("thresholds") or {}
-                    if thresholds:
-                        lines.append("Пороги (диагностика): " + " | ".join(
-                            f"{level}: {metrics.get('trades', 0)} trades / {metrics.get('net_return_pct', 0):+.2f}%"
-                            for level, metrics in thresholds.items()
-                        ))
-                regimes = report.get("regime_metrics") or {}
-                if regimes:
-                    lines.append("Режимы: " + " | ".join(
-                        f"{name} {data.get('net_return_pct', 0):+.2f}%/{data.get('observations', 0)} obs"
-                        for name, data in regimes.items()
-                    ))
-            await update.effective_message.reply_text("\n".join(lines)[:3900])
+            pages = _format_research_history(rows)
+            for page in pages:
+                await update.effective_message.reply_text(page)
         except Exception as exc:
             await update.effective_message.reply_text(f"Ошибка истории исследований: {safe_error_message(exc)}")
 
