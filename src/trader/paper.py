@@ -123,7 +123,7 @@ class PaperBroker:
         return {"from": source, "to": target, "spent": amount, "received": received,
                 "fee": fee, "rate": rate}
 
-    def buy(self, symbol, quote, price, currency="EUR", quote_to_eur_rate=None):
+    def buy(self, symbol, quote, price, currency="EUR", quote_to_eur_rate=None, *, persist=True):
         symbol = self._validate_symbol(symbol)
         currency = self._validate_currency(currency)
         quote = _finite_number(quote, "quote", minimum=0, strict_minimum=True)
@@ -165,7 +165,8 @@ class PaperBroker:
             "peak_price": peak_price, "cost_basis_eur": cost_basis_eur,
             "entry_fees_eur": entry_fees_eur,
         }
-        self._persist()
+        if persist:
+            self._persist()
         return {"symbol": symbol, "side": "Buy", "qty": qty, "quote": quote,
                 "currency": currency, "fee": fee, "price": price, "status": "FILLED"}
 
@@ -182,7 +183,7 @@ class PaperBroker:
             self._persist()
         return peak
 
-    def sell(self, symbol, qty, price):
+    def sell(self, symbol, qty, price, *, persist=True):
         symbol = self._validate_symbol(symbol)
         qty = _finite_number(qty, "qty", minimum=0, strict_minimum=True)
         price = _finite_number(price, "price", minimum=0, strict_minimum=True)
@@ -209,7 +210,8 @@ class PaperBroker:
                     self.positions[symbol][field] = float(value) * remaining_ratio
         self.cash_by_currency[currency] = new_cash
         self._sync_cash()
-        self._persist()
+        if persist:
+            self._persist()
         return {"symbol": symbol, "side": "Sell", "qty": qty, "quote": gross,
                 "currency": currency, "fee": fee, "price": price, "status": "FILLED"}
 
