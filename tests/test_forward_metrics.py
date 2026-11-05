@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 from src.trader.db import (
     connect, save_paper_snapshot, get_paper_metrics,
     record_shadow_prediction, settle_shadow_predictions, get_shadow_metrics,
@@ -6,9 +8,12 @@ from src.trader.db import (
 
 def test_paper_forward_metrics_persist_equity_and_drawdown(tmp_path):
     db = connect(tmp_path / "metrics.sqlite3")
-    save_paper_snapshot(db, ts="2026-11-04 10:00:00", equity_eur=20, cash={"EUR": 20},
+    now = datetime.now(timezone.utc)
+    ts_first = (now - timedelta(minutes=1)).isoformat()
+    ts_last = now.isoformat()
+    save_paper_snapshot(db, ts=ts_first, equity_eur=20, cash={"EUR": 20},
                         open_positions=0, analyzed_markets=10, buy_signals=1)
-    save_paper_snapshot(db, ts="2026-11-04 10:01:00", equity_eur=19, cash={"EUR": 19},
+    save_paper_snapshot(db, ts=ts_last, equity_eur=19, cash={"EUR": 19},
                         open_positions=1, analyzed_markets=10, buy_signals=0)
     report = get_paper_metrics(db, 24)
     assert report["samples"] == 2
@@ -46,7 +51,8 @@ def test_shadow_predictions_are_non_overlapping_and_settle_after_horizon(tmp_pat
 
 def test_memory_database_is_supported():
     db = connect(":memory:")
-    save_paper_snapshot(db, ts="2026-11-04 12:00:00", equity_eur=20, cash={"EUR": 20},
+    now = datetime.now(timezone.utc).isoformat()
+    save_paper_snapshot(db, ts=now, equity_eur=20, cash={"EUR": 20},
                         open_positions=0, analyzed_markets=1, buy_signals=0)
     assert get_paper_metrics(db, 24)["samples"] == 1
     db.close()
