@@ -382,7 +382,7 @@ def build_app(s, engine, exchange):
                 age_hours = backup["age_seconds"] / 3600.0
                 healthy = bool(backup["healthy"])
                 backup_block = (
-                    "🗄 <b>SQLITE BACKUP</b>\n"
+                    "🗄 SQLITE BACKUP\n"
                     f"{'🟢 РЕЗЕРВНАЯ КОПИЯ В ПОРЯДКЕ' if healthy else '🔴 ТРЕБУЕТСЯ ПРОВЕРКА'}\n"
                     f"🕒 Дата: {backup['latest_at']} UTC\n"
                     f"⏱ Возраст: {age_hours:.1f} ч  •  "
@@ -417,7 +417,7 @@ def build_app(s, engine, exchange):
                 f"🛡 Общий статус: {status_text}\n\n💾 РАБОЧАЯ БАЗА ДАННЫХ\n"
                 f"Проверка рабочей БД: {integrity}\n"
                 f"  Размер БД: {db_size / 1024 / 1024:.2f} MB  •  WAL: {wal_size / 1024 / 1024:.2f} MB\n\n📦 РЕЗЕРВНЫЕ КОПИИ\n"
-                f"  Количество: {backup['count' ]}/7\n"
+                f"  Количество: {backup['count']}/7\n"
                 f"  Возраст последней: {age_text}\n"
                 f"  Integrity: {backup['integrity']}\n"
                 f"  Лимит возраста: 26 ч  •  Ротация: {'OK' if backup['retention_ok'] else 'ПРЕВЫШЕНА'}\n━━━━━━━━━━━━━━━━━━"
@@ -636,7 +636,7 @@ def build_app(s, engine, exchange):
         if not await authorized(update): return await deny(update)
         def read_account():
             balances = [f"{currency}: {amount:.8f}" for currency, amount in sorted(engine.paper.cash_by_currency.items())]
-            return "Виртуальные остатки PAPER:\n" + ("\n".join(balances) or "Нулевые остатки.")
+            return _format_report("💰 СВОБОДНЫЕ СРЕДСТВА PAPER", "Виртуальные остатки:\\n" + ("\\n".join(balances) or "Нулевые остатки.") + "\\n\\nРеальные средства не затрагиваются.")
         message = await context.application.bot_data["run_blocking"].run(read_account)
         await update.effective_message.reply_text(message)
 
@@ -967,7 +967,7 @@ def build_app(s, engine, exchange):
                 f"Комиссии по исполнениям: {metrics['total_fees_eur']:.4f} EUR | без EUR-оценки: {metrics['fills_without_eur_fee_valuation']}\n"
                 f"По монетам: {by_symbol_text}\n"
                 f"Период: {metrics['first_ts']} — {metrics['last_ts']} UTC\n"
-                "━━━━━━━━━━━━━━━━━━\\nЭто изменение стоимости PAPER-портфеля, а не доказательство будущей доходности."
+                "━━━━━━━━━━━━━━━━━━\nЭто изменение стоимости PAPER-портфеля, а не доказательство будущей доходности."
             )
         except Exception as exc:
             await update.effective_message.reply_text(f"Ошибка отчёта: {safe_error_message(exc)}")
@@ -1018,7 +1018,7 @@ def build_app(s, engine, exchange):
             fx_text = "Свежие EUR-курсы для всех валют." if not missing else "Нет свежего EUR-курса: " + ", ".join(missing)
             if not quotes_fresh:
                 fx_text += " Нет свежего рыночного снимка; оценка P/L скрыта."
-            return "PAPER-кошелёк:\n" + ("\n".join(balances) or "Нет свободных средств.") + "\n" + fx_text + "\n\nПозиции:\n" + ("\n".join(lines) or "Нет открытых позиций.")
+            return _format_report("💼 ПОРТФЕЛЬ PAPER", "💰 СВОБОДНЫЕ СРЕДСТВА\\n" + ("\\n".join(balances) or "Нет свободных средств.") + "\\n\\n🛡 ОЦЕНКА И FX\\n" + fx_text + "\\n\\n📦 ОТКРЫТЫЕ ПОЗИЦИИ\\n" + ("\\n".join(lines) or "Нет открытых позиций."))
         message = await context.application.bot_data["run_blocking"].run(read_portfolio)
         await update.effective_message.reply_text(message)
 
