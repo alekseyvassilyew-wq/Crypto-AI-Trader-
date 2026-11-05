@@ -9,7 +9,7 @@ from telegram.error import NetworkError
 from .db import backup_database, save_telegram_report_pages, get_telegram_report_pages
 
 
-async def _is_telegram_transport_error(error):
+def _is_telegram_transport_error(error):
     """Return True for transient Telegram HTTP/network failures."""
     return isinstance(error, NetworkError)
 
