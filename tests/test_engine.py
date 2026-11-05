@@ -1023,3 +1023,36 @@ def test_engine_paper_fill_rolls_back_memory_when_database_commit_fails(tmp_path
     assert saved["cash_by_currency"] == before_cash
     assert saved["positions"] == before_positions
     db.close()
+
+def test_shadow_research_uses_configured_paper_slippage(tmp_path, monkeypatch):
+    import src.trader.engine as engine_module
+
+    engine, db = make_engine(tmp_path)
+    engine.s.paper_slippage_bps = 17.0
+    set_state(db, "ml_candidate_XBTEUR", {
+        "model": {"version": 1},
+        "model_version": "test",
+        "probability_threshold": 0.58,
+        "horizon_candles": 3,
+    })
+    captured = {}
+    monkeypatch.setattr(engine_module, "analyze", lambda candles: {
+        "signal": "HOLD", "score": 0, "market_regime": "RANGE", "reasons": [],
+    })
+    monkeypatch.setattr(
+        engine_module, "settle_shadow_predictions",
+        lambda *args, **kwargs: captured.update(kwargs),
+    )
+    monkeypatch.setattr(engine_module, "extract_features", lambda candles, end: {"feature": 1})
+    monkeypatch.setattr(engine_module, "predict_probability", lambda model, features: 0.5)
+    monkeypatch.setattr(engine_module, "record_shadow_prediction", lambda *args, **kwargs: None)
+
+    candles = [{} for _ in range(61)]
+    tickers = [{
+        "symbol": "XBTEUR", "bid1Price": "99", "ask1Price": "101",
+        "lastPrice": "100", "turnover24h": "1000000",
+    }]
+    engine.scan_one("XBTEUR", tickers=tickers, fx_rates={"EUR": 1.0}, quote_currency="EUR")
+
+    assert captured["slippage_bps"] == pytest.approx(17.0)
+    db.close()
