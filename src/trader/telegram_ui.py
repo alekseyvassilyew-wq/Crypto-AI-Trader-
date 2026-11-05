@@ -988,7 +988,7 @@ def build_app(s, engine, exchange):
         await context.application.bot_data["run_blocking"].run(
             lambda: setattr(engine, "scan_interval_seconds", allowed[context.args[0]])
         )
-        await update.effective_message.reply_text(f"⏱ ИНТЕРВАЛ СКАНИРОВАНИЯ\\n━━━━━━━━━━━━━━━━━━\\nУстановлен: {context.args[0]}\\nИзменение действует до перезапуска сервиса.\\n━━━━━━━━━━━━━━━━━━")
+        await update.effective_message.reply_text(f"⏱ ИНТЕРВАЛ СКАНИРОВАНИЯ\n━━━━━━━━━━━━━━━━━━\nУстановлен: {context.args[0]}\nИзменение действует до перезапуска сервиса.\n━━━━━━━━━━━━━━━━━━")
 
     async def portfolio(update, context):
         if not await authorized(update): return await deny(update)
@@ -1033,17 +1033,17 @@ def build_app(s, engine, exchange):
     async def run(update, context):
         if not await authorized(update): return await deny(update)
         await context.application.bot_data["run_blocking"].run(engine.start)
-        await update.effective_message.reply_text("▶️ PAPER — ЗАПУСК\\n━━━━━━━━━━━━━━━━━━\\nСтатус: активен\\nАвтосканирование включено.\\n━━━━━━━━━━━━━━━━━━")
+        await update.effective_message.reply_text("▶️ PAPER — ЗАПУСК\n━━━━━━━━━━━━━━━━━━\nСтатус: активен\nАвтосканирование включено.\n━━━━━━━━━━━━━━━━━━")
 
     async def pause(update, context):
         if not await authorized(update): return await deny(update)
         await context.application.bot_data["run_blocking"].run(lambda: engine.stop("Paused by owner"))
-        await update.effective_message.reply_text("⏸ PAPER — ПАУЗА\\n━━━━━━━━━━━━━━━━━━\\nНовые сделки остановлены.\\nОткрытые позиции сохраняются; мониторинг рынка продолжается.\\n━━━━━━━━━━━━━━━━━━")
+        await update.effective_message.reply_text("⏸ PAPER — ПАУЗА\n━━━━━━━━━━━━━━━━━━\nНовые сделки остановлены.\nОткрытые позиции сохраняются; мониторинг рынка продолжается.\n━━━━━━━━━━━━━━━━━━")
 
     async def stop(update, context):
         if not await authorized(update): return await deny(update)
         await context.application.bot_data["run_blocking"].run(lambda: engine.stop("Emergency stop via Telegram"))
-        await update.effective_message.reply_text("⛔ PAPER — STOP\\n━━━━━━━━━━━━━━━━━━\\nАвтоматические сделки остановлены.\\nОткрытые позиции не удалены.\\n━━━━━━━━━━━━━━━━━━")
+        await update.effective_message.reply_text("⛔ PAPER — STOP\n━━━━━━━━━━━━━━━━━━\nАвтоматические сделки остановлены.\nОткрытые позиции не удалены.\n━━━━━━━━━━━━━━━━━━")
 
     async def topicid(update, context):
         if not await authorized(update): return await deny(update)
