@@ -9,6 +9,88 @@ from .db import backup_database
 
 log = logging.getLogger(__name__)
 
+def _format_scan_report(rows, pair_count, ticker_count):
+    """Render /scan as a compact Telegram HTML market dashboard."""
+    def number(value, digits=2):
+        try:
+            return f"{float(value):,.{digits}f}"
+        except (TypeError, ValueError, OverflowError):
+            return "н/д"
+
+    buy_rows = [item for item in rows if item.get("signal") == "BUY"]
+    analyzed = [item for item in rows if item.get("ohlc_analyzed") is True]
+    ranked = sorted(
+        analyzed,
+        key=lambda item: (item.get("score", 0), item.get("turnover_eur", 0)),
+        reverse=True,
+    )[:12]
+    lines = [
+        "🔎 <b>СКАНИРОВАНИЕ РЫНКА KRAKEN</b>",
+        f"{'🟢' if buy_rows else '🟡'} <b>{'НАЙДЕНЫ BUY-СИГНАЛЫ' if buy_rows else 'BUY-СИГНАЛОВ НЕТ'}</b>",
+        "━━━━━━━━━━━━━━━━━━",
+        "📊 <b>ОБЩАЯ СТАТИСТИКА</b>",
+        f"🌐 Рынков Kraken: <b>{int(pair_count)}</b>",
+        f"📡 Получено тикеров: <b>{int(ticker_count)}</b>",
+        f"🕯 Пар с EUR-маршрутом и анализом свечей: <b>{len(analyzed)}</b>",
+        f"🟢 Сигналов BUY: <b>{len(buy_rows)}</b>",
+        "━━━━━━━━━━━━━━━━━━",
+        "📈 <b>РЕЗУЛЬТАТЫ АНАЛИЗА</b>",
+    ]
+    if ranked:
+        for item in ranked:
+            symbol = html.escape(str(item.get("symbol") or "—"))
+            signal = str(item.get("signal") or "HOLD").upper()
+            signal_icon = "🟢" if signal == "BUY" else ("🔴" if signal == "SELL" else "🟡")
+            score = number(item.get("score", 0), 0)
+            turnover = number(item.get("turnover_eur", 0), 0)
+            price = number(item.get("price"), 8)
+            lines.append(
+                f"{signal_icon} <b>{symbol}</b> — <b>{html.escape(signal)} ({score}/5)</b>\n"
+                f"   Оборот: <b>{turnover} EUR/24ч</b>  •  Цена: <code>{price}</code>"
+            )
+            reasons = item.get("reasons") or []
+            if reasons:
+                lines.append("   <i>" + html.escape("; ".join(str(reason) for reason in reasons[:2])) + "</i>")
+    else:
+        lines.append("Пары, прошедшие анализ свечей, не найдены в этом цикле.")
+
+    lines.extend([
+        "━━━━━━━━━━━━━━━━━━",
+        "🧭 <b>ПОКРЫТИЕ РЫНКА</b>",
+        "<i>Котировки мониторятся по всем рынкам Kraken. Анализ свечей выполняется в пределах бюджета запросов и распределяется между рынками.</i>",
+        "━━━━━━━━━━━━━━━━━━",
+        "🪙 <b>ОТДЕЛЬНАЯ ПРОВЕРКА TON</b>",
+    ])
+    ton = {
+        str(item.get("symbol") or "").upper(): item
+        for item in rows
+        if str(item.get("symbol") or "").upper() in {"TONEUR", "TONUSD"}
+    }
+    if ton:
+        for symbol in ("TONEUR", "TONUSD"):
+            item = ton.get(symbol)
+            if item is None:
+                continue
+            spread = item.get("spread_bps")
+            spread_text = f"{number(spread, 1)} bps" if spread is not None else "нет данных"
+            turnover = item.get("turnover_eur")
+            turnover_text = f"{number(turnover, 0)} EUR/24ч" if turnover is not None else "нет данных"
+            verified = bool(item.get("ohlc_analyzed"))
+            lines.append(
+                f"{'🟢' if item.get('signal') == 'BUY' else '🟡'} <b>{symbol}: "
+                f"{html.escape(str(item.get('signal') or 'HOLD'))}</b>  •  "
+                f"Спред: <b>{spread_text}</b>\n"
+                f"   Оборот: <b>{turnover_text}</b>  •  "
+                f"{'OHLC проверен' if verified else 'OHLC отложен'}"
+            )
+            reasons = item.get("reasons") or []
+            if reasons:
+                lines.append("   <i>" + html.escape("; ".join(str(reason) for reason in reasons[:2])) + "</i>")
+    else:
+        lines.append("TONEUR и TONUSD не найдены в текущем снимке Kraken.")
+    return "\n".join(lines)[:3900]
+
+
 def _format_automatic_research_report(trained):
     """Render compact, readable HTML cards for the scheduled ML research report."""
     def pct(value):
@@ -339,65 +421,15 @@ def build_app(s, engine, exchange):
 
     async def scan(update, context):
         if not await authorized(update): return await deny(update)
-        await update.effective_message.reply_text("Сканирование рынка…")
+        await update.effective_message.reply_text("🔎 Сканирование рынков Kraken…")
         try:
             def run_scan():
                 rows = engine.scan()
                 return rows, len(engine.market_pairs), engine.market_ticker_count
             rows, pair_count, ticker_count = await context.application.bot_data["run_blocking"].run(run_scan)
-            buy_rows = [x for x in rows if x.get("signal") == "BUY"]
-            analyzed = [x for x in rows if x.get("ohlc_analyzed") is True]
-            ranked = sorted(
-                analyzed,
-                key=lambda x: (x.get("score", 0), x.get("turnover_eur", 0)),
-                reverse=True,
-            )[:12]
-            lines = [
-                f"Всего рынков Kraken: {pair_count}",
-                f"Тикеров получено: {ticker_count}",
-                f"Пар с доступным EUR-маршрутом, прошедших анализ свечей: {len(analyzed)}",
-                f"Сигналов BUY: {len(buy_rows)}",
-                "",
-            ]
-            lines.extend(
-                f"{x['symbol']}: {x['signal']} ({x.get('score', 0)}/5), "
-                f"оборот {x.get('turnover_eur', 0):,.0f} EUR/24ч, цена {x.get('price', 0):,.8g}\n"
-                f"  Причина: {'; '.join(x.get('reasons', [])[:2]) or 'Нет дополнительных причин'}"
-                for x in ranked
-            )
-            lines.append("Все рынки получают мониторинг котировок; анализ свечей ограничен бюджетом запросов.")
-
-            # Always surface the specifically requested TON markets, even if
-            # their OHLC analysis is deferred by the rotating scan budget.
-            ton_by_symbol = {
-                str(item.get("symbol") or "").upper(): item
-                for item in rows
-                if str(item.get("symbol") or "").upper() in {"TONEUR", "TONUSD"}
-            }
-            lines.extend(["", "🪙 ОТДЕЛЬНАЯ ПРОВЕРКА TON"])
-            if ton_by_symbol:
-                for symbol in ("TONEUR", "TONUSD"):
-                    item = ton_by_symbol.get(symbol)
-                    if item is None:
-                        continue
-                    spread = item.get("spread_bps")
-                    spread_text = f"{float(spread):.1f} bps" if spread is not None else "нет данных"
-                    turnover = item.get("turnover_eur")
-                    turnover_text = f"{float(turnover):,.0f} EUR/24ч" if turnover is not None else "нет данных"
-                    lines.append(
-                        f"{symbol}: {item.get('signal', 'HOLD')} | "
-                        f"спред {spread_text} | оборот {turnover_text} | "
-                        f"{'OHLC проверен' if item.get('ohlc_analyzed') else 'OHLC отложен'}"
-                    )
-                    reasons = item.get("reasons") or []
-                    if reasons:
-                        lines.append("  Причина: " + "; ".join(str(reason) for reason in reasons[:2]))
-            else:
-                lines.append("TONEUR/TONUSD не найдены в текущем снимке Kraken.")
-            await update.effective_message.reply_text("\n".join(lines)[:3900])
+            message = _format_scan_report(rows, pair_count, ticker_count)
+            await update.effective_message.reply_text(message, parse_mode="HTML")
         except Exception as exc:
-            # Keep the full traceback in Render logs and expose the actionable
-            # exception type/message in the private owner Telegram response.
             log.error("Market scan failed: %s", type(exc).__name__)
             await update.effective_message.reply_text(
                 format_error(exc, "/scan", update.effective_user), parse_mode="HTML"
