@@ -814,6 +814,7 @@ def build_app(s, engine, exchange):
             await update.effective_message.reply_text(format_error(exc, "/market", update.effective_user), parse_mode="HTML")
 
     async def analyze_market(update, context):
+        import math
         if not await authorized(update): return await deny(update)
         if len(context.args) != 1:
             return await update.effective_message.reply_text("Использование: /analyze XBTEUR — подробный анализ 1h, 4h и 1d.")
@@ -821,7 +822,6 @@ def build_app(s, engine, exchange):
         await update.effective_message.reply_text(f"🧠 Анализ {symbol}: загружаю закрытые свечи 1h / 4h / 1d…")
         try:
             def build_analysis():
-                import math
                 from .indicators import analyze as analyze_candles
                 ticker_rows = exchange.tickers([symbol])
                 ticker = ticker_rows[0]
