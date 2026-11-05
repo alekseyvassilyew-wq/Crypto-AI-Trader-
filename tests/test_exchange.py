@@ -358,3 +358,16 @@ def test_tickers_without_symbols_skip_zero_last_price_and_keep_valid_markets():
 
     assert [item["symbol"] for item in tickers] == ["ETHUSD"]
 
+
+def test_ticker_includes_utc_day_open_and_percent_change_when_available():
+    client = KrakenSpot()
+    client._pair_cache["XBTEUR"] = ("XXBTZEUR", {})
+    client._request = lambda *args, **kwargs: {
+        "XXBTZEUR": {
+            "b": ["105"], "a": ["106"], "c": ["110"],
+            "v": ["1", "2"], "o": "100",
+        }
+    }
+    ticker = client.tickers(["XBTEUR"])[0]
+    assert ticker["dayOpenUtc"] == 100.0
+    assert ticker["dayChangePct"] == pytest.approx(10.0)

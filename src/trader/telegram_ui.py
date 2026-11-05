@@ -736,6 +736,153 @@ def build_app(s, engine, exchange):
                 format_error(exc, "/scan", update.effective_user), parse_mode="HTML"
             )
 
+    async def market(update, context):
+        if not await authorized(update): return await deny(update)
+        await update.effective_message.reply_text("🌐 Анализ ширины рынка Kraken…")
+        try:
+            def build_market_report():
+                from .market_analysis import summarize_market_snapshot
+                rows = engine.scan()
+                summary = summarize_market_snapshot(
+                    list(engine.last_ticker_data.values()), rows
+                )
+                return summary, len(engine.market_pairs), engine.market_ticker_count
+
+            summary, pair_count, ticker_count = await context.application.bot_data["run_blocking"].run(build_market_report)
+            regime_labels = {
+                "BULLISH_BREADTH": "🟢 ПРЕОБЛАДАЕТ РОСТ",
+                "BEARISH_BREADTH": "🔴 ПРЕОБЛАДАЕТ СНИЖЕНИЕ",
+                "MIXED": "🟡 СМЕШАННЫЙ РЫНОК",
+                "INSUFFICIENT_DATA": "⚪ НЕДОСТАТОЧНО ДАННЫХ",
+            }
+            def pct(value):
+                return "н/д" if value is None else f"{float(value):+.2f}%"
+            lines = [
+                "🌐 ОБЗОР КРИПТОРЫНКА · KRAKEN",
+                "━━━━━━━━━━━━━━━━━━",
+                f"🕒 Сформирован: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
+                f"📚 Spot-пары: {pair_count:,}  •  Тикеры: {ticker_count:,}",
+                f"🪙 Уникальные активы с дневным изменением: {summary['asset_count']}",
+                "",
+                "🧭 ШИРИНА РЫНКА",
+                regime_labels[summary["market_regime"]],
+                f"🟢 Растут: {summary['up']}  •  🔴 Снижаются: {summary['down']}  •  ⚪ Без движения: {summary['flat']}",
+                f"Доля растущих: {pct(summary['breadth_pct'])}",
+                f"Среднее изменение: {pct(summary['mean_change_pct'])}  •  Медиана: {pct(summary['median_change_pct'])}",
+                "Изменение считается от открытия текущего UTC-дня Kraken, не за скользящие 24 часа.",
+                "",
+                "📈 ЛИДЕРЫ РОСТА",
+            ]
+            if summary["gainers"]:
+                lines.extend(
+                    f"🟢 {item['base']}: {pct(item['dayChangePct'])}  ·  {item['symbol']}"
+                    for item in summary["gainers"]
+                )
+            else:
+                lines.append("Нет данных об открытии UTC-дня.")
+            lines.append("")
+            lines.append("📉 ЛИДЕРЫ СНИЖЕНИЯ")
+            if summary["losers"]:
+                lines.extend(
+                    f"🔴 {item['base']}: {pct(item['dayChangePct'])}  ·  {item['symbol']}"
+                    for item in summary["losers"]
+                )
+            else:
+                lines.append("Нет данных.")
+            trends = summary["trend_counts"]
+            lines.extend([
+                "",
+                "🕯 ТЕХНИЧЕСКАЯ КАРТИНА · ЧАСОВЫЕ СВЕЧИ",
+                f"Проанализировано: {summary['analyzed_count']} рынков",
+                f"🟢 Восходящий тренд: {trends['BULLISH']}  •  🔴 Нисходящий: {trends['BEARISH']}  •  ⚪ Нейтральный: {trends['NEUTRAL']}",
+            ])
+            if summary["regime_counts"]:
+                lines.append("Режимы: " + " · ".join(
+                    f"{name}: {count}" for name, count in sorted(summary["regime_counts"].items())
+                ))
+            lines.extend([
+                "",
+                "ℹ️ Для подробного разбора монеты: /analyze XBTEUR",
+                "Дневная ширина рынка — обзор, а не торговый сигнал. Свечи анализируются в пределах API-бюджета.",
+            ])
+            return "\n".join(lines)
+
+            message = await context.application.bot_data["run_blocking"].run(build_market_report)
+            await send_report(update, context, message)
+        except Exception as exc:
+            log.error("Broad market analysis failed: %s", type(exc).__name__)
+            await update.effective_message.reply_text(format_error(exc, "/market", update.effective_user), parse_mode="HTML")
+
+    async def analyze_market(update, context):
+        import math
+        if not await authorized(update): return await deny(update)
+        if len(context.args) != 1:
+            return await update.effective_message.reply_text("Использование: /analyze XBTEUR — подробный анализ 1h, 4h и 1d.")
+        symbol = context.args[0].strip().upper().replace("/", "")
+        await update.effective_message.reply_text(f"🧠 Анализ {symbol}: загружаю закрытые свечи 1h / 4h / 1d…")
+        try:
+            def build_analysis():
+                from .indicators import analyze as analyze_candles
+                ticker_rows = exchange.tickers([symbol])
+                ticker = ticker_rows[0]
+                frames = {
+                    "1h": analyze_candles(exchange.candles(symbol, interval="60", limit=120)),
+                    "4h": analyze_candles(exchange.candles(symbol, interval="240", limit=100)),
+                    "1d": analyze_candles(exchange.candles(symbol, interval="1440", limit=100)),
+                }
+                return ticker, frames
+
+            ticker, frames = await context.application.bot_data["run_blocking"].run(build_analysis)
+            labels = {"BULLISH": "🟢 ВОСХОДЯЩИЙ", "BEARISH": "🔴 НИСХОДЯЩИЙ", "NEUTRAL": "⚪ НЕЙТРАЛЬНЫЙ", "UNKNOWN": "⚪ НЕТ ДАННЫХ"}
+            hourly = frames["1h"]
+            def fmt(value, digits=2, suffix=""):
+                try:
+                    number = float(value)
+                    return f"{number:,.{digits}f}{suffix}" if math.isfinite(number) else "н/д"
+                except (TypeError, ValueError, OverflowError):
+                    return "н/д"
+            change = ticker.get("dayChangePct")
+            lines = [
+                f"🧠 ТЕХНИЧЕСКИЙ АНАЛИЗ · {symbol}",
+                "━━━━━━━━━━━━━━━━━━",
+                f"💰 Цена: {fmt(ticker.get('lastPrice'), 8)}",
+                f"📊 Изменение с начала UTC-дня: {fmt(change, 2, '%')}",
+                f"💧 Оборот 24ч: {fmt(ticker.get('turnover24h'), 2)} (в валюте котировки)",
+                "",
+                "🕯 АНАЛИЗ ПО ТАЙМФРЕЙМАМ",
+            ]
+            for timeframe in ("1h", "4h", "1d"):
+                item = frames[timeframe]
+                lines.append(f"{timeframe}: {labels.get(item.get('trend'), '⚪ НЕТ ДАННЫХ')}  ·  {item.get('market_regime', 'UNKNOWN')}")
+                lines.append(
+                    f"   RSI {fmt(item.get('rsi'), 1)}  ·  ATR {fmt(item.get('atr_percent'), 2, '%')}  ·  "
+                    f"EMA gap {fmt(item.get('ema_gap_percent'), 2, '%')}"
+                )
+            lines.extend([
+                "",
+                "📐 ДЕТАЛИ · 1H",
+                f"Импульс 24 свечи: {fmt(hourly.get('momentum_24_percent'), 2, '%')}",
+                f"Объём к среднему: {fmt(hourly.get('volume_ratio'), 2, 'x')}",
+                f"Bollinger %B: {fmt(hourly.get('bollinger_percent_b'), 2)}  ·  ширина: {fmt(hourly.get('bollinger_width_percent'), 2, '%')}",
+                f"Поддержка (20 свечей): {fmt(hourly.get('support_20'), 8)}",
+                f"Сопротивление (20 свечей): {fmt(hourly.get('resistance_20'), 8)}",
+                "",
+                "🧩 ИНТЕРПРЕТАЦИЯ",
+            ])
+            if hourly.get("market_regime") == "UNKNOWN":
+                lines.append("Недостаточно качественных закрытых свечей для надёжной оценки.")
+            else:
+                lines.extend(str(reason) for reason in hourly.get("reasons", [])[:5])
+            lines.extend([
+                "",
+                "🛡 Сверка таймфреймов — аналитическая информация, не гарантия движения цены.",
+                "Результат /analyze не запускает сделки и не меняет PAPER-портфель.",
+            ])
+            await send_report(update, context, "\n".join(lines))
+        except Exception as exc:
+            log.error("Single-market analysis failed for %s: %s", symbol, type(exc).__name__)
+            await update.effective_message.reply_text(format_error(exc, f"/analyze {symbol}", update.effective_user), parse_mode="HTML")
+
     async def backtest(update, context):
         if not await authorized(update): return await deny(update)
         if not context.args or len(context.args) != 1:
@@ -1327,7 +1474,7 @@ def build_app(s, engine, exchange):
     async def help_cmd(update, context):
         if not await authorized(update): return await deny(update)
         await update.effective_message.reply_text(
-            "/start — меню\n/status — состояние и P/L\n/dbhealth — целостность SQLite и свежесть резервной копии\n/monitorstatus — диагностика Render/GitHub/Telegram\n/scan — сканирование\n"
+            "/start — меню\n/status — состояние и P/L\n/dbhealth — целостность SQLite и свежесть резервной копии\n/monitorstatus — диагностика Render/GitHub/Telegram\n/scan — сканирование\n/market — обзор всего рынка и ширины роста/падения\n/analyze XBTEUR — подробный анализ 1h/4h/1d\n"
             "/account — виртуальные остатки PAPER\n/realbalance — реальные остатки Kraken (только чтение)\n/walletcheck — пары, минимумы и комиссии Kraken (только чтение)\n"
             "/portfolio — PAPER-позиции\n/paperreport [часы] — статистика автономного PAPER-теста\n"
             "/learn XBTEUR — обучение/проверка ML-кандидата без торговли\n/learning — текущие кандидаты и shadow-тест\n"
@@ -1627,7 +1774,7 @@ def build_app(s, engine, exchange):
     app.bot_data["monitor_db"] = monitor_db
     app.bot_data["monitor_runner"] = monitor_runner
     app.bot_data["research_runner"] = research_runner
-    for name, fn in [("start", start), ("status", status), ("dbhealth", dbhealth), ("monitorstatus", monitorstatus), ("scan", scan), ("account", account), ("realbalance", realbalance), ("walletcheck", walletcheck), ("paperreport", paperreport), ("learn", learn), ("learning", learning), ("research", research_history_cmd), ("backtest", backtest), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
+    for name, fn in [("start", start), ("status", status), ("dbhealth", dbhealth), ("monitorstatus", monitorstatus), ("scan", scan), ("market", market), ("analyze", analyze_market), ("account", account), ("realbalance", realbalance), ("walletcheck", walletcheck), ("paperreport", paperreport), ("learn", learn), ("learning", learning), ("research", research_history_cmd), ("backtest", backtest), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
                      ("run", run), ("pause", pause), ("stop", stop), ("help", help_cmd)]:
         app.add_handler(CommandHandler(name, fn))
     app.add_handler(CommandHandler("test_topics", testtopics))  # Backwards-compatible alias shown in /help.

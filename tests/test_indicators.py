@@ -50,3 +50,12 @@ def test_multi_timeframe_confirmation_fails_closed_on_incomplete_daily_history()
     result = confirm_multi_timeframe(base, rising_candles(), rising_candles(30))
     assert result["signal"] == "HOLD"
     assert result["mtf_confirmed"] is False
+
+def test_analysis_exposes_bollinger_momentum_and_recent_levels_without_changing_signal():
+    result = analyze(rising_candles())
+    assert result["signal"] in {"BUY", "HOLD"}
+    assert result["bollinger_upper"] > result["bollinger_mid"] > result["bollinger_lower"]
+    assert 0.0 <= result["bollinger_percent_b"] <= 2.0
+    assert result["support_20"] > 0
+    assert result["resistance_20"] >= result["support_20"]
+    assert result["momentum_24_percent"] > 0
