@@ -266,3 +266,31 @@ def test_latest_paper_snapshot_returns_newest_timestamp_and_equity():
     assert snapshot["open_positions"] == 2
     assert snapshot["cash"] == {"EUR": 9.0}
     db.close()
+
+
+def test_telegram_report_pages_survive_database_reopen(tmp_path):
+    from src.trader.db import connect, save_telegram_report_pages, get_telegram_report_pages
+
+    path = tmp_path / "report-pages.sqlite3"
+    db = connect(path)
+    pages = ["Первая страница", "Вторая страница"]
+    save_telegram_report_pages(db, "-100:123", pages)
+    db.close()
+
+    reopened = connect(path)
+    assert get_telegram_report_pages(reopened, "-100:123") == pages
+    assert get_telegram_report_pages(reopened, "-100:999") is None
+    reopened.close()
+
+
+def test_telegram_report_page_retention_is_bounded():
+    from src.trader.db import connect, save_telegram_report_pages, get_telegram_report_pages
+
+    db = connect(":memory:")
+    for index in range(4):
+        save_telegram_report_pages(db, f"chat:{index}", [f"page {index}"], keep=2)
+    assert get_telegram_report_pages(db, "chat:3") == ["page 3"]
+    assert get_telegram_report_pages(db, "chat:2") == ["page 2"]
+    assert get_telegram_report_pages(db, "chat:0") is None
+    assert get_telegram_report_pages(db, "chat:1") is None
+    db.close()

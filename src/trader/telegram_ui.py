@@ -5,7 +5,7 @@ from pathlib import Path
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from telegram.request import HTTPXRequest
-from .db import backup_database
+from .db import backup_database, save_telegram_report_pages, get_telegram_report_pages
 
 log = logging.getLogger(__name__)
 
@@ -494,10 +494,7 @@ def build_app(s, engine, exchange):
         message = await context.bot.send_message(**kwargs)
         if len(pages) > 1:
             key = f"{message.chat_id}:{message.message_id}"
-            page_store = context.application.bot_data.setdefault("report_pages", {})
-            page_store[key] = {"pages": pages, "parse_mode": None}
-            while len(page_store) > 100:
-                page_store.pop(next(iter(page_store)))
+            save_telegram_report_pages(engine.db, key, pages)
             await message.edit_reply_markup(reply_markup=_report_page_keyboard(message.message_id, 0, len(pages)))
 
     async def send_report(update, context, report_text, parse_mode=None):
@@ -507,12 +504,8 @@ def build_app(s, engine, exchange):
         pages = _paginate_report_text(plain_text)
         message = await update.effective_message.reply_text(pages[0])
         if len(pages) > 1:
-            page_store = context.application.bot_data.setdefault("report_pages", {})
             key = f"{message.chat_id}:{message.message_id}"
-            page_store[key] = {"pages": pages, "parse_mode": None}
-            # Bound in-memory state so long-running bots do not accumulate old reports forever.
-            while len(page_store) > 100:
-                page_store.pop(next(iter(page_store)))
+            save_telegram_report_pages(engine.db, key, pages)
             await message.edit_reply_markup(reply_markup=_report_page_keyboard(message.message_id, 0, len(pages)))
         return message
 
@@ -1334,13 +1327,12 @@ def build_app(s, engine, exchange):
                 _, message_id_text, page_text = q.data.split(":", 2)
                 message_id, page_index = int(message_id_text), int(page_text)
                 key = f"{q.message.chat_id}:{message_id}"
-                saved = context.application.bot_data.get("report_pages", {}).get(key)
-                if not saved or not 0 <= page_index < len(saved["pages"]):
+                pages = get_telegram_report_pages(engine.db, key)
+                if not pages or not 0 <= page_index < len(pages):
                     await q.answer("Страницы отчёта больше недоступны", show_alert=True)
                     return
-                pages = saved["pages"]
                 await q.answer(f"Страница {page_index + 1}/{len(pages)}")
-                await q.edit_message_text(pages[page_index], parse_mode=saved.get("parse_mode"), reply_markup=_report_page_keyboard(message_id, page_index, len(pages)))
+                await q.edit_message_text(pages[page_index], parse_mode=None, reply_markup=_report_page_keyboard(message_id, page_index, len(pages)))
             except (ValueError, IndexError):
                 await q.answer("Не удалось открыть страницу", show_alert=True)
             return
