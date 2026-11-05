@@ -278,6 +278,88 @@ def _format_research_history(rows, max_chars=3800):
         pages.append(heading + "\nИстория пока пуста.")
     return pages
 
+def _format_paper_report(metrics, hours):
+    """Format PAPER forward-test metrics as a readable Telegram HTML report."""
+    def number(value, digits=2, signed=False):
+        try:
+            numeric = float(value)
+            return f"{numeric:+,.{digits}f}" if signed else f"{numeric:,.{digits}f}"
+        except (TypeError, ValueError, OverflowError):
+            return "н/д"
+
+    def count(value):
+        try:
+            return f"{int(value):,}"
+        except (TypeError, ValueError, OverflowError):
+            return "0"
+
+    change = float(metrics.get("change_eur") or 0)
+    change_pct = float(metrics.get("change_pct") or 0)
+    result_icon = "🟢" if change > 0 else "🔴" if change < 0 else "⚪"
+    result_label = "РОСТ" if change > 0 else "СНИЖЕНИЕ" if change < 0 else "БЕЗ ИЗМЕНЕНИЙ"
+    pf_value = metrics.get("profit_factor")
+    try:
+        pf_number = float(pf_value)
+        pf_text = "∞" if pf_number == float("inf") else f"{pf_number:.2f}"
+    except (TypeError, ValueError, OverflowError):
+        pf_text = "н/д" if pf_value in (None, "") else html.escape(str(pf_value))
+
+    by_symbol = metrics.get("by_symbol") or []
+    by_symbol_text = "\\n".join(
+        f"  • <code>{html.escape(str(item.get('symbol') or '—'))}</code>: "
+        f"<b>{number(item.get('realized_pnl_eur'), 4, signed=True)} EUR</b>"
+        for item in by_symbol[:5]
+    ) or "  <i>Пока нет закрытых сделок</i>"
+
+    span_seconds = int(metrics.get("measurement_span_seconds") or 0)
+    span_hours, remainder_seconds = divmod(span_seconds, 3600)
+    span_text = f"{span_hours} ч {remainder_seconds // 60} мин" if span_hours else f"{remainder_seconds // 60} мин"
+    coverage_pct = min(100.0, span_seconds / (max(1, int(hours)) * 3600) * 100.0)
+
+    lines = [
+        "📈 <b>PAPER FORWARD-TEST</b>",
+        "━━━━━━━━━━━━━━━━━━",
+        f"🧪 <b>ПЕРИОД ТЕСТА — {int(hours)} ЧАСОВ</b>",
+        f"Измерений: <b>{count(metrics.get('samples'))}</b>",
+        f"Охват измерениями: <b>{span_text}</b> ({coverage_pct:.1f}% окна)",
+        "",
+        f"{result_icon} <b>РЕЗУЛЬТАТ: {result_label}</b>",
+        f"Капитал: <b>{number(metrics.get('start_equity_eur'), 4)} → {number(metrics.get('end_equity_eur'), 4)} EUR</b>",
+        f"Изменение: <b>{number(change, 4, signed=True)} EUR ({number(change_pct, 2, signed=True)}%)</b>",
+        f"Макс. наблюдаемая просадка: <b>{number(metrics.get('max_observed_drawdown_pct'))}%</b>",
+        "",
+        "💼 <b>АКТИВНОСТЬ ПОРТФЕЛЯ</b>",
+        f"Среднее число позиций: <b>{number(metrics.get('avg_open_positions'))}</b>",
+        f"Сигналов BUY: <b>{count(metrics.get('buy_signals'))}</b>",
+        f"Рынков в анализе за цикл: <b>{number(metrics.get('avg_analyzed_markets'), 1)}</b>",
+        "",
+        "📊 <b>ЗАКРЫТЫЕ СДЕЛКИ</b>",
+        f"Всего: <b>{count(metrics.get('closed_trades'))}</b>",
+        f"Прибыльных: <b>{count(metrics.get('winning_trades'))}</b>  •  Убыточных: <b>{count(metrics.get('losing_trades'))}</b>",
+        f"Win rate: <b>{number(metrics.get('win_rate_pct'), 1)}%</b>  •  Profit factor: <b>{pf_text}</b>",
+        f"Реализованный P/L: <b>{number(metrics.get('realized_pnl_eur'), 4, signed=True)} EUR</b>",
+        "",
+        "💸 <b>КОМИССИИ И ОЦЕНКА</b>",
+        f"Комиссии: <b>{number(metrics.get('total_fees_eur'), 4)} EUR</b>",
+        f"Исполнения без EUR-оценки: <b>{count(metrics.get('fills_without_eur_fee_valuation'))}</b>",
+        f"Закрытые сделки без EUR-оценки: <b>{count(metrics.get('closed_trades_without_eur_valuation'))}</b>",
+        "",
+        "🪙 <b>РЕЗУЛЬТАТ ПО МОНЕТАМ</b>",
+        by_symbol_text,
+        "",
+        f"🕒 <b>Время:</b> <code>{html.escape(str(metrics.get('first_ts') or 'н/д'))} — {html.escape(str(metrics.get('last_ts') or 'н/д'))} UTC</code>",
+    ]
+    if int(metrics.get("closed_trades") or 0) == 0 and int(metrics.get("buy_signals") or 0) > 0:
+        lines.extend(["", "⚠️ <b>НЕТ ЗАКРЫТЫХ СДЕЛОК</b>", "BUY-сигналы были, но за выбранное окно сделки не закрылись."])
+    if int(metrics.get("closed_trades_without_eur_valuation") or 0) or int(metrics.get("fills_without_eur_fee_valuation") or 0):
+        lines.extend(["", "⚠️ <b>ЕСТЬ ОПЕРАЦИИ БЕЗ EUR-ОЦЕНКИ</b>", "Итоговые показатели могут быть неполными."])
+    lines.extend([
+        "━━━━━━━━━━━━━━━━━━",
+        "<i>Изменение стоимости PAPER-портфеля не является доказательством будущей доходности. Охват измерениями не гарантирует непрерывную работу.</i>",
+    ])
+    return "\\n".join(lines)
+
+
 def build_app(s, engine, exchange):
     def fresh_position_marks():
         """Return recent executable bid-side marks for every open PAPER position."""
@@ -1033,23 +1115,8 @@ def build_app(s, engine, exchange):
             )
             coverage_pct = min(100.0, span_seconds / (hours * 3600) * 100.0)
             await update.effective_message.reply_text(
-                f"📈 PAPER FORWARD-TEST — окно {hours} ч.\n"
-                f"Измерений: {metrics['samples']}\n"
-                f"Размах измерений: {span_text} ({coverage_pct:.1f}% окна; не гарантия непрерывной работы)\n"
-                f"Капитал: {metrics['start_equity_eur']:.4f} → {metrics['end_equity_eur']:.4f} EUR\n"
-                f"Изменение: {metrics['change_eur']:+.4f} EUR ({metrics['change_pct']:+.2f}%)\n"
-                f"Макс. наблюдаемая просадка: {metrics['max_observed_drawdown_pct']:.2f}%\n"
-                f"Среднее число позиций: {metrics['avg_open_positions']:.2f}\n"
-                f"Сигналов BUY: {metrics['buy_signals']}\n"
-                f"Среднее число анализируемых рынков за цикл: {metrics['avg_analyzed_markets']:.1f}\n"
-                f"Закрытых сделок: {metrics['closed_trades']} | без EUR-оценки: {metrics['closed_trades_without_eur_valuation']}\n"
-                f"Прибыльных: {metrics['winning_trades']} | убыточных: {metrics['losing_trades']}\n"
-                f"Win rate: {metrics['win_rate_pct']:.1f}% | Profit factor: {metrics['profit_factor']}\n"
-                f"Реализованный P/L: {metrics['realized_pnl_eur']:+.4f} EUR\n"
-                f"Комиссии по исполнениям: {metrics['total_fees_eur']:.4f} EUR | без EUR-оценки: {metrics['fills_without_eur_fee_valuation']}\n"
-                f"По монетам: {by_symbol_text}\n"
-                f"Период: {metrics['first_ts']} — {metrics['last_ts']} UTC\n"
-                "━━━━━━━━━━━━━━━━━━\nЭто изменение стоимости PAPER-портфеля, а не доказательство будущей доходности."
+                _format_paper_report(metrics, hours),
+                parse_mode="HTML",
             )
         except Exception as exc:
             await update.effective_message.reply_text(f"Ошибка отчёта: {safe_error_message(exc)}")
