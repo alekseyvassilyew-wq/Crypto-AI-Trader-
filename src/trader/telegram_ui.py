@@ -135,8 +135,27 @@ def build_app(s, engine, exchange):
                 if engine.last_scan_at else "нет свежего сканирования"
             )
             if snapshot:
+                snapshot_raw_time = str(snapshot["ts"]).replace("Z", "+00:00")
+                try:
+                    snapshot_dt = datetime.fromisoformat(snapshot_raw_time)
+                    if snapshot_dt.tzinfo is None:
+                        snapshot_dt = snapshot_dt.replace(tzinfo=timezone.utc)
+                    snapshot_age = max(0, int((datetime.now(timezone.utc) - snapshot_dt).total_seconds()))
+                    if snapshot_age < 60:
+                        age_text = f"{snapshot_age} сек. назад"
+                    elif snapshot_age < 3600:
+                        age_text = f"{snapshot_age // 60} мин. назад"
+                    else:
+                        age_text = f"{snapshot_age // 3600} ч. {(snapshot_age % 3600) // 60} мин. назад"
+                    snapshot_freshness = "🟢 актуальный" if snapshot_age <= max(120, 2 * int(engine.scan_interval_seconds)) else "🟡 устарел"
+                except (TypeError, ValueError, OverflowError):
+                    age_text = "возраст неизвестен"
+                    snapshot_freshness = "🟡 проверьте время"
                 snapshot_time = str(snapshot["ts"]).replace("T", " ")[:19] + " UTC"
-                snapshot_text = f"{float(snapshot['equity_eur']):.4f} EUR в {snapshot_time}"
+                snapshot_text = (
+                    f"{float(snapshot['equity_eur']):.4f} EUR в {snapshot_time} "
+                    f"({age_text}; {snapshot_freshness})"
+                )
             else:
                 snapshot_text = "ещё нет сохранённых измерений"
             state_label = "🟢 АКТИВЕН" if state == "RUNNING" else "🟡 ПАУЗА"
