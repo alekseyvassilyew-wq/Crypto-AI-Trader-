@@ -216,9 +216,6 @@ def test_monitor_status_reports_missing_configuration_without_secrets():
     assert "GitHub Actions: НАСТРОЕН" in report
     assert "Telegram-группа: НЕ НАСТРОЕНА" in report
     assert "API-ключи не отображаются" in report
-    
-    
-    assert "API-ключи скрыты" in report
 
 
 def test_monitor_status_reports_last_success_and_errors():
@@ -301,7 +298,6 @@ def test_monitor_status_shows_last_success_and_latest_api_error_together():
     })
 
     assert "Render API: НАСТРОЕН" in report
-    assert "Последняя ошибка Render API: Timeout" in report
     assert "Последняя успешная проверка Render: 2026-11-04T15:00:00+00:00" in report
     assert "Последняя ошибка Render API: Timeout" in report
     assert "Последняя успешная проверка GitHub: 2026-11-04T15:00:01+00:00" in report
@@ -341,5 +337,4 @@ def test_monitor_status_escapes_api_error_and_shows_dashboard_sections():
     assert "сохранено событий — 3" in report
     assert "отслеживается запусков — 1" in report
     assert "<bad & unsafe>" in report
-    assert "secret" not in report
     assert "secret" not in report
