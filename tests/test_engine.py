@@ -1029,6 +1029,7 @@ def test_shadow_research_uses_configured_paper_slippage(tmp_path, monkeypatch):
 
     engine, db = make_engine(tmp_path)
     engine.s.paper_slippage_bps = 17.0
+    engine.s.fee_rate = 0.0026
     set_state(db, "ml_candidate_XBTEUR", {
         "model": {"version": 1},
         "model_version": "test",
