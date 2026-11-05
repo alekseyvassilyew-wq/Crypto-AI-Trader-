@@ -809,6 +809,7 @@ def build_app(s, engine, exchange):
             gate = "ПРОШЛА исследовательский фильтр" if candidate["research_pass"] else "НЕ прошла исследовательский фильтр"
             await update.effective_message.reply_text(
                 f"🧠 МОДЕЛЬ {symbol} — {gate}\n"
+                "━━━━━━━━━━━━━━━━━━\n"
                 f"Статус: SHADOW ONLY (не торгует)\n"
                 f"Обучающих/тестовых выборок: {candidate['samples']}\n"
                 f"Walk-forward фолдов: {len(candidate['walk_forward'])}/3\n"
@@ -843,7 +844,7 @@ def build_app(s, engine, exchange):
                    if candidate.get("probability_diagnostics", {}).get("walk_forward_oos", {}).get("min") is not None
                    else "Нет вневыборочных прогнозов.\n")
                 + f"Исторических свечей накоплено: {candidate.get('history_candles', candidate['samples'])}\n"
-                "Модель остаётся SHADOW ONLY: автоматического внедрения в торговлю нет."
+                "Модель остаётся SHADOW ONLY: автоматического внедрения в торговлю нет.\n"
             )
         except Exception as exc:
             log.error("ML research failed for %s: %s", symbol, type(exc).__name__)
@@ -984,7 +985,7 @@ def build_app(s, engine, exchange):
         if not await authorized(update): return await deny(update)
         allowed = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "24h": 86400}
         if not context.args or context.args[0] not in allowed:
-            return await update.effective_message.reply_text("Использование: /interval 1m|5m|15m|30m|1h|4h|24h\nСканер Render проверяет рынок по заданному интервалу.")
+            return await update.effective_message.reply_text("⏱ ИНТЕРВАЛ СКАНИРОВАНИЯ\n━━━━━━━━━━━━━━━━━━\nИспользование: /interval 1m|5m|15m|30m|1h|4h|24h\nСканер Kraken проверяет рынок по заданному интервалу.\n━━━━━━━━━━━━━━━━━━")
         await context.application.bot_data["run_blocking"].run(
             lambda: setattr(engine, "scan_interval_seconds", allowed[context.args[0]])
         )
