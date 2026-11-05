@@ -494,18 +494,25 @@ def build_app(s, engine, exchange):
         message = await context.bot.send_message(**kwargs)
         if len(pages) > 1:
             key = f"{message.chat_id}:{message.message_id}"
-            context.application.bot_data.setdefault("report_pages", {})[key] = {"pages": pages, "parse_mode": None}
+            page_store = context.application.bot_data.setdefault("report_pages", {})
+            page_store[key] = {"pages": pages, "parse_mode": None}
+            while len(page_store) > 100:
+                page_store.pop(next(iter(page_store)))
             await message.edit_reply_markup(reply_markup=_report_page_keyboard(message.message_id, 0, len(pages)))
 
     async def send_report(update, context, report_text, parse_mode=None):
         """Send a report in one message, switching pages by editing that message."""
-        pages = _paginate_report_text(report_text)
-        message = await update.effective_message.reply_text(pages[0], parse_mode=parse_mode)
+        # Split only plain text: HTML tags must never be cut across page boundaries.
+        plain_text = _telegram_plain(report_text) if parse_mode else str(report_text or "")
+        pages = _paginate_report_text(plain_text)
+        message = await update.effective_message.reply_text(pages[0])
         if len(pages) > 1:
+            page_store = context.application.bot_data.setdefault("report_pages", {})
             key = f"{message.chat_id}:{message.message_id}"
-            context.application.bot_data.setdefault("report_pages", {})[key] = {
-                "pages": pages, "parse_mode": parse_mode,
-            }
+            page_store[key] = {"pages": pages, "parse_mode": None}
+            # Bound in-memory state so long-running bots do not accumulate old reports forever.
+            while len(page_store) > 100:
+                page_store.pop(next(iter(page_store)))
             await message.edit_reply_markup(reply_markup=_report_page_keyboard(message.message_id, 0, len(pages)))
         return message
 
