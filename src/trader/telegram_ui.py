@@ -1261,13 +1261,16 @@ def build_app(s, engine, exchange):
                     for symbol, position in state["positions"].items()
                 ]
                 report = (
-                    "🟢 PAPER — автоматический отчёт\n"
-                    f"Последнее успешное сканирование: {scan_time}\n"
-                    f"Виртуальные средства: {state['cash']}\n"
-                    f"Открытые позиции: {len(state['positions'])}/{s.max_positions}\n"
-                    f"P/L сегодня: {daily_text}\n"
-                    "Рыночные сигналы:\n" + ("\n".join(signal_lines) or "Нет данных") +
-                    "\nПозиции:\n" + ("\n".join(position_lines) or "Нет открытых позиций")
+                    "📊 CRYPTO AI TRADER — АВТОМАТИЧЕСКИЙ ОТЧЁТ\n"
+                    "━━━━━━━━━━━━━━━━━━\n"
+                    f"🕒 Последнее успешное сканирование: {scan_time}\n\n"
+                    "💼 ПОРТФЕЛЬ PAPER\n"
+                    f"  💰 Свободные средства: {state['cash']}\n"
+                    f"  📦 Открытые позиции: {len(state['positions'])}/{s.max_positions}\n"
+                    f"  📈 Результат за сегодня: {daily_text}\n\n"
+                    "🔎 РЫНОЧНЫЕ СИГНАЛЫ\n" + ("\n".join(signal_lines) or "Нет данных") +
+                    "\n\n📦 ОТКРЫТЫЕ ПОЗИЦИИ\n" + ("\n".join(position_lines) or "Нет открытых позиций") +
+                    "\n━━━━━━━━━━━━━━━━━━"
                 )
                 await send_topic(context, s.topic_general_id, report)
                 context.application.bot_data["last_general_report_at"] = now
