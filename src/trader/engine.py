@@ -1,11 +1,12 @@
 from datetime import datetime, timezone
 import logging
 import math
+import copy
 import time
 from .risk import Limits, check_order
 from .indicators import analyze, confirm_multi_timeframe
 from .learning import extract_features, predict_probability
-from .db import audit, save_trade, get_state, set_state, save_paper_snapshot, record_shadow_prediction, settle_shadow_predictions
+from .db import audit, save_trade, save_paper_fill, get_state, set_state, save_paper_snapshot, record_shadow_prediction, settle_shadow_predictions
 
 
 log = logging.getLogger(__name__)
@@ -713,6 +714,44 @@ class Engine:
         )
         return results
 
+
+
+    def _execute_paper_fill(self, side, symbol, amount, price, prices, *, currency="EUR", quote_to_eur_rate=None):
+        """Apply a simulated fill and atomically persist wallet plus trade history."""
+        cash_before = dict(self.paper.cash_by_currency)
+        positions_before = copy.deepcopy(self.paper.positions)
+        try:
+            if side == "Buy":
+                fill = self.paper.buy(
+                    symbol, amount, price, currency=currency,
+                    quote_to_eur_rate=quote_to_eur_rate, persist=False,
+                )
+                fee_eur, realized_pnl_eur = self._paper_trade_eur_values(
+                    currency, fill["fee"], prices,
+                )
+            elif side == "Sell":
+                position_before = copy.deepcopy(self.paper.positions.get(symbol, {}))
+                fill = self.paper.sell(symbol, amount, price, persist=False)
+                fee_eur, realized_pnl_eur = self._paper_trade_eur_values(
+                    position_before.get("quote_currency", currency), fill["fee"], prices,
+                    position=position_before, qty=fill["qty"], exit_price=fill["price"],
+                )
+            else:
+                raise ValueError(f"Unsupported PAPER fill side: {side}")
+            save_paper_fill(
+                self.db, cash_by_currency=self.paper.cash_by_currency,
+                positions=self.paper.positions, symbol=symbol, side=side,
+                qty=fill["qty"], quote=fill["quote"], fee=fill["fee"],
+                price=fill["price"], fee_eur=fee_eur,
+                realized_pnl_eur=realized_pnl_eur,
+            )
+        except Exception:
+            self.paper.cash_by_currency = cash_before
+            self.paper.positions = positions_before
+            self.paper._sync_cash()
+            raise
+        return fill, fee_eur, realized_pnl_eur
+
     def cycle(self):
         # Market monitoring continues while paused; only PAPER trading is gated.
         try:
@@ -817,15 +856,9 @@ class Engine:
                         audit(self.db, "PAPER_SELL_DEFERRED_NON_PROFIT", detail)
                         actions.append(f"{symbol} HOLD — sale deferred; net profit not positive")
                         continue
-                fill = self.paper.sell(symbol, pos["qty"], exit_price)
-                fee_eur, realized_pnl_eur = self._paper_trade_eur_values(
-                    position_before_exit.get("quote_currency", "EUR"), fill["fee"], prices,
-                    position=position_before_exit, qty=fill["qty"], exit_price=fill["price"],
-                )
-                save_trade(
-                    self.db, "PAPER", symbol, "Sell", fill["qty"], fill["quote"],
-                    fill["fee"], fill["price"], "FILLED",
-                    fee_eur=fee_eur, realized_pnl_eur=realized_pnl_eur,
+                fill, fee_eur, realized_pnl_eur = self._execute_paper_fill(
+                    "Sell", symbol, pos["qty"], exit_price, prices,
+                    currency=position_before_exit.get("quote_currency", "EUR"),
                 )
                 realized_pct = (exit_price / entry - 1) * 100
                 audit(
@@ -848,15 +881,9 @@ class Engine:
                 quote_row = result_by_symbol[str(symbol).upper()]
                 exit_price = self._paper_sell_price(float(quote_row["bid"]))
                 position_before_exit = dict(pos)
-                fill = self.paper.sell(symbol, pos["qty"], exit_price)
-                fee_eur, realized_pnl_eur = self._paper_trade_eur_values(
-                    position_before_exit.get("quote_currency", "EUR"), fill["fee"], prices,
-                    position=position_before_exit, qty=fill["qty"], exit_price=fill["price"],
-                )
-                save_trade(
-                    self.db, "PAPER", symbol, "Sell", fill["qty"], fill["quote"],
-                    fill["fee"], fill["price"], "FILLED",
-                    fee_eur=fee_eur, realized_pnl_eur=realized_pnl_eur,
+                fill, fee_eur, realized_pnl_eur = self._execute_paper_fill(
+                    "Sell", symbol, pos["qty"], exit_price, prices,
+                    currency=position_before_exit.get("quote_currency", "EUR"),
                 )
                 realized_pct = (exit_price / pos["avg_price"] - 1.0) * 100.0
                 audit(
@@ -976,14 +1003,9 @@ class Engine:
                 # A PAPER buy crosses the spread and therefore fills at ask.
                 entry_price = self._paper_buy_price(float(signal.get("ask") or signal["price"]))
                 quote_to_eur_rate = self._fresh_fx_rates(prices).get(str(quote_currency).upper())
-                fill = self.paper.buy(
-                    signal["symbol"], allocation, entry_price,
+                fill, fee_eur, _ = self._execute_paper_fill(
+                    "Buy", signal["symbol"], allocation, entry_price, prices,
                     currency=quote_currency, quote_to_eur_rate=quote_to_eur_rate,
-                )
-                fee_eur, _ = self._paper_trade_eur_values(quote_currency, fill["fee"], prices)
-                save_trade(
-                    self.db, "PAPER", signal["symbol"], "Buy", fill["qty"],
-                    fill["quote"], fill["fee"], fill["price"], "FILLED", fee_eur=fee_eur,
                 )
                 actions.append(f"{signal['symbol']} BUY {fill['qty']:.8f} @ {fill['price']}")
             except (ValueError, PermissionError) as exc:
