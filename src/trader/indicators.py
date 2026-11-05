@@ -89,10 +89,30 @@ def analyze(rows):
     else:
         regime = "RANGE"
     signal = "BUY" if score >= 4 and regime != "HIGH_VOLATILITY" else "HOLD"
+    # Descriptive context for human-readable analysis; these fields do not
+    # alter the existing entry score or PAPER execution rules.
+    recent_closes = c[-20:]
+    bollinger_mid = sum(recent_closes) / len(recent_closes)
+    bollinger_std = math.sqrt(sum((value - bollinger_mid) ** 2 for value in recent_closes) / len(recent_closes))
+    bollinger_upper = bollinger_mid + 2.0 * bollinger_std
+    bollinger_lower = bollinger_mid - 2.0 * bollinger_std
+    bollinger_width = ((bollinger_upper - bollinger_lower) / bollinger_mid * 100.0) if bollinger_mid else 0.0
+    bollinger_percent_b = (
+        (c[-1] - bollinger_lower) / (bollinger_upper - bollinger_lower)
+        if bollinger_upper > bollinger_lower else 0.5
+    )
+    support = min(low[-21:-1])
+    resistance = max(h[-21:-1])
+    momentum_24 = (c[-1] / c[-25] - 1.0) * 100.0 if len(c) >= 25 else None
     return {
         "signal": signal, "score": score, "price": c[-1], "rsi": rv,
         "volume_ratio": vr, "atr_percent": atrp, "trend": trend,
         "market_regime": regime, "ema_gap_percent": ema_gap,
+        "momentum_24_percent": momentum_24,
+        "bollinger_mid": bollinger_mid, "bollinger_upper": bollinger_upper,
+        "bollinger_lower": bollinger_lower, "bollinger_width_percent": bollinger_width,
+        "bollinger_percent_b": bollinger_percent_b,
+        "support_20": support, "resistance_20": resistance,
         "reasons": reasons,
     }
 
