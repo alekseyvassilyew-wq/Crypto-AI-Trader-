@@ -206,7 +206,7 @@ class KrakenSpot:
                 if ask < bid:
                     continue
                 turnover = _finite_number(base_volume_24h * last, "24h turnover", non_negative=True)
-                out.append({
+                normalized = {
                     "symbol": item["symbol"],
                     "base": item["base"],
                     "quote": item["quote"],
@@ -214,7 +214,17 @@ class KrakenSpot:
                     "ask1Price": ask,
                     "lastPrice": last,
                     "turnover24h": turnover,
-                })
+                }
+                # Kraken's "o" is the UTC-day opening price (not a rolling
+                # 24-hour open); label the derived move accordingly.
+                try:
+                    day_open = _finite_number(ticker.get("o"), "UTC day open", positive=True)
+                except (TypeError, ValueError, OverflowError):
+                    day_open = None
+                if day_open is not None:
+                    normalized["dayOpenUtc"] = day_open
+                    normalized["dayChangePct"] = (last / day_open - 1.0) * 100.0
+                out.append(normalized)
             return out
 
         out = []
@@ -234,13 +244,21 @@ class KrakenSpot:
             if ask < bid:
                 raise RuntimeError(f"Kraken returned crossed bid/ask prices for {symbol}")
             turnover = _finite_number(base_volume_24h * last, "24h turnover", non_negative=True)
-            out.append({
+            normalized = {
                 "symbol": symbol,
                 "bid1Price": bid,
                 "ask1Price": ask,
                 "lastPrice": last,
                 "turnover24h": turnover,
-            })
+            }
+            try:
+                day_open = _finite_number(ticker.get("o"), "UTC day open", positive=True)
+            except (TypeError, ValueError, OverflowError):
+                day_open = None
+            if day_open is not None:
+                normalized["dayOpenUtc"] = day_open
+                normalized["dayChangePct"] = (last / day_open - 1.0) * 100.0
+            out.append(normalized)
         return out
 
     def candles(self, symbol, interval="60", limit=100):
