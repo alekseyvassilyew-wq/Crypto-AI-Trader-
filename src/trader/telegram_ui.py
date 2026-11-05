@@ -878,7 +878,7 @@ def build_app(s, engine, exchange):
                 "🛡 Сверка таймфреймов — аналитическая информация, не гарантия движения цены.",
                 "Результат /analyze не запускает сделки и не меняет PAPER-портфель.",
             ])
-            await send_report(update, context, "\\n".join(lines))
+            await send_report(update, context, "\n".join(lines))
         except Exception as exc:
             log.error("Single-market analysis failed for %s: %s", symbol, type(exc).__name__)
             await update.effective_message.reply_text(format_error(exc, f"/analyze {symbol}", update.effective_user), parse_mode="HTML")
