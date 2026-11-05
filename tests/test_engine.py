@@ -1053,7 +1053,10 @@ def test_shadow_research_uses_configured_paper_slippage(tmp_path, monkeypatch):
         "symbol": "XBTEUR", "bid1Price": "99", "ask1Price": "101",
         "lastPrice": "100", "turnover24h": "1000000",
     }]
-    engine.scan_one("XBTEUR", tickers=tickers, fx_rates={"EUR": 1.0}, quote_currency="EUR")
+    assert get_state(db, "ml_candidate_XBTEUR")["model"]
+    result = engine.scan_one("XBTEUR", tickers=tickers, fx_rates={"EUR": 1.0}, quote_currency="EUR")
 
+    assert result["ohlc_analyzed"] is True
+    assert result.get("ml_shadow_probability") == pytest.approx(0.5)
     assert captured["slippage_bps"] == pytest.approx(17.0)
     db.close()
