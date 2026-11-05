@@ -807,8 +807,8 @@ def build_app(s, engine, exchange):
             ])
             return "\n".join(lines)
 
-            message = await context.application.bot_data["run_blocking"].run(build_market_report)
-            await send_report(update, context, message)
+        message = await context.application.bot_data["run_blocking"].run(build_market_report)
+        await send_report(update, context, message)
         except Exception as exc:
             log.error("Broad market analysis failed: %s", type(exc).__name__)
             await update.effective_message.reply_text(format_error(exc, "/market", update.effective_user), parse_mode="HTML")
