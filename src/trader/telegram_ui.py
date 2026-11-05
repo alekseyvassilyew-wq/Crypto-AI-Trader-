@@ -491,8 +491,6 @@ def build_app(s, engine, exchange):
         kwargs = {"chat_id": s.telegram_group_chat_id, "text": pages[0]}
         if topic_id:
             kwargs["message_thread_id"] = topic_id
-        if len(pages) > 1:
-            kwargs["reply_markup"] = _report_page_keyboard(0, 0, len(pages))
         message = await context.bot.send_message(**kwargs)
         if len(pages) > 1:
             key = f"{message.chat_id}:{message.message_id}"
