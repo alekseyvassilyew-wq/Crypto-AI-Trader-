@@ -9,6 +9,79 @@ from .db import backup_database
 
 log = logging.getLogger(__name__)
 
+def _format_automatic_research_report(trained):
+    """Render compact, readable HTML cards for the scheduled ML research report."""
+    def pct(value):
+        try:
+            return f"{float(value):+.2f}%"
+        except (TypeError, ValueError, OverflowError):
+            return "н/д"
+
+    def auc(value):
+        try:
+            return f"{float(value):.3f}" if value is not None else "н/д"
+        except (TypeError, ValueError, OverflowError):
+            return "н/д"
+
+    def profit_factor(value):
+        if value == "INF":
+            return "∞"
+        try:
+            number = float(value)
+            return "∞" if number == float("inf") else f"{number:.2f}"
+        except (TypeError, ValueError, OverflowError):
+            return "н/д"
+
+    cards = []
+    for item in trained:
+        passed = bool(item.get("pass"))
+        status_icon = "🟢" if passed else "🔴"
+        status_text = "PASSED" if passed else "NOT PASSED"
+        symbol = html.escape(str(item.get("symbol") or "UNKNOWN"))
+        benchmarks = item.get("benchmarks") or {}
+        oos_bench = (benchmarks.get("walk_forward_oos") or {})
+        holdout_bench = (benchmarks.get("independent_holdout") or {})
+        oos_metrics = item.get("oos_metrics") or {}
+        holdout_metrics = item.get("holdout_metrics") or {}
+        buy_hold_oos = (oos_bench.get("always_long") or {}).get("net_return_pct")
+        buy_hold_holdout = (holdout_bench.get("always_long") or {}).get("net_return_pct")
+        momentum_oos = (oos_bench.get("positive_24h_momentum") or {}).get("net_return_pct")
+        momentum_holdout = (holdout_bench.get("positive_24h_momentum") or {}).get("net_return_pct")
+
+        lines = [
+            f"{status_icon} <b>{symbol} — {status_text}</b>",
+            f"📚 Выборок: <b>{int(item.get('samples') or 0):,}</b>",
+            "📈 <b>WALK-FORWARD OOS</b>",
+            f"Доходность: <b>{pct(item.get('oos_return'))}</b>  •  "
+            f"Сделок: <b>{int(oos_metrics.get('trades') or 0)}</b>  •  "
+            f"PF: <b>{profit_factor(oos_metrics.get('profit_factor'))}</b>",
+            f"Просадка: <b>{pct(oos_metrics.get('max_drawdown_pct'))}</b>",
+            "🧪 <b>НЕЗАВИСИМЫЙ HOLDOUT</b>",
+            f"Доходность: <b>{pct(item.get('holdout_return'))}</b>  •  "
+            f"Сделок: <b>{int(holdout_metrics.get('trades') or 0)}</b>",
+            f"Просадка: <b>{pct(holdout_metrics.get('max_drawdown_pct'))}</b>",
+            "⚖️ <b>СРАВНЕНИЕ С BENCHMARK</b>",
+            f"BUY &amp; HOLD: OOS {pct(buy_hold_oos)}  •  Holdout {pct(buy_hold_holdout)}",
+            f"24h Momentum: OOS {pct(momentum_oos)}  •  Holdout {pct(momentum_holdout)}",
+            f"🎯 AUC: OOS <b>{auc(item.get('auc_oos'))}</b>  •  Holdout <b>{auc(item.get('auc_holdout'))}</b>",
+        ]
+        reasons = item.get("reasons") or []
+        if reasons:
+            lines.append("⛔ <b>Причины отказа</b>")
+            lines.extend(f"  • {html.escape(str(reason))}" for reason in reasons[:3])
+        else:
+            lines.append("✅ Все исследовательские критерии пройдены.")
+        lines.append("🛡 <i>Режим: SHADOW ONLY — модель не участвует в торговле.</i>")
+        cards.append("\n".join(lines))
+
+    return (
+        "🧠 <b>ПЛАНОВОЕ ИССЛЕДОВАНИЕ МОДЕЛЕЙ</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        + "\n\n━━━━━━━━━━━━━━━━━━\n\n".join(cards)
+        + "\n\n<i>Результаты независимой проверки; автоматического допуска модели к торговле нет.</i>"
+    )
+
+
 def build_app(s, engine, exchange):
     def fresh_position_marks():
         """Return recent executable bid-side marks for every open PAPER position."""
@@ -1045,6 +1118,8 @@ def build_app(s, engine, exchange):
                             "reasons": candidate.get("rejection_reasons", []),
                             "oos_return": candidate["out_of_sample"]["net_return_pct"],
                             "holdout_return": candidate["independent_holdout"]["net_return_pct"],
+                            "oos_metrics": candidate.get("out_of_sample", {}),
+                            "holdout_metrics": candidate.get("independent_holdout", {}),
                             "benchmarks": candidate.get("benchmark_metrics", {}),
                             "auc_oos": candidate.get("score_ranking", {}).get("walk_forward_oos_roc_auc"),
                             "auc_holdout": candidate.get("score_ranking", {}).get("independent_holdout_roc_auc"),
@@ -1063,17 +1138,10 @@ def build_app(s, engine, exchange):
 
             trained = await context.application.bot_data["research_runner"].run(research_top_markets)
             if trained:
-                summary = "\n".join(
-                    f"{item['symbol']}: {'research PASS' if item['pass'] else 'NOT PASSED'} "
-                    f"({item['samples']} samples; OOS {item['oos_return']:+.2f}%; "
-                    f"holdout {item['holdout_return']:+.2f}%; "
-                    f"BUY&HOLD OOS {item['benchmarks'].get('walk_forward_oos', {}).get('always_long', {}).get('net_return_pct', 0):+.2f}%; "
-                    f"BUY&HOLD holdout {item['benchmarks'].get('independent_holdout', {}).get('always_long', {}).get('net_return_pct', 0):+.2f}%; "
-                    f"AUC {item['auc_oos'] if item['auc_oos'] is not None else 'n/a'}; shadow only)"
-                    + (("\nПричина: " + "; ".join(item["reasons"][:2])) if item["reasons"] else "")
-                    for item in trained
+                report = _format_automatic_research_report(trained)
+                await send_topic(
+                    context, s.topic_general_id, report, parse_mode="HTML"
                 )
-                await send_topic(context, s.topic_general_id, "🧠 Плановое исследование моделей завершено.\n" + summary)
         except Exception as exc:
             log.error("Automatic periodic ML research failed: %s", type(exc).__name__)
             try:
