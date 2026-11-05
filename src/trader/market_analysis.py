@@ -118,6 +118,8 @@ def select_sharp_decliners(tickers, *, min_drop_pct=-5.0, min_turnover_eur=10000
         if spread_bps > max_spread_bps:
             continue
         item = dict(ticker)
+        item["dayChangePct"] = change
+        item["turnover24h"] = turnover
         item["spread_bps"] = spread_bps
         candidates.append(item)
     candidates.sort(key=lambda item: (item["dayChangePct"], -item["turnover24h"]))
