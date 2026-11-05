@@ -99,7 +99,10 @@ def build_app(s, engine, exchange):
         if not await authorized(update): return await deny(update)
         def read_status():
             state = "PAUSED" if engine.paused else "RUNNING"
-            balances = ", ".join(f"{currency}: {amount:.6f}" for currency, amount in sorted(engine.paper.cash_by_currency.items()))
+            balances = " · ".join(
+                f"{html.escape(str(currency))} <code>{amount:,.6f}</code>"
+                for currency, amount in sorted(engine.paper.cash_by_currency.items())
+            ) or "—"
             fresh_rates = engine._fresh_fx_rates(engine.last_prices)
             required = {
                 currency for currency, amount in engine.paper.cash_by_currency.items()
@@ -139,29 +142,41 @@ def build_app(s, engine, exchange):
                 snapshot_text = f"{float(snapshot['equity_eur']):.4f} EUR в {snapshot_time}"
             else:
                 snapshot_text = "ещё нет сохранённых измерений"
-            return (
-                f"Режим: PAPER\nСостояние: {state}\nСвободные средства: {balances}\n"
-                f"Текущая оценка портфеля после расходов на выход: {equity_text}\n"
-                f"Время рыночных котировок для оценки: {valuation_time}\n"
-                f"Последний сохранённый снимок PAPER: {snapshot_text}\n"
-                f"Позиции: {len(engine.paper.positions)}/{s.max_positions}\nP/L сегодня (UTC): {daily_text}\n"
-                f"Риск: SL {s.stop_loss_pct:.2f}% | TP {s.take_profit_pct:.2f}% | trailing {getattr(s, 'trailing_stop_pct', 1.5):.2f}%\n"
-                f"Рынок Kraken: {len(engine.market_pairs)} пар; котировок получено: {engine.market_ticker_count}\n"
-                + (
-                    "Последний цикл сканирования: "
-                    f"{engine.last_scan_metrics['duration_seconds']:.1f} с; "
-                    f"OHLC {engine.last_scan_metrics['ohlc_analyzed']}/"
-                    f"{engine.last_scan_metrics['ohlc_budget']}; подходящих рынков "
-                    f"{engine.last_scan_metrics['eligible']}; "
-                    f"{engine.last_scan_metrics.get('completed_at', 'время неизвестно')}.\n"
-                    if engine.last_scan_metrics else
-                    "Последний цикл сканирования: ещё не завершён.\n"
-                )
-                + f"Мониторинг всех котировок; анализ свечей: до {s.max_candle_pairs} пар за цикл.\n"
-                "* P/L показывается только при наличии свежих EUR-курсов для всех валют кошелька."
+            state_label = "🟢 <b>РАБОТАЕТ</b>" if not engine.paused else "🟡 <b>ПАУЗА</b>"
+            scan = engine.last_scan_metrics or {}
+            scan_text = (
+                f"{scan.get('duration_seconds', 0):.1f} сек. · "
+                f"OHLC {scan.get('ohlc_analyzed', 0)}/{scan.get('ohlc_budget', 0)} · "
+                f"кандидатов {scan.get('eligible', 0)}"
+                if scan else "ещё не завершён"
             )
-        message = await context.application.bot_data["run_blocking"].run(read_status)
-        await update.effective_message.reply_text(message)
+            valuation_clock = engine.last_scan_at.strftime("%H:%M:%S UTC") if engine.last_scan_at else "нет данных"
+            return (
+                "📊 <b>CRYPTO AI TRADER</b>\n"
+                f"{state_label}  ·  <b>PAPER</b>\n"
+                "━━━━━━━━━━━━━━━━━━\n"
+                "💼 <b>ПОРТФЕЛЬ</b>\n"
+                f"Капитал: <b>{equity_text}</b>\n"
+                f"Свободно: {balances}\n"
+                f"Позиции: <b>{len(engine.paper.positions)} / {s.max_positions}</b>\n"
+                f"Результат сегодня: <b>{daily_text}</b>\n"
+                f"Снимок: {snapshot_text}\n"
+                "━━━━━━━━━━━━━━━━━━\n"
+                "🛡 <b>РИСК-МЕНЕДЖМЕНТ</b>\n"
+                f"Риск на сделку: <b>{s.risk_per_trade_pct:.2f}%</b>\n"
+                f"Stop-Loss: {s.stop_loss_pct:.2f}%  ·  Take-Profit: {s.take_profit_pct:.2f}%\n"
+                f"Trailing Stop: {getattr(s, 'trailing_stop_pct', 1.5):.2f}%\n"
+                "━━━━━━━━━━━━━━━━━━\n"
+                "🌐 <b>РЫНОК KRAKEN</b>\n"
+                f"Пар: {len(engine.market_pairs):,}  ·  котировок: {engine.market_ticker_count:,}\n"
+                f"Сканирование: {scan_text}\n"
+                f"Анализ свечей: до {s.max_candle_pairs} пар за цикл\n"
+                f"Обновление котировок: {valuation_clock}\n"
+                "━━━━━━━━━━━━━━━━━━\n"
+                "ℹ️ <i>Оценка капитала и P/L требуют свежих рыночных котировок и EUR-курсов. "
+                "Все операции выполняются исключительно в PAPER.</i>"
+            )        message = await context.application.bot_data["run_blocking"].run(read_status)
+        await update.effective_message.reply_text(message, parse_mode="HTML")
 
     async def monitorstatus(update, context):
         if not await authorized(update): return await deny(update)
