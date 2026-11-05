@@ -769,6 +769,29 @@ class Engine:
             )
             if reason:
                 position_before_exit = dict(pos)
+                # Strategy exits may close a position only when the estimated
+                # realized EUR P/L is strictly positive after entry fees,
+                # exit fees, spread and configured PAPER slippage. Hard risk
+                # exits (STOP_LOSS and the daily-loss kill switch below) remain
+                # authoritative and may realize a loss.
+                if reason != "STOP_LOSS":
+                    estimated_exit_fee = (
+                        float(pos["qty"]) * exit_price * self.paper.fee_rate
+                    )
+                    _, estimated_net_pnl_eur = self._paper_trade_eur_values(
+                        position_before_exit.get("quote_currency", "EUR"),
+                        estimated_exit_fee, prices,
+                        position=position_before_exit, qty=pos["qty"],
+                        exit_price=exit_price,
+                    )
+                    if estimated_net_pnl_eur is None or estimated_net_pnl_eur <= 1e-9:
+                        detail = (
+                            f"{symbol} reason={reason} net_pnl_eur="
+                            f"{estimated_net_pnl_eur!r}; waiting for net-positive exit"
+                        )
+                        audit(self.db, "PAPER_SELL_DEFERRED_NON_PROFIT", detail)
+                        actions.append(f"{symbol} HOLD — sale deferred; net profit not positive")
+                        continue
                 fill = self.paper.sell(symbol, pos["qty"], exit_price)
                 fee_eur, realized_pnl_eur = self._paper_trade_eur_values(
                     position_before_exit.get("quote_currency", "EUR"), fill["fee"], prices,
@@ -783,7 +806,8 @@ class Engine:
                 audit(
                     self.db, reason,
                     f"{symbol} entry={entry:.10g} peak={peak:.10g} "
-                    f"exit={exit_price:.10g} change={realized_pct:.3f}%",
+                    f"exit={exit_price:.10g} change={realized_pct:.3f}% "
+                    f"net_pnl_eur={realized_pnl_eur!r}",
                 )
                 actions.append(f"{symbol} SELL {reason} {realized_pct:.2f}%")
         if missing_fx:
