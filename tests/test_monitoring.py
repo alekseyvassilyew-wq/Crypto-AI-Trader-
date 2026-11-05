@@ -237,11 +237,11 @@ def test_monitor_status_reports_last_success_and_errors():
         "last_events_count": 2,
         "last_alert_delivery_at": "2026-11-04T14:01:00+00:00",
     })
-    assert "сохранено событий — 2" in report
+    assert "Сохранено событий: <b>2</b>" in report
     assert "Timeout" in report
-    assert "отслеживается запусков — 1" in report
+    assert "Отслеживается запусков: <b>1</b>" in report
     assert "🆕 Новых событий: <b>2</b>" in report
-    assert "Последняя подтверждённая отправка Telegram" in report
+    assert "Последняя подтверждённая отправка:" in report
     assert "secret-value" not in report
 
 
