@@ -236,3 +236,12 @@ def test_telegram_report_page_storage_returns_none_for_unknown_message():
         assert asyncio.run(_load_report_pages(SerializedRunner(), db, "chat:missing")) is None
     finally:
         db.close()
+
+
+def test_telegram_transport_errors_are_classified_for_notification_suppression():
+    from telegram.error import NetworkError, TimedOut
+    from src.trader.telegram_ui import _is_telegram_transport_error
+
+    assert _is_telegram_transport_error(NetworkError("temporary network failure"))
+    assert _is_telegram_transport_error(TimedOut("request timed out"))
+    assert not _is_telegram_transport_error(ValueError("application bug"))
