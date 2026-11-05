@@ -5,7 +5,13 @@ from pathlib import Path
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from telegram.request import HTTPXRequest
+from telegram.error import NetworkError
 from .db import backup_database, save_telegram_report_pages, get_telegram_report_pages
+
+
+def _is_telegram_transport_error(error):
+    """Return True for transient Telegram HTTP/network failures."""
+    return isinstance(error, NetworkError)
 
 
 async def _save_report_pages(runner, db, report_key, pages):
@@ -1792,6 +1798,12 @@ def build_app(s, engine, exchange):
         # Do not log exception strings: HTTP request exceptions can contain
         # credential-bearing request URLs. Keep only the exception class.
         error_name = type(error).__name__ if error else "UnknownError"
+        if _is_telegram_transport_error(error):
+            # The Telegram API is currently unreachable. Sending an error
+            # report through the same API would only create a second failure
+            # and can recursively flood the error topic.
+            log.warning("Telegram transport error; error-topic notification suppressed: %s", error_name)
+            return
         log.error("Unhandled Telegram application error: %s", error_name)
         try:
             await send_topic(
