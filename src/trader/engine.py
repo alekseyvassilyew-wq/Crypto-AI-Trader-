@@ -964,10 +964,6 @@ class Engine:
                         if source_amount <= 1e-12:
                             continue
                         if fee_legs == 2:
-                            first_leg, second_leg = self.paper.convert_route([
-                                (source_currency, "EUR", source_amount, source_to_eur),
-                                ("EUR", quote_currency, None, quote_units_per_eur),
-                            ]) if False else (None, None)
                             # Compute the second leg from the first leg's actual
                             # post-fee proceeds, then commit both legs together.
                             first_amount = source_amount
