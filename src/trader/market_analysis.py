@@ -74,8 +74,14 @@ def summarize_market_snapshot(tickers, analysis_rows=()):
         "asset_count": len(assets), "up": up, "down": down, "flat": flat,
         "breadth_pct": breadth_pct, "mean_change_pct": mean_change,
         "median_change_pct": median_change, "market_regime": regime,
-        "gainers": ranked(lambda item: item["dayChangePct"], True),
-        "losers": ranked(lambda item: item["dayChangePct"], False),
+        "gainers": sorted(
+            (item for item in assets if item["dayChangePct"] > 0.05),
+            key=lambda item: item["dayChangePct"], reverse=True,
+        )[:5],
+        "losers": sorted(
+            (item for item in assets if item["dayChangePct"] < -0.05),
+            key=lambda item: item["dayChangePct"],
+        )[:5],
         "analyzed_count": len(rows), "trend_counts": trend_counts,
         "regime_counts": regime_counts,
     }
