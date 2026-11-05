@@ -28,6 +28,7 @@ class PaperBroker:
             raise ValueError("fee_rate must be below 0.1")
         initial = _finite_number(balance, "balance", minimum=0)
         saved = get_state(db, "paper_broker") if db is not None else None
+        self.restored_from_db = saved is not None
         self.positions = {}
         if saved is not None:
             if not isinstance(saved, dict) or "cash" not in saved:
