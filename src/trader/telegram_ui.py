@@ -176,6 +176,8 @@ def _format_automatic_research_report(trained):
 
 
 def _format_research_history(rows, max_chars=3800):
+    import math
+
     """Format research history as compact Telegram pages, one run per visual block."""
     def pct(value):
         try:
