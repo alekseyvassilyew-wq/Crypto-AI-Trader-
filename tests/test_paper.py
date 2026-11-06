@@ -358,19 +358,19 @@ def test_fx_conversion_basis_flows_into_asset_cost_and_partial_sale_proceeds(tmp
     assert broker.cash_cost_basis_eur["USD"] == pytest.approx(24.75)
 
     restored = PaperBroker(balance=100, fee_rate=0.01, db=db)
-    assert restored.cash_cost_basis_eur["USD"] == pytest.approx(24.975)
+    assert restored.cash_cost_basis_eur["USD"] == pytest.approx(24.75)
     assert restored.positions["ETHUSD"]["cost_basis_eur"] == pytest.approx(25.0)
 
     restored.sell("ETHUSD", 2.0, 12.0, quote_to_eur_rate=0.5)
     remaining = restored.positions["ETHUSD"]
     assert remaining["cost_basis_eur"] == pytest.approx(25.0 * (1 - 2.0 / 4.95))
-    assert remaining["entry_fees_eur"] == pytest.approx(0.025 * (1 - 2.0 / 4.95))
+    assert remaining["entry_fees_eur"] == pytest.approx(0.25 * (1 - 2.0 / 4.95))
     assert restored.cash_cost_basis_eur["USD"] == pytest.approx(
         24.75 + (24.0 - 0.24) * 0.5
     )
     restarted = PaperBroker(balance=100, fee_rate=0.01, db=db)
     assert restarted.cash_cost_basis_eur["USD"] == pytest.approx(
-        24.975 + (24.0 - 0.24) * 0.5
+        24.75 + (24.0 - 0.24) * 0.5
     )
     db.close()
 
