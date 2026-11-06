@@ -245,7 +245,14 @@ class Engine:
                 if not math.isfinite(budget) or budget <= 0 or not math.isfinite(worst_visible_price) or worst_visible_price <= 0:
                     raise ValueError("invalid PAPER order-book quote budget")
                 requested = min(requested, budget / worst_visible_price)
-            return estimate_book_vwap(levels, requested, side=side)
+            estimate = estimate_book_vwap(levels, requested, side=side)
+            audit(
+                self.db, "PAPER_BOOK_VWAP_ESTIMATE",
+                f"{symbol} side={side} qty={estimate['qty']:.12g} "
+                f"quote={estimate['quote']:.12g} vwap={estimate['vwap']:.12g} "
+                f"levels_used={estimate['levels_used']}",
+            )
+            return estimate
         except Exception as exc:
             raise ValueError(
                 f"order-book {side} unavailable for {symbol}: {type(exc).__name__}: {exc}"
