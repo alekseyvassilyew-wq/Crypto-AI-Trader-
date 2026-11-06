@@ -207,6 +207,7 @@ def test_order_book_reads_and_normalizes_public_depth(monkeypatch):
     assert book["bids"] == [[100.0, 4.0], [99.0, 5.0]]
 
 
+# Keep malformed ordering and a genuinely crossed best bid/ask as separate cases.
 def test_order_book_rejects_unsorted_book(monkeypatch):
     client = KrakenSpot()
     monkeypatch.setattr(client, "_pair_info", lambda symbol: ("PAIR", {}))
