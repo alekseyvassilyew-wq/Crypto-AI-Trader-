@@ -219,8 +219,9 @@ def audit(db, event, details=""):
 
 
 def save_paper_fx_conversion(db, *, from_currency, to_currency, spent, received,
-                             fee_amount=None, fee_currency=None, fee_eur=None, legs=1):
-    """Persist a PAPER FX conversion and its independently valued fee."""
+                             fee_amount=None, fee_currency=None, fee_eur=None, legs=1,
+                             cash_by_currency=None, cash_cost_basis_eur=None, positions=None):
+    """Persist a PAPER FX fee ledger row, optionally atomically with its wallet."""
     source = str(from_currency or "").strip().upper()
     target = str(to_currency or "").strip().upper()
     currency = None if fee_currency is None else str(fee_currency).strip().upper()
@@ -239,7 +240,27 @@ def save_paper_fx_conversion(db, *, from_currency, to_currency, spent, received,
             raise ValueError("PAPER FX EUR fee must be finite and non-negative")
     if isinstance(legs, bool) or not isinstance(legs, int) or legs < 1:
         raise ValueError("PAPER FX conversion legs must be a positive integer")
+
+    wallet_payload = None
+    wallet_args = (cash_by_currency, cash_cost_basis_eur, positions)
+    if any(value is not None for value in wallet_args):
+        if not all(isinstance(value, dict) for value in wallet_args):
+            raise ValueError("Atomic PAPER FX persistence requires complete wallet state")
+        wallet = {
+            "cash": float(cash_by_currency.get("EUR", 0.0)),
+            "cash_by_currency": cash_by_currency,
+            "cash_cost_basis_eur": cash_cost_basis_eur,
+            "positions": positions,
+        }
+        wallet_payload = json.dumps(wallet, separators=(",", ":"), allow_nan=False)
+
     with db:
+        if wallet_payload is not None:
+            db.execute(
+                "INSERT INTO app_state(key,value,updated_at) VALUES('paper_broker',?,CURRENT_TIMESTAMP) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP",
+                (wallet_payload,),
+            )
         db.execute(
             "INSERT INTO paper_fx_conversions"
             "(from_currency,to_currency,spent,received,fee_amount,fee_currency,fee_eur,legs) "
