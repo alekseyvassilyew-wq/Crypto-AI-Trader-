@@ -1559,6 +1559,56 @@ def build_app(s, engine, exchange):
             log.error("Read-only Kraken balance request failed: %s", type(exc).__name__)
             await update.effective_message.reply_text(format_error(exc, "/realbalance", update.effective_user))
 
+    async def krakensync(update, context):
+        if not await authorized(update): return await deny(update)
+        if not s.kraken_api_key or not s.kraken_api_secret:
+            return await update.effective_message.reply_text(
+                "Синхронизация недоступна: не заданы API-ключи Kraken."
+            )
+        await update.effective_message.reply_text(
+            "🔄 Загружаю баланс, историю исполнений и ledger Kraken. Только чтение; это может занять время…"
+        )
+        try:
+            def run_sync():
+                from .account_sync import sync_kraken_account
+                return sync_kraken_account(exchange, engine.db)
+
+            result = await context.application.bot_data["run_blocking"].run(run_sync)
+            balances = result["balance"]
+            positive = [
+                f"  {html.escape(currency)}: <code>{amount:.12g}</code>"
+                for currency, amount in sorted(balances.items())
+                if amount > 0
+            ]
+            balance_text = "\n".join(positive) if positive else "  Нет положительных остатков"
+            status_text = "ПОЛНАЯ ИСТОРИЯ ЗАГРУЖЕНА" if result["status"] == "COMPLETE" else "ИСТОРИЯ НЕПОЛНАЯ"
+            report = (
+                "🏦 <b>KRAKEN · СВЕРКА ИСТОРИИ СЧЁТА</b>\n"
+                "━━━━━━━━━━━━━━━━━━\n"
+                f"🛡 Статус: <b>{status_text}</b>\n"
+                f"🕒 Обновлено: <code>{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</code>\n\n"
+                "💰 <b>БАЛАНС БИРЖИ</b>\n"
+                f"{balance_text}\n\n"
+                "📚 <b>ИСТОРИЯ</b>\n"
+                f"Исполнений в ответе Kraken: <b>{result['exchange_fill_count']}</b>\n"
+                f"Новых исполнений сохранено: <b>{result['new_fills_imported']}</b>\n"
+                f"Записей ledger в ответе: <b>{result['exchange_ledger_count']}</b>\n"
+                f"Новых записей сохранено: <b>{result['new_ledger_entries_imported']}</b>\n\n"
+                "📊 <b>ПРИБЫЛЬ</b>\n"
+                "Реализованный P/L: <b>НЕ РАССЧИТЫВАЕТСЯ</b>\n"
+                "Нереализованный P/L: <b>НЕ РАССЧИТЫВАЕТСЯ</b>\n"
+                "Причина: требуется проверка полной истории, начальных остатков и исторических EUR-курсов.\n"
+                "━━━━━━━━━━━━━━━━━━\n"
+                "<i>Только чтение. Реальные ордера и переводы отключены.</i>"
+            )
+            await send_report(update, context, report, parse_mode="HTML")
+        except Exception as exc:
+            log.error("Kraken account history sync failed: %s", type(exc).__name__)
+            await update.effective_message.reply_text(
+                "🚨 Синхронизация Kraken не завершена. Локальный снимок не обновлён. "
+                + html.escape(safe_error_message(exc))
+            )
+
     async def walletcheck(update, context):
         if not await authorized(update): return await deny(update)
         if not s.kraken_api_key or not s.kraken_api_secret:
@@ -2374,7 +2424,7 @@ def build_app(s, engine, exchange):
     app.bot_data["monitor_db"] = monitor_db
     app.bot_data["monitor_runner"] = monitor_runner
     app.bot_data["research_runner"] = research_runner
-    for name, fn in [("start", start), ("status", status), ("dbhealth", dbhealth), ("monitorstatus", monitorstatus), ("scan", scan), ("market", market), ("dips", dips), ("analyze", analyze_market), ("account", account), ("realbalance", realbalance), ("walletcheck", walletcheck), ("paperreport", paperreport), ("learn", learn), ("learning", learning), ("research", research_history_cmd), ("backtest", backtest), ("strategycompare", strategycompare), ("dipbacktest", dipbacktest), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
+    for name, fn in [("start", start), ("status", status), ("dbhealth", dbhealth), ("monitorstatus", monitorstatus), ("scan", scan), ("market", market), ("dips", dips), ("analyze", analyze_market), ("account", account), ("realbalance", realbalance), ("krakensync", krakensync), ("walletcheck", walletcheck), ("paperreport", paperreport), ("learn", learn), ("learning", learning), ("research", research_history_cmd), ("backtest", backtest), ("strategycompare", strategycompare), ("dipbacktest", dipbacktest), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
                      ("run", run), ("pause", pause), ("stop", stop), ("help", help_cmd)]:
         app.add_handler(CommandHandler(name, fn))
     app.add_handler(CommandHandler("test_topics", testtopics))  # Backwards-compatible alias shown in /help.
