@@ -1211,6 +1211,7 @@ class Engine:
                             continue
                         cash_before = dict(self.paper.cash_by_currency)
                         basis_before = dict(self.paper.cash_cost_basis_eur)
+                        positions_before = copy.deepcopy(self.paper.positions)
                         try:
                             if fee_legs == 2:
                                 # Compute the second leg from the first leg's actual
