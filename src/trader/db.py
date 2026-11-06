@@ -354,8 +354,20 @@ def record_shadow_prediction(db, *, symbol, model_version='', signal_ts, target_
     return True
 
 
-def settle_shadow_predictions(db, *, symbol, candles, fee_rate, slippage_bps):
-    """Settle due shadow predictions using the first closed candle at/after target time."""
+def settle_shadow_predictions(db, *, symbol, candles, fee_rate, slippage_bps, interval_seconds=0):
+    """Settle at the first candle close occurring at or after the target time.
+
+    Kraken OHLC timestamps mark candle opens, so callers pass the candle duration
+    to avoid waiting an extra full candle after the requested horizon.
+    """
+    if isinstance(interval_seconds, bool):
+        raise ValueError("Shadow candle interval must be a finite non-negative number")
+    try:
+        interval_seconds = float(interval_seconds)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("Shadow candle interval must be a finite non-negative number") from exc
+    if not math.isfinite(interval_seconds) or interval_seconds < 0:
+        raise ValueError("Shadow candle interval must be a finite non-negative number")
     if not isinstance(candles, (list, tuple)):
         raise ValueError("Shadow settlement candles must be a sequence")
     rows = []
@@ -389,7 +401,7 @@ def settle_shadow_predictions(db, *, symbol, candles, fee_rate, slippage_bps):
         ).fetchall()
         for prediction in pending:
             target = float(prediction["target_ts"])
-            exit_row = next((row for row in rows if row[0] >= target), None)
+            exit_row = next((row for row in rows if row[0] + interval_seconds >= target), None)
             if exit_row is None:
                 continue
             exit_price = exit_row[3]
