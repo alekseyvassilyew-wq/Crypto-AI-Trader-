@@ -1799,6 +1799,77 @@ def build_app(s, engine, exchange):
         except Exception as exc:
             await update.effective_message.reply_text(f"Ошибка истории исследований: {safe_error_message(exc)}")
 
+    async def paperaudit(update, context):
+        if not await authorized(update): return await deny(update)
+        from .db import get_paper_account_reconciliation
+        try:
+            result = await context.application.bot_data["run_blocking"].run(
+                lambda: get_paper_account_reconciliation(engine.db)
+            )
+            status = result.get("status", "UNKNOWN")
+            status_label = {
+                "CONSISTENT_SINCE_BASELINE": "СОГЛАСОВАНО С БАЗОВОЙ ТОЧКИ",
+                "INCONSISTENT": "ОБНАРУЖЕНО НЕСООТВЕТСТВИЕ",
+                "NO_BASELINE": "НЕТ БАЗОВОЙ ТОЧКИ",
+                "NO_WALLET": "НЕТ PAPER-КОШЕЛЬКА",
+            }.get(status, status)
+            lines = [
+                "🧾 PAPER ACCOUNT RECONCILIATION",
+                "━━━━━━━━━━━━━━━━━━",
+                f"Статус: {status_label}",
+                f"Базовая точка: {result.get('baseline_ts', 'н/д')} UTC",
+                f"Событий после базы: {result.get('journal_events', 0)} "
+                f"(сделки: {result.get('fill_events', 0)}, FX: {result.get('fx_events', 0)})",
+                f"Цепочка событий: {'OK' if result.get('journal_chain_valid') else 'ОШИБКА'}",
+                f"Текущий кошелёк совпадает с журналом: "
+                f"{'ДА' if result.get('current_wallet_matches_journal') else 'НЕТ'}",
+                "",
+                "💼 ДЕНЕЖНЫЕ ОСТАТКИ",
+            ]
+            for currency, amount in sorted(result.get("cash_by_currency", {}).items()):
+                basis = result.get("cash_cost_basis_eur", {}).get(currency)
+                basis_text = "неизвестна" if basis is None else f"{float(basis):.4f} EUR"
+                lines.append(f"{currency}: {float(amount):.8f} | себестоимость: {basis_text}")
+            lines.extend([
+                "",
+                "📌 ПОЗИЦИИ",
+            ])
+            positions = result.get("open_positions", [])
+            if positions:
+                for position in positions:
+                    cost = position.get("cost_basis_eur")
+                    entry_fees = position.get("entry_fees_eur")
+                    lines.append(
+                        f"{position['symbol']}: {float(position['qty']):.8f} "
+                        f"{position['quote_currency']} | база: "
+                        f"{'н/д' if cost is None else f'{float(cost):.4f} EUR'} | "
+                        f"входные комиссии: "
+                        f"{'н/д' if entry_fees is None else f'{float(entry_fees):.4f} EUR'}"
+                    )
+            else:
+                lines.append("Открытых позиций нет")
+            lines.extend([
+                "",
+                "📊 РЕЗУЛЬТАТЫ С БАЗОВОЙ ТОЧКИ",
+                f"Реализованный P/L оценённых закрытий: "
+                f"{float(result.get('realized_pnl_eur_since_baseline', 0.0)):+.4f} EUR",
+                f"Закрытия без EUR-оценки: {result.get('unvalued_closed_fills_since_baseline', 0)}",
+                f"Комиссии сделок: {float(result.get('execution_fees_eur_since_baseline', 0.0)):.4f} EUR",
+                f"Комиссии FX: {float(result.get('fx_conversion_fees_eur_since_baseline', 0.0)):.4f} EUR",
+                "",
+                "⚠️ Это сверка журнала с базовой точки, а не полный исторический P/L. "
+                "Нереализованный P/L требует свежих цен и FX.",
+            ])
+            reasons = result.get("blocking_reasons", [])
+            if reasons:
+                lines.extend(["", "Причины ограничений:"])
+                lines.extend(f"• {reason}" for reason in reasons[:6])
+            await send_report(update, context, "\n".join(lines))
+        except Exception as exc:
+            await update.effective_message.reply_text(
+                f"Ошибка PAPER-сверки: {safe_error_message(exc)}"
+            )
+
     async def paperreport(update, context):
         if not await authorized(update): return await deny(update)
         from .db import get_paper_metrics
@@ -1954,7 +2025,7 @@ def build_app(s, engine, exchange):
         await update.effective_message.reply_text(
             "/start — меню\n/status — состояние и P/L\n/dbhealth — целостность SQLite и свежесть резервной копии\n/monitorstatus — диагностика Render/GitHub/Telegram\n/scan — сканирование\n/market — обзор всего рынка и ширины роста/падения\n/dips — поиск резко упавших монет и оценка отскока\n/analyze XBTEUR — подробный анализ 1h/4h/1d\n"
             "/account — виртуальные остатки PAPER\n/realbalance — реальные остатки Kraken (только чтение)\n/krakensync — импорт истории Kraken (только чтение)\n/walletcheck — пары, минимумы и комиссии Kraken (только чтение)\n"
-            "/portfolio — PAPER-позиции\n/paperreport [часы] — статистика автономного PAPER-теста\n"
+            "/portfolio — PAPER-позиции\n/paperreport [часы] — статистика автономного PAPER-теста\n/paperaudit — сверка журнала PAPER и кошелька\n"
             "/learn XBTEUR — обучение/проверка ML-кандидата без торговли\n/learning — текущие кандидаты и shadow-тест\n"
             "/research [SYMBOL] — история экспериментов, причины отказа и режимы рынка\n"
             "/backtest XBTEUR — тест одного рынка; /backtest portfolio — до 5 рынков\n"
@@ -2433,7 +2504,7 @@ def build_app(s, engine, exchange):
     app.bot_data["monitor_db"] = monitor_db
     app.bot_data["monitor_runner"] = monitor_runner
     app.bot_data["research_runner"] = research_runner
-    for name, fn in [("start", start), ("status", status), ("dbhealth", dbhealth), ("monitorstatus", monitorstatus), ("scan", scan), ("market", market), ("dips", dips), ("analyze", analyze_market), ("account", account), ("realbalance", realbalance), ("krakensync", krakensync), ("walletcheck", walletcheck), ("paperreport", paperreport), ("learn", learn), ("learning", learning), ("research", research_history_cmd), ("backtest", backtest), ("strategycompare", strategycompare), ("dipbacktest", dipbacktest), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
+    for name, fn in [("start", start), ("status", status), ("dbhealth", dbhealth), ("monitorstatus", monitorstatus), ("scan", scan), ("market", market), ("dips", dips), ("analyze", analyze_market), ("account", account), ("realbalance", realbalance), ("krakensync", krakensync), ("walletcheck", walletcheck), ("paperreport", paperreport), ("paperaudit", paperaudit), ("learn", learn), ("learning", learning), ("research", research_history_cmd), ("backtest", backtest), ("strategycompare", strategycompare), ("dipbacktest", dipbacktest), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
                      ("run", run), ("pause", pause), ("stop", stop), ("help", help_cmd)]:
         app.add_handler(CommandHandler(name, fn))
     app.add_handler(CommandHandler("test_topics", testtopics))  # Backwards-compatible alias shown in /help.
