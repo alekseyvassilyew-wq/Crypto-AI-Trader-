@@ -105,3 +105,74 @@ def test_all_public_rest_requests_are_spaced_at_least_1_05_seconds(monkeypatch):
     client._request("/0/public/SystemStatus")
 
     assert sleeps == pytest.approx([1.05])
+
+
+def test_trades_history_paginates_and_preserves_exchange_records(monkeypatch):
+    client = KrakenSpot()
+    calls = []
+
+    def fake_request(path, data=None, private=False):
+        calls.append((path, dict(data or {}), private))
+        if data["ofs"] == 0:
+            return {"count": 3, "trades": {
+                "tx-a": {"ordertxid": "order-a", "price": "10", "cost": "20", "fee": "0.1", "vol": "2"}
+            }}
+        return {"count": 3, "trades": {
+            "tx-b": {"ordertxid": "order-b", "price": "11"},
+            "tx-c": {"ordertxid": "order-c", "price": "12"},
+        }}
+
+    monkeypatch.setattr(client, "_request", fake_request)
+    rows = client.trades_history(start=100, end=200)
+    assert [row["id"] for row in rows] == ["tx-a", "tx-b", "tx-c"]
+    assert rows[0]["fee"] == "0.1"
+    assert calls == [
+        ("/0/private/TradesHistory", {"start": 100, "end": 200, "ofs": 0}, True),
+        ("/0/private/TradesHistory", {"start": 100, "end": 200, "ofs": 1}, True),
+    ]
+
+
+def test_ledger_history_reads_read_only_endpoint(monkeypatch):
+    client = KrakenSpot()
+    seen = {}
+
+    def fake_request(path, data=None, private=False):
+        seen.update(path=path, data=data, private=private)
+        return {"count": 1, "ledger": {
+            "ledger-1": {"type": "trade", "asset": "ZEUR", "amount": "-5", "fee": "0.01"}
+        }}
+
+    monkeypatch.setattr(client, "_request", fake_request)
+    rows = client.ledger_history()
+    assert rows == [{"id": "ledger-1", "type": "trade", "asset": "ZEUR", "amount": "-5", "fee": "0.01"}]
+    assert seen == {"path": "/0/private/Ledgers", "data": {"ofs": 0}, "private": True}
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"start": -1}, {"start": 1.5}, {"start": True},
+    {"start": 20, "end": 10}, {"end": "nope"},
+])
+def test_history_rejects_invalid_time_bounds(kwargs):
+    client = KrakenSpot()
+    with pytest.raises(ValueError):
+        client.trades_history(**kwargs)
+
+
+def test_history_fails_closed_on_incomplete_pagination(monkeypatch):
+    client = KrakenSpot()
+    monkeypatch.setattr(client, "_request", lambda *a, **k: {
+        "count": 2, "trades": {"tx-a": {"price": "10"}}
+    })
+    with pytest.raises(RuntimeError, match="incomplete"):
+        client.trades_history()
+
+
+def test_history_fails_if_account_changes_during_pagination(monkeypatch):
+    client = KrakenSpot()
+    pages = iter([
+        {"count": 2, "trades": {"tx-a": {"price": "10"}}},
+        {"count": 3, "trades": {"tx-b": {"price": "11"}}},
+    ])
+    monkeypatch.setattr(client, "_request", lambda *a, **k: next(pages))
+    with pytest.raises(RuntimeError, match="changed during pagination"):
+        client.trades_history()
