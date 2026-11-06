@@ -329,6 +329,35 @@ class KrakenSpot:
             out.append(normalized)
         return out
 
+    def order_book(self, symbol, depth=10):
+        """Return validated public L2 order-book levels for PAPER execution research."""
+        if isinstance(depth, bool) or not isinstance(depth, int) or not 1 <= depth <= 1000:
+            raise ValueError("Order-book depth must be an integer between 1 and 1000")
+        key, _ = self._pair_info(symbol)
+        result = self._request("/0/public/Depth", {"pair": key, "count": depth})
+        book = result.get(key) or (next(iter(result.values())) if result else None)
+        if not isinstance(book, dict):
+            raise RuntimeError(f"Kraken returned no order-book data for {symbol}")
+        normalized = {}
+        for side in ("asks", "bids"):
+            rows = book.get(side)
+            if not isinstance(rows, list) or not rows:
+                raise RuntimeError(f"Kraken returned empty {side} order-book for {symbol}")
+            levels = []
+            for row in rows:
+                if not isinstance(row, (list, tuple)) or len(row) < 2:
+                    raise RuntimeError(f"Kraken returned malformed {side} order-book level")
+                price = _finite_number(row[0], f"{side} price", positive=True)
+                quantity = _finite_number(row[1], f"{side} quantity", positive=True)
+                levels.append([price, quantity])
+            expected = sorted(levels, key=lambda item: item[0], reverse=(side == "bids"))
+            if levels != expected:
+                raise RuntimeError(f"Kraken returned unsorted {side} order-book levels")
+            normalized[side] = levels
+        if normalized["bids"][0][0] >= normalized["asks"][0][0]:
+            raise RuntimeError(f"Kraken returned crossed order-book for {symbol}")
+        return normalized
+
     def candles(self, symbol, interval="60", limit=100):
         if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
             raise ValueError("Candle limit must be a positive integer")

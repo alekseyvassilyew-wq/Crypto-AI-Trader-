@@ -188,3 +188,49 @@ def test_history_rejects_missing_or_non_integer_count(monkeypatch):
         monkeypatch.setattr(client, "_request", lambda *a, _page=page, **k: _page)
         with pytest.raises(RuntimeError, match="count"):
             client.trades_history()
+
+
+def test_order_book_reads_and_normalizes_public_depth(monkeypatch):
+    client = KrakenSpot()
+    monkeypatch.setattr(client, "_pair_info", lambda symbol: ("XBT/EUR", {}))
+    seen = {}
+    def fake_request(path, data=None, private=False):
+        seen.update(path=path, data=data, private=private)
+        return {"XBT/EUR": {
+            "asks": [["101", "2"], ["102", "3"]],
+            "bids": [["100", "4"], ["99", "5"]],
+        }}
+    monkeypatch.setattr(client, "_request", fake_request)
+    book = client.order_book("XBTEUR", depth=2)
+    assert seen == {"path": "/0/public/Depth", "data": {"pair": "XBT/EUR", "count": 2}, "private": False}
+    assert book["asks"] == [[101.0, 2.0], [102.0, 3.0]]
+    assert book["bids"] == [[100.0, 4.0], [99.0, 5.0]]
+
+
+# Keep malformed ordering and a genuinely crossed best bid/ask as separate cases.
+def test_order_book_rejects_unsorted_book(monkeypatch):
+    client = KrakenSpot()
+    monkeypatch.setattr(client, "_pair_info", lambda symbol: ("PAIR", {}))
+    monkeypatch.setattr(client, "_request", lambda *a, **k: {"PAIR": {
+        "asks": [["100", "1"], ["99", "1"]],
+        "bids": [["98", "1"], ["97", "1"]],
+    }})
+    with pytest.raises(RuntimeError, match="unsorted asks"):
+        client.order_book("PAIR")
+
+
+def test_order_book_rejects_crossed_book(monkeypatch):
+    client = KrakenSpot()
+    monkeypatch.setattr(client, "_pair_info", lambda symbol: ("PAIR", {}))
+    monkeypatch.setattr(client, "_request", lambda *a, **k: {"PAIR": {
+        "asks": [["99", "1"], ["100", "1"]],
+        "bids": [["100", "1"], ["98", "1"]],
+    }})
+    with pytest.raises(RuntimeError, match="crossed"):
+        client.order_book("PAIR")
+
+
+def test_order_book_rejects_invalid_depth():
+    client = KrakenSpot()
+    with pytest.raises(ValueError, match="depth"):
+        client.order_book("PAIR", depth=0)

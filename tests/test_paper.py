@@ -305,3 +305,36 @@ def test_equity_fails_closed_when_position_quote_fx_is_missing():
     broker.buy("ETHUSD", 5, 10, currency="USD")
     with pytest.raises(ValueError, match="Missing FX valuation rate.*USD"):
         broker.equity({"ETHUSD": 11}, {"EUR": 1.0})
+
+
+def test_estimate_book_vwap_consumes_multiple_ask_levels():
+    from src.trader.paper import estimate_book_vwap
+
+    result = estimate_book_vwap([[10, 1], [11, 2], [12, 5]], 2, side="buy")
+    assert result["qty"] == pytest.approx(2)
+    assert result["quote"] == pytest.approx(21)
+    assert result["vwap"] == pytest.approx(10.5)
+
+
+def test_estimate_book_vwap_consumes_multiple_bid_levels():
+    from src.trader.paper import estimate_book_vwap
+
+    result = estimate_book_vwap([[12, 1], [11, 2], [10, 5]], 2, side="sell")
+    assert result["quote"] == pytest.approx(23)
+    assert result["vwap"] == pytest.approx(11.5)
+
+
+def test_estimate_book_vwap_fails_closed_when_depth_is_insufficient():
+    from src.trader.paper import estimate_book_vwap
+
+    with pytest.raises(ValueError, match="insufficient visible"):
+        estimate_book_vwap([[10, 0.5]], 1, side="buy")
+
+
+def test_estimate_book_vwap_rejects_unsorted_or_invalid_levels():
+    from src.trader.paper import estimate_book_vwap
+
+    with pytest.raises(ValueError, match="not sorted"):
+        estimate_book_vwap([[10, 1], [9, 1]], 1.5, side="buy")
+    with pytest.raises(ValueError):
+        estimate_book_vwap([[10, 0]], 1, side="buy")

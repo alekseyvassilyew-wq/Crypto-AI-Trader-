@@ -3,6 +3,50 @@ import math
 from .db import get_state, set_state
 
 
+def estimate_book_vwap(levels, quantity, *, side):
+    """Estimate executable VWAP by consuming visible order-book depth.
+
+    levels are [price, quantity] pairs. Buy consumes asks; sell consumes bids.
+    Returns a conservative result only when the requested quantity is fully
+    covered; it never extrapolates beyond displayed liquidity.
+    """
+    if side not in {"buy", "sell"}:
+        raise ValueError("side must be 'buy' or 'sell'")
+    requested = _finite_number(quantity, "requested quantity", minimum=0, strict_minimum=True)
+    remaining = requested
+    if not isinstance(levels, (list, tuple)) or not levels:
+        raise ValueError("order book has no executable levels")
+    notional = 0.0
+    filled = 0.0
+    used = 0
+    previous = None
+    for level in levels:
+        if not isinstance(level, (list, tuple)) or len(level) < 2:
+            raise ValueError("malformed order-book level")
+        price = _finite_number(level[0], "book price", minimum=0, strict_minimum=True)
+        size = _finite_number(level[1], "book quantity", minimum=0, strict_minimum=True)
+        if previous is not None:
+            if side == "buy" and price < previous:
+                raise ValueError("ask book levels are not sorted")
+            if side == "sell" and price > previous:
+                raise ValueError("bid book levels are not sorted")
+        previous = price
+        take = min(remaining, size)
+        if take > 0:
+            used += 1
+            notional += take * price
+            filled += take
+            remaining -= take
+        if remaining <= 1e-12:
+            break
+    if remaining > max(1e-12, requested * 1e-10):
+        raise ValueError("insufficient visible order-book depth for full PAPER fill")
+    average = notional / filled
+    if not math.isfinite(average) or average <= 0:
+        raise ValueError("invalid order-book VWAP")
+    return {"qty": filled, "quote": notional, "vwap": average, "levels_used": used}
+
+
 def _finite_number(value, name, *, minimum=None, strict_minimum=False):
     try:
         number = float(value)
