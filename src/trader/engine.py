@@ -861,6 +861,7 @@ class Engine:
     def _execute_paper_fill(self, side, symbol, amount, price, prices, *, currency="EUR", quote_to_eur_rate=None):
         """Apply a simulated fill and atomically persist wallet plus trade history."""
         cash_before = dict(self.paper.cash_by_currency)
+        cash_basis_before = dict(self.paper.cash_cost_basis_eur)
         positions_before = copy.deepcopy(self.paper.positions)
         try:
             if side == "Buy":
@@ -893,6 +894,7 @@ class Engine:
             )
         except Exception:
             self.paper.cash_by_currency = cash_before
+            self.paper.cash_cost_basis_eur = cash_basis_before
             self.paper.positions = positions_before
             self.paper._sync_cash()
             raise
