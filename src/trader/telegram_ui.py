@@ -1231,7 +1231,7 @@ def build_app(s, engine, exchange):
         try:
             def run_comparison():
                 from .exchange import resolve_eur_pair
-                from .strategy_comparison import run_strategy_comparison
+                from .strategy_comparison import run_strategy_comparison, run_walk_forward_validation
                 pair = resolve_eur_pair(exchange.discover_pairs(), requested_symbol)
                 symbol = pair["symbol"]
                 rows = exchange.candles(symbol, interval="60", limit=720)
@@ -1246,9 +1246,23 @@ def build_app(s, engine, exchange):
                     trailing_stop_pct=s.trailing_stop_pct,
                     risk_per_trade_pct=s.risk_per_trade_pct,
                 )
-                return symbol, result
+                validation = run_walk_forward_validation(
+                    rows,
+                    min_train_candles=240,
+                    test_candles=120,
+                    embargo_candles=3,
+                    initial_cash=s.paper_start,
+                    max_trade=s.max_trade,
+                    fee_rate=s.fee_rate,
+                    slippage_bps=5.0,
+                    stop_loss_pct=s.stop_loss_pct,
+                    take_profit_pct=s.take_profit_pct,
+                    trailing_stop_pct=s.trailing_stop_pct,
+                    risk_per_trade_pct=s.risk_per_trade_pct,
+                )
+                return symbol, result, validation
 
-            symbol, result = await context.application.bot_data["run_blocking"].run(run_comparison)
+            symbol, result, validation = await context.application.bot_data["run_blocking"].run(run_comparison)
 
             def metric(item, key, digits=2, suffix=""):
                 try:
@@ -1343,6 +1357,24 @@ def build_app(s, engine, exchange):
                         f"net={metric({'value': stats.get('net_return_pct', 0.0)}, 'value', 2, '%')} · "
                         f"PF={pf_text} · WR={metric({'value': stats.get('win_rate_pct', 0.0)}, 'value', 1, '%')}"
                     )
+            validation_summary = validation.get("summary", {})
+            lines.extend([
+                "",
+                "🧪 OUT-OF-SAMPLE · WALK-FORWARD",
+                f"Независимых тестовых окон: {validation.get('fold_count', 0)} · "
+                f"обучение: {validation.get('min_train_candles', 0)}+ свечей · "
+                f"тест: {validation.get('test_candles', 0)} свечей · "
+                f"embargo: {validation.get('embargo_candles', 0)} свечи",
+                "Каждое окно стартует с отдельного виртуального баланса; "
+                "сигналы в тесте используют только доступную к той свече историю.",
+            ])
+            for name, stats in validation_summary.items():
+                lines.append(
+                    f"• {name}: средняя доходность {stats.get('average_return_pct', 0.0):+.2f}% · "
+                    f"худшее окно {stats.get('worst_fold_return_pct', 0.0):+.2f}% · "
+                    f"прибыльных окон {stats.get('profitable_folds', 0)}/{stats.get('folds', 0)} · "
+                    f"сделок {stats.get('total_trades', 0)} · PF={pf(stats)}"
+                )
             lines.extend([
                 "",
                 "⚙️ ОДИНАКОВЫЕ УСЛОВИЯ",
