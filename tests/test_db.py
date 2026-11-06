@@ -691,11 +691,15 @@ def test_backfill_legacy_paper_seed_fx_ledger_is_idempotent_and_does_not_touch_w
     }
     assert get_state(db, "paper_broker") == wallet
     rows = db.execute(
-        "SELECT from_currency,to_currency,spent,received,fee_amount,fee_currency,fee_eur,legs "
+        "SELECT ts,from_currency,to_currency,spent,received,fee_amount,fee_currency,fee_eur,legs "
         "FROM paper_fx_conversions ORDER BY id"
     ).fetchall()
     assert len(rows) == 2
     recovered = rows[1]
+    audit_ts = db.execute(
+        "SELECT ts FROM audit WHERE event='PAPER_WALLET_SEED' ORDER BY id DESC LIMIT 1"
+    ).fetchone()["ts"]
+    assert recovered["ts"] == audit_ts
     assert recovered["to_currency"] == "USDT"
     assert recovered["fee_currency"] == "USDT"
     assert recovered["fee_amount"] == pytest.approx(0.00555)
