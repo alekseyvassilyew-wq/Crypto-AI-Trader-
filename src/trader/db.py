@@ -481,10 +481,21 @@ def record_strategy_shadow_prediction(db, *, symbol, strategy, signal_ts, target
             or signal_ts < 0 or target_ts <= signal_ts or entry_price <= 0):
         raise ValueError("Invalid strategy shadow prediction values")
     with db:
+        normalized_symbol = symbol.strip().upper()
+        normalized_strategy = strategy.strip().lower()
+        latest = db.execute(
+            "SELECT target_ts FROM strategy_shadow_predictions "
+            "WHERE symbol=? AND strategy=? ORDER BY signal_ts DESC LIMIT 1",
+            (normalized_symbol, normalized_strategy),
+        ).fetchone()
+        # Do not compound overlapping three-hour outcomes as if they were
+        # independent, fully reinvested trades.
+        if latest and signal_ts < float(latest["target_ts"]):
+            return False
         cursor = db.execute(
             "INSERT OR IGNORE INTO strategy_shadow_predictions"
             "(symbol,strategy,signal_ts,target_ts,entry_price,regime) VALUES(?,?,?,?,?,?)",
-            (symbol.strip().upper(), strategy.strip().lower(), signal_ts, target_ts,
+            (normalized_symbol, normalized_strategy, signal_ts, target_ts,
              entry_price, regime),
         )
         db.execute(
