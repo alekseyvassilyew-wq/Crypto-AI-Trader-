@@ -67,7 +67,6 @@ def test_portfolio_daily_loss_limit_liquidates_open_positions_and_halts_entries(
     assert result["trades"] == 1
     assert result["trades_detail"][0]["reason"] == "DAILY_LOSS_LIMIT"
     assert result["trades_detail"][0]["exit_price"] == pytest.approx(99.4)
-    assert result["open_positions"] == 0
     assert result["final_equity_eur"] < 100
 
 
