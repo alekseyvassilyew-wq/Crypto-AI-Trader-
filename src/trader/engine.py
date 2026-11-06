@@ -255,19 +255,35 @@ class Engine:
         """Estimate net liquidation value after exit fee and slippage on holdings."""
         prices = self.last_prices if prices is None else prices
         rates = self._fx_rates(prices) if fx_rates is None else fx_rates
-        cash_value = sum(
-            float(amount) * float(rates.get(currency, 0.0))
-            for currency, amount in self.paper.cash_by_currency.items()
-        )
+        cash_value = 0.0
+        for currency, amount in self.paper.cash_by_currency.items():
+            amount = float(amount)
+            if not math.isfinite(amount) or amount < 0:
+                raise ValueError(f"Invalid PAPER cash balance for {currency}")
+            if amount <= 0:
+                continue
+            rate = rates.get(currency)
+            if rate is None or not math.isfinite(float(rate)) or float(rate) <= 0:
+                raise ValueError(f"Missing or invalid PAPER cash FX valuation for {currency}")
+            cash_value += amount * float(rate)
         retention = (1.0 - self._slippage_rate()) * (1.0 - self.paper.fee_rate)
         position_value = 0.0
         for symbol, position in self.paper.positions.items():
-            mark = float(prices.get(symbol) or 0.0)
+            raw_mark = prices.get(symbol)
+            if raw_mark is None:
+                raise ValueError(f"Missing current PAPER mark price for {symbol}")
+            mark = float(raw_mark)
             quote = str(position.get("quote_currency", "EUR")).upper()
-            rate = float(rates.get(quote, 0.0))
-            if not all(math.isfinite(x) and x >= 0 for x in (mark, rate)):
+            raw_rate = rates.get(quote)
+            if raw_rate is None:
+                raise ValueError(f"Missing PAPER position FX valuation for {symbol} ({quote})")
+            rate = float(raw_rate)
+            if not all(math.isfinite(x) and x > 0 for x in (mark, rate)):
                 raise ValueError("Invalid PAPER liquidation valuation")
-            position_value += float(position["qty"]) * mark * retention * rate
+            qty = float(position["qty"])
+            if not math.isfinite(qty) or qty <= 0:
+                raise ValueError(f"Invalid PAPER position quantity for {symbol}")
+            position_value += qty * mark * retention * rate
         equity = cash_value + position_value
         if not math.isfinite(equity) or equity < 0:
             raise ValueError("PAPER liquidation equity is invalid")
