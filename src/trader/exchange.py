@@ -395,7 +395,7 @@ class KrakenSpot:
                 raise RuntimeError(f"Kraken returned inconsistent OHLC candle for {symbol}")
             normalized.append([timestamp, open_price, high, low, close, volume])
         if not normalized:
-            raise RuntimeError(f"Kraken returned no usable closed OHLC candles for {symbol}")
+            raise RuntimeError(f"Kraken returned no usable OHLC candles for {symbol} (no closed candles available)")
         try:
             interval_seconds = int(interval) * 60
         except (TypeError, ValueError, OverflowError) as exc:
