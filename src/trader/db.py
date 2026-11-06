@@ -1135,7 +1135,7 @@ def _paper_wallet_financial_projection(wallet):
     if not isinstance(wallet, dict):
         raise ValueError("PAPER event wallet snapshot must be an object")
     cash = wallet.get("cash_by_currency")
-    basis = wallet.get("cash_cost_basis_eur")
+    basis = wallet.get("cash_cost_basis_eur", {})
     positions = wallet.get("positions")
     if not isinstance(cash, dict) or not isinstance(basis, dict) or not isinstance(positions, dict):
         raise ValueError("PAPER event wallet snapshot is missing financial mappings")
@@ -1226,8 +1226,6 @@ def save_paper_fill(db, *, cash_by_currency, positions, symbol, side, qty, quote
                 raise ValueError("PAPER cash EUR cost basis must be finite and non-negative")
             normalized_basis[currency.strip().upper()] = value
         wallet["cash_cost_basis_eur"] = normalized_basis
-    if cash_cost_basis_eur is None:
-        wallet["cash_cost_basis_eur"] = {}
     payload = json.dumps(wallet, separators=(",", ":"), allow_nan=False)
     before_payload = None
     if wallet_before is not None:
