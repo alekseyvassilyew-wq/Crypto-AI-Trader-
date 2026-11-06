@@ -245,20 +245,17 @@ def run_portfolio_backtest(
             elif op >= target_price:
                 reason, exit_price = "TAKE_PROFIT", op
             else:
-                # If the base stop and target are both touched in one candle,
-                # the path is unknowable: conservatively take the base stop.
-                if low <= stop_price:
-                    reason, exit_price = "STOP_LOSS", stop_price
+                # OHLC candles do not reveal whether the high or low came first.
+                # Use the adverse low-before-high path: only stops active before
+                # this candle can trigger; a new trailing peak activates next candle.
+                if low <= prior_stop:
+                    reason, exit_price = (
+                        "STOP_LOSS" if prior_stop == stop_price else "TRAILING_STOP"
+                    ), prior_stop
+                elif high >= target_price:
+                    reason, exit_price = "TAKE_PROFIT", target_price
                 else:
-                    # Otherwise assume the high precedes the low so a new
-                    # trailing stop can activate within this candle.
                     pos["peak"] = max(pos["peak"], high)
-                    trailing_price = pos["peak"] * (1 - trail) if pos["peak"] > pos["entry_price"] else 0.0
-                    active_stop = max(stop_price, trailing_price)
-                    if low <= active_stop:
-                        reason, exit_price = ("STOP_LOSS" if active_stop == stop_price else "TRAILING_STOP"), active_stop
-                    elif high >= target_price:
-                        reason, exit_price = "TAKE_PROFIT", target_price
             if reason:
                 close(symbol, exit_price, timestamp, reason)
 
@@ -402,18 +399,16 @@ def run_portfolio_backtest(
         elif op >= target_price:
             reason, exit_price = "TAKE_PROFIT", op
         else:
-            if low <= stop_price:
-                reason, exit_price = "STOP_LOSS", stop_price
+            if low <= prior_stop:
+                reason, exit_price = (
+                    "STOP_LOSS" if prior_stop == stop_price else "TRAILING_STOP"
+                ), prior_stop
+            elif high >= target_price:
+                reason, exit_price = "TAKE_PROFIT", target_price
             else:
-                pos["peak"] = max(pos["peak"], high)
-                trailing_price = pos["peak"] * (1 - trail) if pos["peak"] > pos["entry_price"] else 0.0
-                active_stop = max(stop_price, trailing_price)
-                if low <= active_stop:
-                    reason, exit_price = ("STOP_LOSS" if active_stop == stop_price else "TRAILING_STOP"), active_stop
-                elif high >= target_price:
-                    reason, exit_price = "TAKE_PROFIT", target_price
-                else:
-                    reason, exit_price = "END_OF_DATA", close_price
+                # The final candle's newly observed peak cannot trigger a
+                # trailing exit without knowing the intrabar price path.
+                reason, exit_price = "END_OF_DATA", close_price
         close(symbol, exit_price, last_timestamp, reason)
     final_rates = rates_at(last_timestamp)
     final_equity = sum(amount * final_rates.get(currency, 0.0) for currency, amount in cash.items())
@@ -470,7 +465,7 @@ def run_portfolio_backtest(
             "fee_rate_pct_per_side": fee * 100,
             "slippage_bps_per_side": slip_bps,
             "execution": "next candle open",
-            "intrabar_priority": "stop before take-profit",
+            "intrabar_priority": "low before high; existing stops before take-profit; new trailing peaks activate next candle",
             "buy_hold": "equal-weight same markets from first strategy entry (or first executable candle if no trades) through final close; includes conversion and two-sided fees/slippage",
             "fx_rates_fallback": rates,
             "fx_buy_rates": buy_rates,

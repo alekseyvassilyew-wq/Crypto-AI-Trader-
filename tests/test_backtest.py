@@ -168,9 +168,23 @@ def test_buy_and_hold_benchmark_starts_at_first_strategy_entry():
     assert result["buy_hold_return_pct"] == pytest.approx(10.0)
 
 
-def test_final_candle_high_activates_trailing_stop_before_intrabar_low():
+def test_final_candle_new_high_does_not_trigger_same_candle_trailing_stop():
     rows = candles(62)
     rows[61] = [61.0, 100.0, 110.0, 100.0, 105.0, 1000.0]
+    result = run_backtest(
+        rows, initial_cash=100, max_trade=20, fee_rate=0,
+        slippage_bps=0, stop_loss_pct=20, take_profit_pct=50,
+        trailing_stop_pct=5, risk_per_trade_pct=2, signal_fn=buy_once,
+    )
+    trade = result["trades_detail"][0]
+    assert trade["reason"] == "END_OF_DATA"
+    assert trade["exit_price"] == pytest.approx(105.0)
+
+
+def test_trailing_stop_activated_on_prior_candle_triggers_next_candle():
+    rows = candles(63)
+    rows[61] = [61.0, 100.0, 110.0, 100.0, 105.0, 1000.0]
+    rows[62] = [62.0, 105.0, 106.0, 104.0, 105.0, 1000.0]
     result = run_backtest(
         rows, initial_cash=100, max_trade=20, fee_rate=0,
         slippage_bps=0, stop_loss_pct=20, take_profit_pct=50,
