@@ -778,10 +778,12 @@ def get_telegram_report_pages(db, report_key):
 
 
 def save_paper_fill(db, *, cash_by_currency, positions, symbol, side, qty, quote, fee, price,
-                    fee_eur=None, realized_pnl_eur=None):
+                    fee_eur=None, realized_pnl_eur=None, cash_cost_basis_eur=None):
     """Atomically persist a PAPER wallet mutation and its corresponding trade fill."""
     if not isinstance(cash_by_currency, dict) or not isinstance(positions, dict):
         raise ValueError("PAPER wallet state must contain currency balances and positions")
+    if cash_cost_basis_eur is not None and not isinstance(cash_cost_basis_eur, dict):
+        raise ValueError("PAPER cash EUR cost basis must be a mapping")
     normalized_fee_eur = None if fee_eur is None else float(fee_eur)
     normalized_pnl_eur = None if realized_pnl_eur is None else float(realized_pnl_eur)
     if normalized_fee_eur is not None and (not math.isfinite(normalized_fee_eur) or normalized_fee_eur < 0):
@@ -793,6 +795,16 @@ def save_paper_fill(db, *, cash_by_currency, positions, symbol, side, qty, quote
         "cash_by_currency": cash_by_currency,
         "positions": positions,
     }
+    if cash_cost_basis_eur is not None:
+        normalized_basis = {}
+        for currency, raw_basis in cash_cost_basis_eur.items():
+            if not isinstance(currency, str) or not currency.strip():
+                raise ValueError("PAPER cash basis currency must be non-empty")
+            value = None if raw_basis is None else float(raw_basis)
+            if value is not None and (not math.isfinite(value) or value < 0):
+                raise ValueError("PAPER cash EUR cost basis must be finite and non-negative")
+            normalized_basis[currency.strip().upper()] = value
+        wallet["cash_cost_basis_eur"] = normalized_basis
     payload = json.dumps(wallet, separators=(",", ":"), allow_nan=False)
     numeric = (float(qty), float(quote), float(fee), float(price))
     if not all(math.isfinite(value) for value in numeric):
