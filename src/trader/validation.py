@@ -93,8 +93,12 @@ def build_walk_forward_folds(
         folds.append(fold)
         if max_folds is not None and len(folds) >= max_folds:
             break
-        # A larger time-based embargo can consume more rows than the nominal
-        # step. Advance training at least to the previous test end so later
-        # out-of-sample windows can never overlap.
-        train_end = max(train_end + step, test_end)
+        if time_based:
+            # A larger time-based embargo can consume more rows than the
+            # nominal step. Advance training at least to the previous test
+            # end so later out-of-sample windows can never overlap.
+            train_end = max(train_end + step, test_end)
+        else:
+            # Preserve the established row-based expanding-window schedule.
+            train_end += step
     return folds
