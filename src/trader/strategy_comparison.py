@@ -9,6 +9,7 @@ from collections import defaultdict
 from .adaptive_strategy import evaluate_adaptive_strategy_weights
 from .backtest import run_backtest
 from .strategy_ensemble import evaluate_strategy_ensemble
+from .validation import build_walk_forward_folds
 
 HORIZON_SECONDS = 3 * 60 * 60
 STRATEGY_NAMES = (
@@ -230,6 +231,71 @@ def _trade_diagnostics(result, *, interval_seconds, buy_signals=None):
         ),
     }
 
+
+def _evaluate_out_of_sample_folds(
+    candles, *, common, fee_rate, slippage_bps, interval_seconds,
+    min_train_candles=240, test_candles=120, max_folds=5,
+):
+    """Score strategies only inside disjoint, embargoed chronological test windows."""
+    from .indicators import analyze
+
+    embargo = max(1, (HORIZON_SECONDS + int(interval_seconds) - 1) // int(interval_seconds))
+    folds = build_walk_forward_folds(
+        candles, min_train_candles=min_train_candles,
+        test_candles=test_candles, step_candles=test_candles,
+        embargo_candles=embargo, max_folds=max_folds,
+    )
+    scored = []
+    for number, bounds in enumerate(folds, 1):
+        prefix = candles[:bounds["test_end"]]
+        equal, adaptive, metadata = _walk_forward_signals(
+            prefix, fee_rate=fee_rate, slippage_bps=slippage_bps
+        )
+        individual = metadata["individual_signals"]
+        test_start_ts = float(candles[bounds["test_start"]][0])
+
+        def gated(signal_map):
+            def signal_fn(history):
+                if float(history[-1][0]) < test_start_ts:
+                    return {"signal": "HOLD", "atr_percent": 0.0}
+                return signal_map.get(float(history[-1][0]), {"signal": "HOLD", "atr_percent": 0.0})
+            return signal_fn
+
+        def baseline_signal(history):
+            if float(history[-1][0]) < test_start_ts:
+                return {"signal": "HOLD", "atr_percent": 0.0}
+            return analyze(history)
+
+        results = {
+            "baseline": run_backtest(prefix, **common, signal_fn=baseline_signal),
+            "equal_weight_ensemble": run_backtest(prefix, **common, signal_fn=gated(equal)),
+            "adaptive_ensemble": run_backtest(prefix, **common, signal_fn=gated(adaptive)),
+        }
+        individual_results = {
+            name: run_backtest(prefix, **common, signal_fn=gated(signal_map))
+            for name, signal_map in individual.items()
+        }
+
+        def compact(item):
+            return {key: item[key] for key in (
+                "return_pct", "net_pnl", "trades", "win_rate_pct",
+                "profit_factor", "max_drawdown_pct", "fees_paid",
+            )}
+
+        scored.append({
+            "fold": number,
+            "train_candles": bounds["train_end"],
+            "embargo_candles": embargo,
+            "test_candles": bounds["test_end"] - bounds["test_start"],
+            "test_start_timestamp": test_start_ts,
+            "test_end_timestamp": float(candles[bounds["test_end"] - 1][0]),
+            **{name: compact(item) for name, item in results.items()},
+            "individual_strategies": {
+                name: compact(item) for name, item in individual_results.items()
+            },
+        })
+    return scored
+
 def run_strategy_comparison(
     candles, *, initial_cash=1000.0, max_trade=100.0, fee_rate=0.0026,
     slippage_bps=5.0, stop_loss_pct=2.0, take_profit_pct=4.0,
@@ -288,9 +354,14 @@ def run_strategy_comparison(
             for name, item in individual_results.items()
         },
     }
+    out_of_sample_folds = _evaluate_out_of_sample_folds(
+        candles, common=common, fee_rate=fee_rate,
+        slippage_bps=slippage_bps, interval_seconds=interval_seconds,
+    )
     return {
         "mode": "SHADOW_ONLY",
         "execution_effect": "NONE",
+        "walk_forward_folds": out_of_sample_folds,
         "baseline": baseline_result,
         "equal_weight_ensemble": equal_result,
         "adaptive_ensemble": adaptive_result,
