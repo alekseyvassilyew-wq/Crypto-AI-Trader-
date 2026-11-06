@@ -1162,7 +1162,7 @@ def build_app(s, engine, exchange):
         if not await authorized(update): return await deny(update)
         if len(context.args) != 1:
             return await update.effective_message.reply_text(
-                "Использование: /dipbacktest XBTEUR\\n"
+                "Использование: /dipbacktest XBTEUR\n"
                 "Проверяет стратегию поиска отскока на истории Kraken. "
                 "Только симуляция: сделки не открываются и PAPER-кошелёк не меняется."
             )
@@ -1221,15 +1221,15 @@ def build_app(s, engine, exchange):
                 f"Комиссии: {result['fees_paid']:.4f} EUR  ·  Проскальзывание: 5 bps на сторону",
                 "━━━━━━━━━━━━━━━━━━",
                 "⚙️ ДОПУЩЕНИЯ И ОГРАНИЧЕНИЯ",
-                f"Комиссия: {s.fee_rate * 100:.3f}% на сторону; спред в модели: 10 bps.",
+                f"Комиссия: {s.fee_rate * 100:.3f}% на сторону; спред в модели: {min(10.0, float(s.max_spread_bps)):.1f} bps.",
                 "Падение: rolling 24h, а не UTC-день; оборот оценён по часовым объёмам.",
-                "Исторический спред Kraken OHLC не содержит — использовано допущение 10 bps.",
+                "Исторический спред Kraken OHLC не содержит — использовано фиксированное допущение.",
                 "Сигнал считается только после закрытия 1h; 4h/1d свечи — только после их закрытия.",
                 "Вход — по открытию следующей часовой свечи; стоп/цель моделируются консервативно.",
                 "⚠️ Это историческая симуляция, не прогноз и не доказательство будущей прибыли.",
                 "Никаких реальных ордеров, изменений PAPER-баланса или запуска PAPER не выполняется.",
             ]
-            await send_report(update, context, _format_report(lines[0], "\\n".join(lines)))
+            await send_report(update, context, _format_report(lines[0], "\n".join(lines)))
         except Exception as exc:
             log.error("Dip strategy historical validation failed for %s: %s", symbol, type(exc).__name__)
             await update.effective_message.reply_text(
