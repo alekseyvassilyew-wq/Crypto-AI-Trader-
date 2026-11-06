@@ -6,6 +6,7 @@ import time
 from .risk import Limits, check_order
 from .indicators import analyze, confirm_multi_timeframe
 from .learning import extract_features, predict_probability
+from .strategy_ensemble import evaluate_strategy_ensemble
 from .db import audit, save_trade, save_paper_fill, get_state, set_state, save_paper_snapshot, record_shadow_prediction, settle_shadow_predictions
 
 
@@ -476,6 +477,9 @@ class Engine:
                 # Backwards-compatible adapter for simple test doubles.
                 base_candles = self.exchange.candles(symbol)
             result = analyze(base_candles)
+            # Independent strategy opinions are collected in shadow mode only.
+            # The existing production BUY/HOLD decision remains unchanged.
+            result["strategy_ensemble_shadow"] = evaluate_strategy_ensemble(base_candles)
             # Higher-timeframe requests are made only for potential entries,
             # limiting Kraken REST load while refusing unconfirmed BUY signals.
             if result.get("signal") == "BUY" and getattr(self.s, "enable_multi_timeframe", False):
