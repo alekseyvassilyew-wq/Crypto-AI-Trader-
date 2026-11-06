@@ -654,3 +654,68 @@ def test_paper_fx_conversion_ledger_failure_rolls_back_wallet_atomically():
     assert get_state(db, "paper_broker") == previous
     assert db.execute("SELECT COUNT(*) FROM paper_fx_conversions").fetchone()[0] == 0
     db.close()
+
+
+def test_backfill_legacy_paper_seed_fx_ledger_is_idempotent_and_does_not_touch_wallet():
+    from src.trader.db import (
+        audit, backfill_paper_seed_fx_ledger, get_state, save_paper_fx_conversion,
+    )
+
+    db = connect(":memory:")
+    wallet = {
+        "cash": 10.0,
+        "cash_by_currency": {"EUR": 10.0, "USD": 5.0},
+        "cash_cost_basis_eur": {"EUR": 10.0, "USD": None},
+        "positions": {},
+    }
+    set_state(db, "paper_broker", wallet)
+    audit(
+        db, "PAPER_WALLET_SEED",
+        "EUR->USD spent=5.00000000 received=5.55000000 fee=0.00555000",
+    )
+    audit(
+        db, "PAPER_WALLET_SEED",
+        "EUR->USDT spent=5.00000000 received=5.54500000 fee=0.00555000",
+    )
+    # Simulate a seed record already written by the new code before the
+    # migration runs; the backfill must not add it twice.
+    save_paper_fx_conversion(
+        db, from_currency="EUR", to_currency="USD", spent=5.0,
+        received=5.55, fee_amount=0.00555, fee_currency="USD",
+        fee_eur=0.005, legs=1,
+    )
+
+    result = backfill_paper_seed_fx_ledger(db)
+    assert result == {
+        "already_done": False, "backfilled": 1, "already_present": 1, "unparsed": 0,
+    }
+    assert get_state(db, "paper_broker") == wallet
+    rows = db.execute(
+        "SELECT from_currency,to_currency,spent,received,fee_amount,fee_currency,fee_eur,legs "
+        "FROM paper_fx_conversions ORDER BY id"
+    ).fetchall()
+    assert len(rows) == 2
+    recovered = rows[1]
+    assert recovered["to_currency"] == "USDT"
+    assert recovered["fee_currency"] == "USDT"
+    assert recovered["fee_amount"] == pytest.approx(0.00555)
+    assert recovered["fee_eur"] == pytest.approx(0.00555 * 5.0 / (5.545 + 0.00555))
+    assert recovered["legs"] == 1
+
+    second = backfill_paper_seed_fx_ledger(db)
+    assert second["already_done"] is True
+    assert db.execute("SELECT COUNT(*) FROM paper_fx_conversions").fetchone()[0] == 2
+    db.close()
+
+
+def test_backfill_keeps_malformed_seed_audit_unresolved_for_retry():
+    from src.trader.db import audit, backfill_paper_seed_fx_ledger, get_state
+
+    db = connect(":memory:")
+    audit(db, "PAPER_WALLET_SEED", "unrecognized legacy seed event")
+    result = backfill_paper_seed_fx_ledger(db)
+
+    assert result["unparsed"] == 1
+    assert get_state(db, "paper_seed_fx_backfill_done", False) is False
+    assert db.execute("SELECT COUNT(*) FROM paper_fx_conversions").fetchone()[0] == 0
+    db.close()
