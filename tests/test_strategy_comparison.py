@@ -1,3 +1,5 @@
+import pytest
+
 from src.trader import strategy_comparison
 from src.trader.strategy_comparison import (
     HORIZON_SECONDS,
@@ -131,3 +133,41 @@ def test_comparison_rejects_too_short_history_like_base_backtest():
         assert "62" in str(exc)
     else:
         raise AssertionError("expected minimum candle validation")
+
+
+def test_trade_diagnostics_reconcile_exit_reasons_costs_and_holding_time():
+    from src.trader.strategy_comparison import _trade_diagnostics
+
+    result = {
+        "trades": 2,
+        "fees_paid": 0.12,
+        "net_pnl": -0.32,
+        "trades_detail": [
+            {
+                "reason": "STOP_LOSS",
+                "entry_time": 0,
+                "exit_time": 7200,
+                "gross_entry_notional": 10.0,
+                "gross_exit_notional": 9.7,
+                "net_pnl": -0.35,
+            },
+            {
+                "reason": "TAKE_PROFIT",
+                "entry_time": 10800,
+                "exit_time": 14400,
+                "gross_entry_notional": 10.0,
+                "gross_exit_notional": 10.15,
+                "net_pnl": 0.03,
+            },
+        ],
+    }
+    summary = _trade_diagnostics(result, interval_seconds=3600, buy_signals=7)
+    assert summary["trades"] == 2
+    assert summary["buy_signals"] == 7
+    assert summary["exit_reasons"] == {"STOP_LOSS": 1, "TAKE_PROFIT": 1}
+    assert summary["gross_pnl_after_slippage_before_fees"] == pytest.approx(-0.15)
+    assert summary["fees_paid"] == pytest.approx(0.12)
+    assert summary["net_pnl"] == pytest.approx(-0.32)
+    assert summary["average_holding_hours"] == pytest.approx(1.5)
+    assert summary["average_winning_trade_eur"] == pytest.approx(0.03)
+    assert summary["average_losing_trade_eur"] == pytest.approx(-0.35)

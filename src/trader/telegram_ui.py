@@ -1301,6 +1301,24 @@ def build_app(s, engine, exchange):
                     f"  Сделок: {item['trades']} · Win rate: {metric(item, 'win_rate_pct', 1, '%')} · PF: {pf(item)}",
                     f"  Просадка: {metric(item, 'max_drawdown_pct', 2, '%')} · Комиссии: {metric(item, 'fees_paid', 4)} EUR",
                 ])
+            diagnostics_by_name = result.get("trade_diagnostics", {})
+            if diagnostics_by_name:
+                lines.extend(["", "🧾 РАЗБОР СДЕЛОК · SHADOW"])
+                for name in ("trend_following", "mean_reversion", "breakout", "momentum", "volatility_expansion"):
+                    detail = diagnostics_by_name.get(name)
+                    if not detail:
+                        continue
+                    reasons = detail.get("exit_reasons", {})
+                    reason_text = " · ".join(
+                        f"{reason}: {count}" for reason, count in sorted(reasons.items())
+                    ) or "нет закрытых сделок"
+                    lines.extend([
+                        f"• {name}: BUY-сигналов {detail.get('buy_signals', 0)} · сделок {detail.get('trades', 0)}",
+                        f"  Выходы: {reason_text}",
+                        f"  Среднее удержание: {detail.get('average_holding_hours', 0.0):.1f} ч.",
+                        f"  P/L до комиссий (после проскальзывания): {detail.get('gross_pnl_after_slippage_before_fees', 0.0):+.4f} EUR",
+                        f"  Средняя прибыль/убыток сделки: {detail.get('average_winning_trade_eur', 0.0):+.4f} / {detail.get('average_losing_trade_eur', 0.0):+.4f} EUR",
+                    ])
             last_bar = meta.get("walk_forward", [])[-1] if meta.get("walk_forward") else {}
             final_regime = last_bar.get("regime", "UNKNOWN")
             final_weights = last_bar.get("weights", {})

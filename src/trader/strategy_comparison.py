@@ -181,6 +181,50 @@ def _walk_forward_signals(candles, *, fee_rate, slippage_bps):
     }
 
 
+
+def _trade_diagnostics(result, *, interval_seconds, buy_signals=None):
+    """Summarize realized trade mechanics without changing simulated execution."""
+    trades = result.get("trades_detail", [])
+    reasons = {}
+    holding_hours = []
+    gross_before_fees = 0.0
+    winners, losers = [], []
+    for trade in trades:
+        reason = str(trade.get("reason", "UNKNOWN"))
+        reasons[reason] = reasons.get(reason, 0) + 1
+        gross_before_fees += (
+            float(trade.get("gross_exit_notional", 0.0))
+            - float(trade.get("gross_entry_notional", 0.0))
+        )
+        duration = max(
+            0.0,
+            (float(trade.get("exit_time", 0.0)) - float(trade.get("entry_time", 0.0)))
+            / max(float(interval_seconds), 1.0),
+        )
+        holding_hours.append(duration * float(interval_seconds) / 3600.0)
+        pnl = float(trade.get("net_pnl", 0.0))
+        if pnl > 0:
+            winners.append(pnl)
+        elif pnl < 0:
+            losers.append(pnl)
+    return {
+        "trades": len(trades),
+        "buy_signals": int(buy_signals) if buy_signals is not None else None,
+        "exit_reasons": dict(sorted(reasons.items())),
+        "gross_pnl_after_slippage_before_fees": gross_before_fees,
+        "fees_paid": float(result.get("fees_paid", 0.0)),
+        "net_pnl": float(result.get("net_pnl", 0.0)),
+        "average_holding_hours": (
+            sum(holding_hours) / len(holding_hours) if holding_hours else 0.0
+        ),
+        "average_winning_trade_eur": (
+            sum(winners) / len(winners) if winners else 0.0
+        ),
+        "average_losing_trade_eur": (
+            sum(losers) / len(losers) if losers else 0.0
+        ),
+    }
+
 def run_strategy_comparison(
     candles, *, initial_cash=1000.0, max_trade=100.0, fee_rate=0.0026,
     slippage_bps=5.0, stop_loss_pct=2.0, take_profit_pct=4.0,
@@ -217,6 +261,28 @@ def run_strategy_comparison(
     adaptive_result = run_backtest(
         candles, **common, signal_fn=lambda history: lookup_signal(adaptive, history)
     )
+    individual_results = {
+        name: run_backtest(
+            candles, **common,
+            signal_fn=lambda history, signals=signal_map: lookup_signal(signals, history),
+        )
+        for name, signal_map in individual_signals.items()
+    }
+    interval_seconds = metadata["candle_interval_seconds"]
+    trade_diagnostics = {
+        "baseline": _trade_diagnostics(baseline_result, interval_seconds=interval_seconds),
+        "equal_weight_ensemble": _trade_diagnostics(equal_result, interval_seconds=interval_seconds),
+        "adaptive_ensemble": _trade_diagnostics(adaptive_result, interval_seconds=interval_seconds),
+        **{
+            name: _trade_diagnostics(
+                item,
+                interval_seconds=interval_seconds,
+                buy_signals=sum(1 for signal in individual_signals[name].values()
+                                if signal.get("signal") == "BUY"),
+            )
+            for name, item in individual_results.items()
+        },
+    }
     return {
         "mode": "SHADOW_ONLY",
         "execution_effect": "NONE",
@@ -224,13 +290,8 @@ def run_strategy_comparison(
         "equal_weight_ensemble": equal_result,
         "adaptive_ensemble": adaptive_result,
         "metadata": metadata,
-        "individual_strategies": {
-            name: run_backtest(
-                candles, **common,
-                signal_fn=lambda history, signals=signal_map: lookup_signal(signals, history),
-            )
-            for name, signal_map in individual_signals.items()
-        },
+        "individual_strategies": individual_results,
+        "trade_diagnostics": trade_diagnostics,
         "comparison": {
             "same_candles": True,
             "same_costs": True,
