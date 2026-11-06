@@ -1109,3 +1109,58 @@ def test_trailing_stop_remains_authoritative_when_exit_is_net_negative(tmp_path)
         "SELECT COUNT(*) FROM audit WHERE event='PAPER_SELL_DEFERRED_NON_PROFIT'"
     ).fetchone()[0] == 0
     db.close()
+
+
+def test_scan_candle_cache_reuses_closed_candles_until_timeframe_boundary(tmp_path, monkeypatch):
+    engine, db = make_engine(tmp_path)
+
+    class CandleExchange:
+        def __init__(self):
+            self.calls = []
+        def candles(self, symbol, interval="60", limit=120):
+            self.calls.append((symbol, interval, limit))
+            return [[1, 10, 11, 9, 10.5, 100]]
+
+    exchange = CandleExchange()
+    engine.exchange = exchange
+    monkeypatch.setattr("src.trader.engine.time.time", lambda: 3600 * 100 + 3599)
+
+    first = engine._scan_candles("XBTEUR", interval="60", limit=120)
+    second = engine._scan_candles("XBTEUR", interval="60", limit=120)
+    assert first == second
+    assert len(exchange.calls) == 1
+
+    first[0][4] = 999
+    assert engine._scan_candles("XBTEUR", interval="60", limit=120)[0][4] == 10.5
+
+    monkeypatch.setattr("src.trader.engine.time.time", lambda: 3600 * 101 + 9)
+    engine._scan_candles("XBTEUR", interval="60", limit=120)
+    assert len(exchange.calls) == 1
+
+    monkeypatch.setattr("src.trader.engine.time.time", lambda: 3600 * 101 + 10)
+    engine._scan_candles("XBTEUR", interval="60", limit=120)
+    assert len(exchange.calls) == 2
+    assert engine._scan_candle_cache_misses == 2
+    assert engine._scan_candle_cache_hits == 3
+    db.close()
+
+
+def test_scan_candle_cache_does_not_cache_failed_exchange_requests(tmp_path, monkeypatch):
+    engine, db = make_engine(tmp_path)
+
+    class BrokenCandleExchange:
+        calls = 0
+        def candles(self, symbol, interval="60", limit=120):
+            self.calls += 1
+            raise TimeoutError("temporary OHLC outage")
+
+    exchange = BrokenCandleExchange()
+    engine.exchange = exchange
+    monkeypatch.setattr("src.trader.engine.time.time", lambda: 3600 * 100 + 10)
+
+    with pytest.raises(TimeoutError):
+        engine._scan_candles("XBTEUR")
+    with pytest.raises(TimeoutError):
+        engine._scan_candles("XBTEUR")
+    assert exchange.calls == 2
+    db.close()
