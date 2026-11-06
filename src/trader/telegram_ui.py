@@ -1728,11 +1728,11 @@ def build_app(s, engine, exchange):
             await send_topic(context, s.topic_general_id, "\n".join(lines))
             # Persist the cooldown only after Telegram accepted the alert. If
             # delivery fails, the next scan can retry instead of suppressing it.
-            await context.application.bot_data["run_blocking"].run(
-                lambda: __import__("src.trader.db", fromlist=["set_state"]).set_state(
-                    engine.db, "automatic_dip_alerts", result["alert_state"]
-                )
-            )
+            def persist_alert_state():
+                from .db import set_state
+                set_state(engine.db, "automatic_dip_alerts", result["alert_state"])
+
+            await context.application.bot_data["run_blocking"].run(persist_alert_state)
         except Exception as exc:
             log.error("Automatic dip scan failed: %s", type(exc).__name__)
             try:
