@@ -6,7 +6,7 @@ import pytest
 from src.trader.db import connect
 from src.trader.research_history import (
     store_candles, load_candles, save_research_run,
-    save_research_failure, list_research_runs,
+    save_research_failure, list_research_runs, validate_candle_continuity,
 )
 
 
@@ -65,6 +65,43 @@ def test_research_candles_reject_conflicting_history_without_partial_insert():
     assert saved == original
     db.close()
 
+
+
+def test_research_candle_continuity_rejects_missing_hourly_candle():
+    rows = candles(5)
+    rows.pop(2)
+    with pytest.raises(ValueError, match="gap.*missing"):
+        validate_candle_continuity(rows, interval="60")
+
+
+def test_research_candle_continuity_accepts_complete_hourly_history():
+    assert validate_candle_continuity(candles(5), interval="60") is True
+
+
+def test_perform_research_fails_closed_on_gapped_history(monkeypatch):
+    from types import SimpleNamespace
+    from src.trader.research_history import perform_research
+
+    db = connect(":memory:")
+    rows = candles(80)
+    rows.pop(20)
+
+    class Exchange:
+        def candles(self, symbol, interval, limit):
+            return rows[-limit:]
+
+    def should_not_train(*args, **kwargs):
+        raise AssertionError("research model must not run on gapped candles")
+
+    monkeypatch.setattr("src.trader.learning.research_candidate", should_not_train)
+    settings = SimpleNamespace(fee_rate=0.0026, paper_slippage_bps=17.5)
+    with pytest.raises(ValueError, match="gap.*missing"):
+        perform_research(db, Exchange(), settings, "XBTEUR", source="unit-test")
+
+    saved = list_research_runs(db, limit=1, symbol="XBTEUR")
+    assert saved[0]["outcome"] == "INSUFFICIENT_DATA"
+    assert "missing" in saved[0]["reasons"][0]
+    db.close()
 
 def test_research_run_history_persists_metrics_and_reasons():
     db = connect(":memory:")
