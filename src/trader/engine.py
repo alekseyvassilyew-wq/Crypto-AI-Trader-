@@ -9,7 +9,7 @@ from .learning import extract_features, predict_probability
 from .strategy_ensemble import evaluate_strategy_ensemble
 from .adaptive_strategy import evaluate_adaptive_strategy_weights
 from .paper import estimate_book_vwap
-from .db import audit, save_trade, save_paper_fill, get_state, set_state, save_paper_snapshot, record_shadow_prediction, settle_shadow_predictions, record_strategy_shadow_prediction, settle_strategy_shadow_predictions, get_strategy_shadow_regime_metrics
+from .db import audit, save_trade, save_paper_fill, save_paper_fx_conversion, get_state, set_state, save_paper_snapshot, record_shadow_prediction, settle_shadow_predictions, record_strategy_shadow_prediction, settle_strategy_shadow_predictions, get_strategy_shadow_regime_metrics
 
 
 log = logging.getLogger(__name__)
@@ -1167,6 +1167,25 @@ class Engine:
                             (conversion,) = self.paper.convert_route([
                                 (source_currency, "EUR", source_amount, source_to_eur),
                             ])
+                        if fee_legs == 2:
+                            fx_fee_eur = first_leg["fee"] + second_leg["fee"] / quote_units_per_eur
+                            fx_fee_amount = None
+                            fx_fee_currency = "MULTI"
+                        elif source_currency == "EUR":
+                            fx_fee_eur = conversion["fee"] / quote_units_per_eur
+                            fx_fee_amount = conversion["fee"]
+                            fx_fee_currency = quote_currency
+                        else:
+                            fx_fee_eur = conversion["fee"]
+                            fx_fee_amount = conversion["fee"]
+                            fx_fee_currency = "EUR"
+                        save_paper_fx_conversion(
+                            self.db,
+                            from_currency=conversion["from"], to_currency=conversion["to"],
+                            spent=conversion["spent"], received=conversion["received"],
+                            fee_amount=fx_fee_amount, fee_currency=fx_fee_currency,
+                            fee_eur=fx_fee_eur, legs=fee_legs,
+                        )
                         audit(
                             self.db, "PAPER_FX_CONVERSION",
                             f"{conversion['from']}->{conversion['to']} legs={fee_legs} "
