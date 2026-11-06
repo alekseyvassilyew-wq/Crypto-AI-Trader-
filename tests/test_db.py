@@ -759,3 +759,129 @@ def test_paper_fx_seed_audit_failure_rolls_back_wallet_and_fee_ledger():
     assert db.execute("SELECT COUNT(*) FROM paper_fx_conversions").fetchone()[0] == 0
     assert db.execute("SELECT COUNT(*) FROM audit WHERE event='PAPER_WALLET_SEED'").fetchone()[0] == 0
     db.close()
+
+
+def test_paper_account_journal_reconciles_baseline_fill_and_wallet():
+    from src.trader.db import (
+        ensure_paper_account_baseline, get_paper_account_reconciliation,
+        save_paper_fill,
+    )
+
+    db = connect(":memory:")
+    before = {
+        "cash": 20.0,
+        "cash_by_currency": {"EUR": 20.0},
+        "cash_cost_basis_eur": {"EUR": 20.0},
+        "positions": {},
+    }
+    assert ensure_paper_account_baseline(
+        db, cash_by_currency=before["cash_by_currency"],
+        positions=before["positions"], cash_cost_basis_eur=before["cash_cost_basis_eur"],
+    )
+    after = {
+        "cash": 9.99,
+        "cash_by_currency": {"EUR": 9.99},
+        "cash_cost_basis_eur": {"EUR": 9.99},
+        "positions": {
+            "XBTEUR": {
+                "qty": 1.0, "avg_price": 10.0, "quote_currency": "EUR",
+                "cost_basis_eur": 10.0, "entry_fees_eur": 0.01,
+            }
+        },
+    }
+    save_paper_fill(
+        db, cash_by_currency=after["cash_by_currency"],
+        cash_cost_basis_eur=after["cash_cost_basis_eur"],
+        positions=after["positions"], symbol="XBTEUR", side="Buy",
+        qty=1.0, quote=10.0, fee=0.01, price=10.0, fee_eur=0.01,
+        quote_currency="EUR", wallet_before=before,
+    )
+    result = get_paper_account_reconciliation(db)
+    assert result["status"] == "CONSISTENT_SINCE_BASELINE"
+    assert result["journal_chain_valid"] is True
+    assert result["current_wallet_matches_journal"] is True
+    assert result["fill_events"] == 1
+    assert result["cash_by_currency"] == {"EUR": 9.99}
+    assert result["open_positions"][0]["symbol"] == "XBTEUR"
+    assert result["full_history_reconciled"] is False
+    db.close()
+
+
+def test_paper_account_journal_reconciles_fx_conversion_atomically():
+    from src.trader.db import (
+        ensure_paper_account_baseline, get_paper_account_reconciliation,
+        save_paper_fx_conversion,
+    )
+
+    db = connect(":memory:")
+    before = {
+        "cash": 20.0,
+        "cash_by_currency": {"EUR": 20.0},
+        "cash_cost_basis_eur": {"EUR": 20.0},
+        "positions": {},
+    }
+    ensure_paper_account_baseline(
+        db, cash_by_currency=before["cash_by_currency"],
+        positions=before["positions"], cash_cost_basis_eur=before["cash_cost_basis_eur"],
+    )
+    after = {
+        "cash": 15.0,
+        "cash_by_currency": {"EUR": 15.0, "USD": 5.4945},
+        "cash_cost_basis_eur": {"EUR": 15.0, "USD": 5.0},
+        "positions": {},
+    }
+    save_paper_fx_conversion(
+        db, from_currency="EUR", to_currency="USD", spent=5.0,
+        received=5.4945, fee_amount=0.0055, fee_currency="USD",
+        fee_eur=0.005, legs=1, cash_by_currency=after["cash_by_currency"],
+        cash_cost_basis_eur=after["cash_cost_basis_eur"], positions=after["positions"],
+        wallet_before=before, audit_event="PAPER_FX_CONVERSION",
+        audit_details="EUR->USD",
+    )
+    result = get_paper_account_reconciliation(db)
+    assert result["status"] == "CONSISTENT_SINCE_BASELINE"
+    assert result["fx_events"] == 1
+    assert result["fx_conversion_fees_eur_since_baseline"] == pytest.approx(0.005)
+    assert result["current_wallet_matches_journal"] is True
+    db.close()
+
+
+def test_paper_account_reconciliation_detects_broken_event_chain():
+    from src.trader.db import (
+        ensure_paper_account_baseline, get_paper_account_reconciliation,
+        save_paper_fill,
+    )
+
+    db = connect(":memory:")
+    before = {
+        "cash": 20.0, "cash_by_currency": {"EUR": 20.0},
+        "cash_cost_basis_eur": {"EUR": 20.0}, "positions": {},
+    }
+    ensure_paper_account_baseline(
+        db, cash_by_currency=before["cash_by_currency"],
+        positions=before["positions"], cash_cost_basis_eur=before["cash_cost_basis_eur"],
+    )
+    after = {
+        "cash": 9.99, "cash_by_currency": {"EUR": 9.99},
+        "cash_cost_basis_eur": {"EUR": 9.99},
+        "positions": {"XBTEUR": {
+            "qty": 1.0, "avg_price": 10.0, "quote_currency": "EUR",
+            "cost_basis_eur": 10.0, "entry_fees_eur": 0.01,
+        }},
+    }
+    save_paper_fill(
+        db, cash_by_currency=after["cash_by_currency"],
+        cash_cost_basis_eur=after["cash_cost_basis_eur"], positions=after["positions"],
+        symbol="XBTEUR", side="Buy", qty=1.0, quote=10.0, fee=0.01, price=10.0,
+        fee_eur=0.01, quote_currency="EUR", wallet_before=before,
+    )
+    db.execute(
+        "UPDATE paper_account_events SET wallet_before_json=? WHERE event_type='FILL'",
+        ('{"cash":20,"cash_by_currency":{"EUR":19},"cash_cost_basis_eur":{"EUR":19},"positions":{}}',),
+    )
+    db.commit()
+    result = get_paper_account_reconciliation(db)
+    assert result["status"] == "INCONSISTENT"
+    assert result["journal_chain_valid"] is False
+    assert any("does not match prior event" in reason for reason in result["blocking_reasons"])
+    db.close()
