@@ -1202,3 +1202,30 @@ def test_paper_trade_report_formats_realized_eur_result_and_escapes_html():
         "| entry=100 | exit=97 | change=-3% | fee_eur=0.1 | net_pnl_eur=-3"
     )
     assert "XBT&lt;EUR" in safe_message
+
+
+def test_liquidation_equity_fails_closed_on_missing_position_mark(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.paper.buy("XBTEUR", 5, 100.0)
+    with pytest.raises(ValueError, match="Missing current PAPER mark price.*XBTEUR"):
+        engine._equity_after_liquidation({}, {"EUR": 1.0})
+    db.close()
+
+
+def test_liquidation_equity_fails_closed_on_missing_cash_fx_rate(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.paper.cash_by_currency["USD"] = 5.0
+    with pytest.raises(ValueError, match="Missing or invalid PAPER cash FX valuation.*USD"):
+        engine._equity_after_liquidation({}, {"EUR": 1.0})
+    db.close()
+
+
+def test_liquidation_equity_fails_closed_on_missing_position_fx_rate(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.paper.cash_by_currency["USD"] = 0.0
+    engine.paper.positions = {
+        "ETHUSD": {"qty": 0.1, "avg_price": 100.0, "quote_currency": "USD"}
+    }
+    with pytest.raises(ValueError, match="Missing PAPER position FX valuation.*ETHUSD"):
+        engine._equity_after_liquidation({"ETHUSD": 100.0}, {"EUR": 1.0})
+    db.close()
