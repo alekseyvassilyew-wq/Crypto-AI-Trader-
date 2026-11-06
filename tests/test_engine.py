@@ -1371,3 +1371,39 @@ def test_paper_sell_stays_open_when_visible_bid_depth_is_insufficient(tmp_path):
     assert db.execute("SELECT COUNT(*) FROM trades WHERE side='Sell'").fetchone()[0] == 0
     assert db.execute("SELECT COUNT(*) FROM audit WHERE event='PAPER_EXIT_SKIPPED'").fetchone()[0] == 1
     db.close()
+
+
+def test_paper_does_not_open_new_position_when_triggered_exit_lacks_depth(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.paper.buy("XBTEUR", 5.0, 100.0, quote_to_eur_rate=1.0)
+
+    class MultiBookExchange:
+        def order_book(self, symbol, depth=10):
+            if symbol == "XBTEUR":
+                return {"asks": [[101.0, 1.0]], "bids": [[99.0, 0.001]]}
+            return {"asks": [[51.0, 1.0]], "bids": [[50.9, 1.0]]}
+
+    engine.exchange = MultiBookExchange()
+    engine.scan = lambda **kwargs: [
+        {
+            "symbol": "XBTEUR", "quote": "EUR", "signal": "SELL", "score": 0,
+            "price": 99.0, "bid": 99.0, "ask": 99.1,
+            "spread_bps": 10, "turnover": 50000, "turnover_eur": 50000,
+            "reasons": ["strategy exit"],
+        },
+        {
+            "symbol": "ETHEUR", "quote": "EUR", "signal": "BUY", "score": 5,
+            "price": 50.95, "bid": 50.9, "ask": 51.0,
+            "spread_bps": 10, "turnover": 50000, "turnover_eur": 50000, "reasons": [],
+        },
+    ]
+
+    engine.start()
+    actions = engine.cycle()
+
+    assert "XBTEUR" in engine.paper.positions
+    assert "ETHEUR" not in engine.paper.positions
+    assert any("visible depth insufficient" in action for action in actions)
+    assert db.execute("SELECT COUNT(*) FROM trades WHERE side='Buy'").fetchone()[0] == 1
+    db.close()
+
