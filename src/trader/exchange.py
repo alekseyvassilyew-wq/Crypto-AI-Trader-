@@ -402,6 +402,7 @@ class KrakenSpot:
         params = self._history_time_bounds(start, end)
         offset = 0
         items = []
+        seen_ids = set()
         expected_count = None
         for _ in range(max_pages):
             page = self._request(endpoint, {**params, "ofs": offset}, private=True)
@@ -425,7 +426,11 @@ class KrakenSpot:
             for record_id, record in records.items():
                 if not isinstance(record, dict):
                     raise RuntimeError("Kraken returned malformed history record")
-                items.append({"id": str(record_id), **record})
+                normalized_id = str(record_id)
+                if not normalized_id or normalized_id in seen_ids:
+                    raise RuntimeError("Kraken returned incomplete history: duplicate record id")
+                seen_ids.add(normalized_id)
+                items.append({**record, "id": normalized_id})
             offset += len(records)
             if offset >= expected_count:
                 break
