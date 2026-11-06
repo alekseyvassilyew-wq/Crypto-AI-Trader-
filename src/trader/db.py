@@ -49,6 +49,19 @@ CREATE TABLE IF NOT EXISTS kraken_account_sync(
     status TEXT NOT NULL
 );
 \nCREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY, ts TEXT DEFAULT CURRENT_TIMESTAMP, event TEXT NOT NULL, details TEXT);
+CREATE TABLE IF NOT EXISTS paper_fx_conversions(
+    id INTEGER PRIMARY KEY,
+    ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    from_currency TEXT NOT NULL,
+    to_currency TEXT NOT NULL,
+    spent REAL NOT NULL,
+    received REAL NOT NULL,
+    fee_amount REAL,
+    fee_currency TEXT,
+    fee_eur REAL,
+    legs INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_paper_fx_conversions_ts ON paper_fx_conversions(ts);
 CREATE TABLE IF NOT EXISTS trades(id INTEGER PRIMARY KEY, ts TEXT DEFAULT CURRENT_TIMESTAMP, mode TEXT NOT NULL, symbol TEXT NOT NULL, side TEXT NOT NULL, qty REAL NOT NULL, quote REAL NOT NULL, fee REAL NOT NULL, price REAL NOT NULL, status TEXT NOT NULL, order_id TEXT, fee_eur REAL, realized_pnl_eur REAL);
 CREATE TABLE IF NOT EXISTS app_state(key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS telegram_report_pages(report_key TEXT PRIMARY KEY, pages_json TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
@@ -204,6 +217,36 @@ def audit(db, event, details=""):
     with db:
         db.execute("INSERT INTO audit(event,details) VALUES(?,?)", (event, str(details)))
 
+
+def save_paper_fx_conversion(db, *, from_currency, to_currency, spent, received,
+                             fee_amount=None, fee_currency=None, fee_eur=None, legs=1):
+    """Persist a PAPER FX conversion and its independently valued fee."""
+    source = str(from_currency or "").strip().upper()
+    target = str(to_currency or "").strip().upper()
+    currency = None if fee_currency is None else str(fee_currency).strip().upper()
+    if not source or not target or source == target:
+        raise ValueError("PAPER FX conversion currencies are invalid")
+    values = (float(spent), float(received))
+    if not all(math.isfinite(value) and value > 0 for value in values):
+        raise ValueError("PAPER FX conversion amounts must be finite and positive")
+    if fee_amount is not None:
+        fee_amount = float(fee_amount)
+        if not math.isfinite(fee_amount) or fee_amount < 0:
+            raise ValueError("PAPER FX fee amount must be finite and non-negative")
+    if fee_eur is not None:
+        fee_eur = float(fee_eur)
+        if not math.isfinite(fee_eur) or fee_eur < 0:
+            raise ValueError("PAPER FX EUR fee must be finite and non-negative")
+    if isinstance(legs, bool) or not isinstance(legs, int) or legs < 1:
+        raise ValueError("PAPER FX conversion legs must be a positive integer")
+    with db:
+        db.execute(
+            "INSERT INTO paper_fx_conversions"
+            "(from_currency,to_currency,spent,received,fee_amount,fee_currency,fee_eur,legs) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (source, target, values[0], values[1], fee_amount, currency, fee_eur, legs),
+        )
+
 def save_trade(db, mode, symbol, side, qty, quote, fee, price, status, order_id=None, *, fee_eur=None, realized_pnl_eur=None):
     """Persist a PAPER fill with optional EUR-denominated accounting fields."""
     normalized_fee_eur = None if fee_eur is None else float(fee_eur)
@@ -305,6 +348,11 @@ def get_paper_metrics(db, hours=24):
         "WHERE mode='PAPER' AND status='FILLED' AND julianday(ts) >= julianday('now', ?) ORDER BY ts ASC",
         (f"-{int(hours)} hours",),
     ).fetchall()
+    fx_rows = db.execute(
+        "SELECT fee_eur FROM paper_fx_conversions "
+        "WHERE julianday(ts) >= julianday('now', ?) ORDER BY ts ASC",
+        (f"-{int(hours)} hours",),
+    ).fetchall()
     sell_rows = [row for row in trades if row["side"].lower() == "sell"]
     pnl_values = [float(row["realized_pnl_eur"]) for row in sell_rows if row["realized_pnl_eur"] is not None]
     wins = [value for value in pnl_values if value > 0]
@@ -334,6 +382,9 @@ def get_paper_metrics(db, hours=24):
         "realized_pnl_eur": sum(pnl_values),
         "profit_factor": gross_profit / gross_loss if gross_loss else ("INF" if gross_profit else 0.0),
         "total_fees_eur": sum(float(row["fee_eur"]) for row in trades if row["fee_eur"] is not None),
+        "fx_conversions": len(fx_rows),
+        "total_fx_conversion_fees_eur": sum(float(row["fee_eur"]) for row in fx_rows if row["fee_eur"] is not None),
+        "fx_conversions_without_eur_fee_valuation": sum(row["fee_eur"] is None for row in fx_rows),
         "by_symbol": sorted(by_symbol.values(), key=lambda item: item["realized_pnl_eur"], reverse=True),
     }
     if not rows:
