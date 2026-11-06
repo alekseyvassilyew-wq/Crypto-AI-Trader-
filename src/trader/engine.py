@@ -296,7 +296,9 @@ class Engine:
         if state.get("date") != day:
             if prices is None:
                 return False
-            rates = self._fx_rates(prices)
+            # Daily risk baselines must use current executable-market FX marks,
+            # never a cached fallback that can conceal currency moves.
+            rates = self._fresh_fx_rates(prices)
             start_equity = self._equity_after_liquidation(prices, rates)
             set_state(self.db, "daily", {
                 "date": day,
@@ -470,11 +472,12 @@ class Engine:
     def daily_pnl(self, prices=None):
         prices = self.last_prices if prices is None else prices or {}
         if not prices and self.paper.positions:
-            return 0.0
+            raise ValueError("Cannot calculate PAPER daily PnL: open positions have no current market marks")
         if not self._ensure_day(prices if prices else None):
             return 0.0
         state = get_state(self.db, "daily", {})
-        return self._equity_after_liquidation(prices, self._fx_rates(prices)) - float(state.get("start_equity", self.paper.cash))
+        # Risk gates require fresh FX for every non-EUR wallet balance and position.
+        return self._equity_after_liquidation(prices, self._fresh_fx_rates(prices)) - float(state.get("start_equity", self.paper.cash))
 
     def scan_one(self, symbol, tickers=None, fx_rates=None, quote_currency=None):
         tickers = tickers if tickers is not None else self.exchange.tickers([symbol])
@@ -1024,7 +1027,8 @@ class Engine:
                 rates = self._fx_rates(prices)
                 fresh_rates = self._fresh_fx_rates(prices)
                 fresh_buy_rates = self._fresh_fx_buy_rates(prices)
-                equity_eur = self._equity_after_liquidation(prices, rates)
+                # Never size risk using cached FX valuation fallbacks.
+                equity_eur = self._equity_after_liquidation(prices, fresh_rates)
                 atr_percent = max(0.0, float(signal.get("atr_percent") or 0.0))
                 stop_distance_pct = max(float(self.s.stop_loss_pct), atr_percent * 1.5, 0.5)
                 risk_budget_eur = equity_eur * float(getattr(self.s, "risk_per_trade_pct", 0.5)) / 100.0
