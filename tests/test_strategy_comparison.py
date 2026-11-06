@@ -48,7 +48,8 @@ def test_walk_forward_diagnostics_do_not_change_when_future_data_changes():
     assert first["walk_forward"][:cutoff + 1] == second["walk_forward"][:cutoff + 1]
 
 
-def test_walk_forward_uses_only_settled_forecasts_for_adaptive_weights():
+def test_walk_forward_uses_only_settled_forecasts_for_adaptive_weights(monkeypatch):
+    monkeypatch.setattr(strategy_comparison, "evaluate_strategy_ensemble", always_buy)
     rows = candles()
     _, _, result = _walk_forward_signals(rows, fee_rate=0.0026, slippage_bps=5)
     assert result["mode"] == "SHADOW_ONLY"
@@ -56,11 +57,14 @@ def test_walk_forward_uses_only_settled_forecasts_for_adaptive_weights():
     assert result["execution_effect"] == "NONE"
     diagnostics = result["walk_forward"]
     assert diagnostics[0]["resolved_forecasts_before_bar"] == 0
+    assert diagnostics[1]["resolved_forecasts_before_bar"] == 0
+    assert diagnostics[2]["resolved_forecasts_before_bar"] == 0
+    assert diagnostics[3]["resolved_forecasts_before_bar"] > 0
     assert all(
         later["resolved_forecasts_before_bar"] >= earlier["resolved_forecasts_before_bar"]
         for earlier, later in zip(diagnostics, diagnostics[1:])
     )
-    assert result["settled_forecasts"] >= 0
+    assert result["settled_forecasts"] > 0
     assert result["unresolved_forecasts"] >= 0
     assert result["candle_interval_seconds"] == 3600
     assert HORIZON_SECONDS == 10800
