@@ -1678,11 +1678,11 @@ def build_app(s, engine, exchange):
                         key=lambda item: float((item[1] or {}).get("last_alert_epoch", 0.0)),
                         reverse=True,
                     )[:150])
-                set_state(engine.db, "automatic_dip_alerts", alert_state)
                 return {
                     "results": results,
                     "ticker_count": len(tickers),
                     "generated_at": now,
+                    "alert_state": alert_state,
                 }
 
             result = await context.application.bot_data["run_blocking"].run(build_automatic_dip_report)
@@ -1722,7 +1722,17 @@ def build_app(s, engine, exchange):
                 "⚠️ Это аналитическая оценка, не гарантия прибыли и не приказ на покупку.",
                 "Сканер не открывает сделки и не меняет PAPER-портфель.",
             ])
+            if not s.telegram_group_chat_id:
+                log.warning("Automatic dip alert not sent: Telegram group chat is not configured")
+                return
             await send_topic(context, s.topic_general_id, "\n".join(lines))
+            # Persist the cooldown only after Telegram accepted the alert. If
+            # delivery fails, the next scan can retry instead of suppressing it.
+            def persist_alert_state():
+                from .db import set_state
+                set_state(engine.db, "automatic_dip_alerts", result["alert_state"])
+
+            await context.application.bot_data["run_blocking"].run(persist_alert_state)
         except Exception as exc:
             log.error("Automatic dip scan failed: %s", type(exc).__name__)
             try:
