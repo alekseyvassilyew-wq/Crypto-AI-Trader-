@@ -321,9 +321,12 @@ def get_paper_metrics(db, hours=24):
         item["closed_trades"] += 1
         item["realized_pnl_eur"] += value
         item["wins"] += int(value > 0)
+    valued_closed_trades = len(pnl_values)
+    unvalued_closed_trades = sum(row["realized_pnl_eur"] is None for row in sell_rows)
     trade_metrics = {
-        "closed_trades": len(pnl_values),
-        "closed_trades_without_eur_valuation": sum(row["realized_pnl_eur"] is None for row in sell_rows),
+        "closed_trades": len(sell_rows),
+        "closed_trades_with_eur_valuation": valued_closed_trades,
+        "closed_trades_without_eur_valuation": unvalued_closed_trades,
         "fills_without_eur_fee_valuation": sum(row["fee_eur"] is None for row in trades),
         "winning_trades": len(wins),
         "losing_trades": len(losses),
