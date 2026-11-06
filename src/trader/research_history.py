@@ -70,13 +70,30 @@ def store_candles(db, symbol, candles, interval="60"):
         return 0
     _ensure_schema(db)
     with db:
+        # Closed historical candles are immutable research inputs. Re-fetching
+        # identical rows is idempotent, but silently replacing a previously
+        # stored candle would rewrite the evidence behind old model results.
+        first_ts, last_ts = normalized[0][2], normalized[-1][2]
+        existing_rows = db.execute(
+            """SELECT ts,open,high,low,close,volume
+               FROM ml_research_candles
+               WHERE symbol=? AND interval=? AND ts BETWEEN ? AND ?""",
+            (symbol, str(interval), first_ts, last_ts),
+        ).fetchall()
+        existing = {float(row["ts"]): tuple(float(row[i]) for i in range(1, 6))
+                    for row in existing_rows}
+        for item in normalized:
+            ts = item[2]
+            previous_values = existing.get(ts)
+            incoming_values = item[3:]
+            if previous_values is not None and previous_values != incoming_values:
+                raise ValueError(
+                    f"Conflicting historical research candle for {symbol} at timestamp {ts}"
+                )
         db.executemany(
-            """INSERT INTO ml_research_candles
+            """INSERT OR IGNORE INTO ml_research_candles
                (symbol, interval, ts, open, high, low, close, volume)
-               VALUES(?,?,?,?,?,?,?,?)
-               ON CONFLICT(symbol, interval, ts) DO UPDATE SET
-                 open=excluded.open, high=excluded.high, low=excluded.low,
-                 close=excluded.close, volume=excluded.volume""",
+               VALUES(?,?,?,?,?,?,?,?)""",
             normalized,
         )
         db.execute(
