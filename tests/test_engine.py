@@ -1080,3 +1080,32 @@ def test_paper_slippage_rate_converts_and_rejects_out_of_range_values(tmp_path):
         with pytest.raises(ValueError):
             engine._slippage_rate()
     db.close()
+
+def test_trailing_stop_remains_authoritative_when_exit_is_net_negative(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.s.trailing_stop_pct = 1.5
+    engine.paper.buy("XBTEUR", 5, 100.0, quote_to_eur_rate=1.0)
+    # A modest peak followed by a retracement below entry triggers the
+    # trailing stop without crossing the separate hard stop-loss threshold.
+    engine.paper.update_peak("XBTEUR", 100.5)
+    engine.scan = lambda **kwargs: [{
+        "symbol": "XBTEUR", "quote": "EUR", "signal": "HOLD", "score": 0,
+        "price": 98.95, "bid": 98.9, "ask": 99.0,
+        "spread_bps": 10, "turnover": 50000, "turnover_eur": 50000,
+        "reasons": [],
+    }]
+    engine.start()
+
+    actions = engine.cycle()
+
+    assert any("XBTEUR SELL TRAILING_STOP" in action for action in actions)
+    assert "XBTEUR" not in engine.paper.positions
+    trade = db.execute(
+        "SELECT price FROM trades WHERE side='Sell' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    assert trade is not None
+    assert trade["price"] == pytest.approx(98.9 * 0.9995)
+    assert db.execute(
+        "SELECT COUNT(*) FROM audit WHERE event='PAPER_SELL_DEFERRED_NON_PROFIT'"
+    ).fetchone()[0] == 0
+    db.close()
