@@ -86,3 +86,25 @@ def test_shadow_settlement_rejects_invalid_execution_costs(tmp_path):
         settle_shadow_predictions(db, symbol="XBTEUR", candles=candles,
                                   fee_rate=float("nan"), slippage_bps=5)
     db.close()
+
+
+def test_shadow_settlement_uses_candle_close_at_target_not_next_candle_open(tmp_path):
+    db = connect(tmp_path / "shadow-candle-close.sqlite3")
+    assert record_shadow_prediction(
+        db, symbol="XBTEUR", signal_ts=100, target_ts=125, probability=0.8,
+        threshold=0.58, entry_price=100,
+    )
+    candles = [
+        [60, 100, 101, 99, 100, 1000],
+        [120, 100, 103, 99, 102, 1000],
+        [180, 102, 105, 101, 104, 1000],
+    ]
+    assert settle_shadow_predictions(
+        db, symbol="XBTEUR", candles=candles, fee_rate=0,
+        slippage_bps=0, interval_seconds=60,
+    ) == 1
+    row = db.execute(
+        "SELECT exit_price FROM ml_shadow_predictions WHERE symbol='XBTEUR'"
+    ).fetchone()
+    assert row["exit_price"] == 102
+    db.close()
