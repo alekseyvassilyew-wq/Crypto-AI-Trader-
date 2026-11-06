@@ -45,7 +45,7 @@ def _ensure_schema(db):
 
 
 def store_candles(db, symbol, candles, interval="60"):
-    """Upsert validated, closed OHLCV candles; retain up to two years."""
+    """Insert immutable validated closed OHLCV candles; retain up to two years."""
     symbol = str(symbol).strip().upper().replace("/", "")
     if not symbol:
         raise ValueError("Research candle symbol must not be empty")
@@ -198,33 +198,3 @@ def list_research_runs(db, limit=10, symbol=None):
 
 def perform_research(db, exchange, settings, symbol, source="manual"):
     """Fetch, accumulate and evaluate candles; persist both successes and failures."""
-    from .learning import research_candidate
-    from .db import set_state
-
-    symbol = str(symbol).strip().upper().replace("/", "")
-    try:
-        latest = exchange.candles(symbol, interval="60", limit=720)
-        store_candles(db, symbol, latest, interval="60")
-        history = load_candles(db, symbol, interval="60")
-        # If the history table is new, this is the same recent window as Kraken.
-        candidate = research_candidate(
-            history,
-            fee_rate=settings.fee_rate,
-            slippage_bps=settings.paper_slippage_bps,
-        )
-        trained_at = datetime.now(timezone.utc)
-        candidate.update({
-            "symbol": symbol,
-            "model_version": trained_at.strftime("%Y%m%dT%H%M%S"),
-            "trained_at_utc": trained_at.isoformat(),
-            "research_source": source,
-            "history_candles": len(history),
-            "history_start_utc": datetime.fromtimestamp(history[0][0], timezone.utc).isoformat(),
-            "history_end_utc": datetime.fromtimestamp(history[-1][0], timezone.utc).isoformat(),
-        })
-        set_state(db, "ml_candidate_" + symbol, candidate)
-        save_research_run(db, candidate, source=source)
-        return candidate
-    except Exception as exc:
-        save_research_failure(db, symbol, source, f"{type(exc).__name__}: {exc}")
-        raise
