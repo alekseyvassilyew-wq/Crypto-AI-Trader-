@@ -1594,6 +1594,147 @@ def build_app(s, engine, exchange):
         fn = handlers.get(q.data)
         if fn: await fn(update, context)
 
+    async def automatic_dip_scan_job(context):
+        """Periodically analyze sharp EUR-market declines and alert on meaningful status changes."""
+        import time
+        if context.application.bot_data.get("automatic_dip_scan_running"):
+            return
+        context.application.bot_data["automatic_dip_scan_running"] = True
+        try:
+            def build_automatic_dip_report():
+                from datetime import datetime, timezone
+                from .db import get_state, set_state
+                from .indicators import analyze as analyze_candles
+                from .market_analysis import (
+                    select_sharp_decliners, evaluate_dip_candidate,
+                    should_alert_dip_status,
+                )
+
+                now = datetime.now(timezone.utc)
+                last_scan = engine.last_scan_at
+                if last_scan is None:
+                    return None
+                if last_scan.tzinfo is None:
+                    last_scan = last_scan.replace(tzinfo=timezone.utc)
+                if (now - last_scan).total_seconds() > 180:
+                    log.info("Automatic dip scan skipped: latest market snapshot is stale")
+                    return None
+
+                tickers = list(engine.last_ticker_data.values())
+                candidates = select_sharp_decliners(
+                    tickers,
+                    min_drop_pct=-5.0,
+                    min_turnover_eur=float(s.min_turnover),
+                    max_spread_bps=float(s.max_spread_bps),
+                    limit=3,
+                )
+                if not candidates:
+                    return {"results": [], "ticker_count": len(tickers), "generated_at": now}
+
+                alert_state = get_state(engine.db, "automatic_dip_alerts", {})
+                if not isinstance(alert_state, dict):
+                    alert_state = {}
+                results = []
+                for ticker in candidates:
+                    symbol = ticker["symbol"]
+                    try:
+                        frames = {
+                            "1h": analyze_candles(exchange.candles(symbol, interval="60", limit=120)),
+                            "4h": analyze_candles(exchange.candles(symbol, interval="240", limit=100)),
+                            "1d": analyze_candles(exchange.candles(symbol, interval="1440", limit=100)),
+                        }
+                        evaluation = evaluate_dip_candidate(
+                            {**ticker, "turnover_eur": ticker.get("turnover24h", 0.0)},
+                            frames,
+                            min_turnover_eur=float(s.min_turnover),
+                            max_spread_bps=float(s.max_spread_bps),
+                        )
+                    except Exception as exc:
+                        evaluation = {
+                            "status": "WATCH", "score": 0,
+                            "reasons": [f"Свечи/анализ временно недоступны: {type(exc).__name__}"],
+                        }
+
+                    previous = alert_state.get(symbol, {})
+                    should_alert = should_alert_dip_status(
+                        previous, evaluation["status"], now.timestamp(),
+                        cooldown_seconds=21600,
+                    )
+                    previous = previous if isinstance(previous, dict) else {}
+                    alert_state[symbol] = {
+                        "status": evaluation["status"],
+                        "last_alert_epoch": now.timestamp() if should_alert else previous.get("last_alert_epoch", 0.0),
+                    }
+                    results.append({
+                        "ticker": ticker,
+                        "evaluation": evaluation,
+                        "should_alert": should_alert,
+                    })
+
+                # Bound persistent state while retaining the most recently alerted symbols.
+                if len(alert_state) > 150:
+                    alert_state = dict(sorted(
+                        alert_state.items(),
+                        key=lambda item: float((item[1] or {}).get("last_alert_epoch", 0.0)),
+                        reverse=True,
+                    )[:150])
+                set_state(engine.db, "automatic_dip_alerts", alert_state)
+                return {
+                    "results": results,
+                    "ticker_count": len(tickers),
+                    "generated_at": now,
+                }
+
+            result = await context.application.bot_data["run_blocking"].run(build_automatic_dip_report)
+            if not result:
+                return
+            alerts = [item for item in result["results"] if item["should_alert"]]
+            if not alerts:
+                return
+
+            labels = {
+                "POTENTIAL_BUY": "🟢 ПОТЕНЦИАЛЬНЫЙ ОТСКОК",
+                "WATCH": "🟡 НАБЛЮДАТЬ",
+                "REJECT": "🔴 НЕ РАССМАТРИВАТЬ",
+            }
+            lines = [
+                "🤖 АВТОМАТИЧЕСКИЙ СКАНЕР ПАДЕНИЙ · KRAKEN",
+                "━━━━━━━━━━━━━━━━━━",
+                f"🕒 {result['generated_at'].strftime('%d.%m.%Y %H:%M UTC')}",
+                f"📚 Тикеров в рыночном снимке: {result['ticker_count']:,}",
+                "Фильтр: падение от 5% за UTC-день, EUR-пара, ликвидность и спред.",
+                "Подтверждение: закрытые свечи 1h / 4h / 1d.",
+                "━━━━━━━━━━━━━━━━━━",
+            ]
+            for item in alerts:
+                ticker = item["ticker"]
+                evaluation = item["evaluation"]
+                lines.extend([
+                    f"{labels[evaluation['status']]} · {ticker['symbol']}",
+                    f"📉 Изменение UTC-дня: {float(ticker['dayChangePct']):+.2f}%  •  Оценка: {evaluation['score']}/8",
+                    f"💧 Оборот: €{float(ticker['turnover24h']):,.0f}/24ч  •  Спред: {float(ticker['spread_bps']):.1f} bps",
+                ])
+                lines.extend(f"  • {reason}" for reason in evaluation["reasons"][:3])
+                lines.append("")
+            lines.extend([
+                "━━━━━━━━━━━━━━━━━━",
+                "🔔 Повторные уведомления ограничены интервалом 6 часов; изменение статуса сообщается сразу.",
+                "⚠️ Это аналитическая оценка, не гарантия прибыли и не приказ на покупку.",
+                "Сканер не открывает сделки и не меняет PAPER-портфель.",
+            ])
+            await send_topic(context, s.topic_general_id, "\n".join(lines))
+        except Exception as exc:
+            log.error("Automatic dip scan failed: %s", type(exc).__name__)
+            try:
+                await send_topic(
+                    context, s.topic_errors_id,
+                    f"Ошибка автоматического сканера падений: {safe_error_message(exc)}",
+                )
+            except Exception:
+                log.error("Could not send automatic dip scan error to Telegram")
+        finally:
+            context.application.bot_data["automatic_dip_scan_running"] = False
+
     async def ml_research_job(context):
         """Hourly, bounded, rotating model research across all eligible markets."""
         try:
@@ -2056,5 +2197,6 @@ def build_app(s, engine, exchange):
     # Start once, then cycle_job schedules the next scan after completion.
     # This fixed-delay cadence avoids overlapping jobs and skipped scans.
     app.job_queue.run_once(cycle_job, when=10, name="paper-cycle")
+    app.job_queue.run_repeating(automatic_dip_scan_job, interval=900, first=180, name="automatic-dip-monitor")
     app.job_queue.run_repeating(ml_research_job, interval=3600, first=60, name="hourly-ml-research")
     return app

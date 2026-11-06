@@ -146,3 +146,18 @@ def test_dip_candidate_rejects_illiquid_and_wide_spread_assets():
     )
     assert low_liquidity["status"] == "REJECT"
     assert wide_spread["status"] == "REJECT"
+
+def test_automatic_dip_alerts_on_new_status_and_respects_cooldown():
+    from src.trader.market_analysis import should_alert_dip_status
+
+    assert should_alert_dip_status({}, "WATCH", 1000)
+    previous = {"status": "WATCH", "last_alert_epoch": 1000}
+    assert not should_alert_dip_status(previous, "WATCH", 1001)
+    assert should_alert_dip_status(previous, "POTENTIAL_BUY", 1001)
+    assert should_alert_dip_status(previous, "WATCH", 22600)
+
+
+def test_automatic_dip_alert_rejects_invalid_status():
+    from src.trader.market_analysis import should_alert_dip_status
+
+    assert not should_alert_dip_status({}, "UNKNOWN", 1000)
