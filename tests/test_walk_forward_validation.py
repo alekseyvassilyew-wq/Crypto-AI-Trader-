@@ -53,7 +53,9 @@ def test_walk_forward_validation_gates_all_orders_until_test_window(monkeypatch)
     # The first position for each always-buy strategy must be filled only
     # after the test boundary; training and embargo candles cannot trade.
     for strategy_name in strategy_comparison.STRATEGY_NAMES:
-        assert result["folds"][0]["strategies"][strategy_name]["trades"] >= 1
+        strategy_fold = result["folds"][0]["strategies"][strategy_name]
+        assert strategy_fold["trades"] >= 1
+        assert strategy_fold["first_entry_timestamp"] >= first_allowed_fill_time
 
 
 def test_walk_forward_validation_rejects_history_without_complete_fold():
