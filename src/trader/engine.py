@@ -156,6 +156,42 @@ class Engine:
         self.limits = Limits(settings.max_trade, settings.max_daily_loss, settings.max_positions,
                              settings.max_spread_bps, settings.min_turnover)
         self._ensure_day()
+        # Closed OHLC candles are stable for their entire timeframe bucket.
+        # Cache only scan-time data; command-driven research/backtests continue
+        # to request fresh exchange data through the exchange client directly.
+        self._scan_candle_cache = {}
+        self._scan_candle_cache_limit = 512
+
+    def _scan_candles(self, symbol, interval="60", limit=120):
+        """Reuse closed candles until the next UTC timeframe boundary.
+
+        Kraken's OHLC endpoint is deliberately rate-limited. Re-fetching the
+        same closed 1h candle every minute wastes requests and delays scans.
+        The open candle is already excluded by Exchange.candles(), so a UTC
+        bucket change is the correct cache invalidation boundary.
+        """
+        minutes = int(interval)
+        if minutes <= 0:
+            raise ValueError("Candle interval must be positive")
+        now = time.time()
+        bucket = int(now // (minutes * 60))
+        key = (str(symbol).upper(), str(interval), int(limit))
+        cached = self._scan_candle_cache.get(key)
+        if cached and cached[0] == bucket:
+            # Refresh insertion order for bounded LRU eviction.
+            self._scan_candle_cache.pop(key, None)
+            self._scan_candle_cache[key] = cached
+            return copy.deepcopy(cached[1])
+
+        candles = self.exchange.candles(symbol, interval=str(interval), limit=int(limit))
+        self._scan_candle_cache[key] = (bucket, copy.deepcopy(candles))
+        # Drop expired entries first, then cap memory for long-running workers.
+        for old_key, old_value in list(self._scan_candle_cache.items()):
+            if old_key[1].isdigit() and old_value[0] < int(now // (int(old_key[1]) * 60)):
+                self._scan_candle_cache.pop(old_key, None)
+        while len(self._scan_candle_cache) > self._scan_candle_cache_limit:
+            self._scan_candle_cache.pop(next(iter(self._scan_candle_cache)))
+        return copy.deepcopy(candles)
 
     def _slippage_rate(self):
         """Conservative PAPER execution slippage as a decimal fraction."""
@@ -434,7 +470,7 @@ class Engine:
         turnover_eur = turnover * (fx_rates or {"EUR": 1.0}).get(quote_currency, 0.0)
         try:
             try:
-                base_candles = self.exchange.candles(symbol, interval="60", limit=120)
+                base_candles = self._scan_candles(symbol, interval="60", limit=120)
             except TypeError:
                 # Backwards-compatible adapter for simple test doubles.
                 base_candles = self.exchange.candles(symbol)
@@ -443,8 +479,8 @@ class Engine:
             # limiting Kraken REST load while refusing unconfirmed BUY signals.
             if result.get("signal") == "BUY" and getattr(self.s, "enable_multi_timeframe", False):
                 try:
-                    candles_4h = self.exchange.candles(symbol, interval="240", limit=100)
-                    candles_1d = self.exchange.candles(symbol, interval="1440", limit=100)
+                    candles_4h = self._scan_candles(symbol, interval="240", limit=100)
+                    candles_1d = self._scan_candles(symbol, interval="1440", limit=100)
                     result = confirm_multi_timeframe(result, candles_4h, candles_1d)
                 except Exception as mtf_exc:
                     result["signal"] = "HOLD"
