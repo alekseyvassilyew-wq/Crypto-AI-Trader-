@@ -419,7 +419,7 @@ def test_saved_fx_snapshot_values_non_eur_wallet_after_restart(tmp_path):
     rates = engine._fx_rates({})
 
     assert rates["USD"] == pytest.approx(0.9)
-    assert engine.paper.equity({}, rates) == pytest.approx(
+    assert engine.paper.equity({"ETHUSD": 10.0}, rates) == pytest.approx(
         20.0 + engine.paper.balance("USD") * 0.9
         + engine.paper.positions["ETHUSD"]["qty"] * 10.0 * 0.9
     )
