@@ -1810,6 +1810,7 @@ def build_app(s, engine, exchange):
             "/learn XBTEUR — обучение/проверка ML-кандидата без торговли\n/learning — текущие кандидаты и shadow-тест\n"
             "/research [SYMBOL] — история экспериментов, причины отказа и режимы рынка\n"
             "/backtest XBTEUR — тест одного рынка; /backtest portfolio — до 5 рынков\n"
+            "/strategycompare TON — сравнение базовой, равновесной и адаптивной стратегий (SHADOW)\n"
             "/interval 1m|5m|15m|30m|1h|4h|24h — интервал\n"
             "/run — запуск PAPER\n/pause — пауза\n/stop — аварийная остановка\n"
             "/topicid — ID группы и темы\n/testtopics или /test_topics — проверка тем"
