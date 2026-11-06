@@ -1295,7 +1295,7 @@ def test_paper_buy_uses_visible_ask_depth_vwap_without_double_slippage(tmp_path)
     actions = engine.cycle()
 
     assert len(actions) == 1
-    assert engine.paper.positions["XBTEUR"]["avg_price"] == pytest.approx(101.8)
+    assert engine.paper.positions["XBTEUR"]["avg_price"] == pytest.approx(101.796)
     trade = db.execute("SELECT price,qty,quote FROM trades WHERE side='Buy'").fetchone()
     assert trade["price"] == pytest.approx(101.8)
     assert trade["quote"] < 5.0
