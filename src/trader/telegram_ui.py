@@ -2065,6 +2065,65 @@ def build_app(s, engine, exchange):
                 name="paper-cycle",
             )
 
+    async def cycle_watchdog_job(context):
+        """Alert once when market scans stop completing, and confirm recovery."""
+        import time
+        from .monitoring import market_cycle_health
+
+        now_utc = datetime.now(timezone.utc)
+        started_at = context.application.bot_data.get("service_started_at")
+        health = market_cycle_health(
+            engine.last_scan_at,
+            started_at,
+            now_utc,
+            engine.scan_interval_seconds,
+        )
+        stale = health["status"] == "stale"
+        previous = bool(context.application.bot_data.get("cycle_watchdog_stale", False))
+        if stale and not previous:
+            age = int(health["age_seconds"])
+            threshold = int(health["threshold_seconds"])
+            log.error(
+                "Market cycle watchdog detected stale scan: age=%ds threshold=%ds",
+                age, threshold,
+            )
+            try:
+                await send_topic(
+                    context,
+                    s.topic_errors_id,
+                    "🚨 <b>ОСТАНОВКА СКАНИРОВАНИЯ РЫНКА</b>\n"
+                    f"Последнее успешное сканирование: {age} сек. назад.\n"
+                    f"Порог обнаружения: {threshold} сек.\n"
+                    "Новые рыночные данные не подтверждены. PAPER не должен считаться работающим.",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                log.error("Could not send market-cycle watchdog alert")
+            context.application.bot_data["cycle_watchdog_stale"] = True
+        elif not stale and previous:
+            log.info("Market cycle watchdog: scan activity recovered")
+            try:
+                await send_topic(
+                    context,
+                    s.topic_general_id,
+                    "🟢 <b>СКАНИРОВАНИЕ РЫНКА ВОССТАНОВЛЕНО</b>\n"
+                    "Поступило новое успешное сканирование Kraken.",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                log.error("Could not send market-cycle recovery notification")
+            context.application.bot_data["cycle_watchdog_stale"] = False
+
+        last_log = float(context.application.bot_data.get("cycle_watchdog_log_at", 0.0))
+        monotonic_now = time.monotonic()
+        if monotonic_now - last_log >= 300:
+            log.info(
+                "Market cycle watchdog heartbeat: status=%s age_seconds=%s",
+                health["status"],
+                int(health["age_seconds"]) if health["age_seconds"] is not None else "unknown",
+            )
+            context.application.bot_data["cycle_watchdog_log_at"] = monotonic_now
+
     # External event alerts must tolerate transient Telegram API latency.
     telegram_request = HTTPXRequest(
         connect_timeout=10, read_timeout=30, write_timeout=30, pool_timeout=10,
@@ -2291,6 +2350,8 @@ def build_app(s, engine, exchange):
     # Daily verified SQLite backup on the persistent Render disk; retain seven copies.
     app.job_queue.run_repeating(database_backup_job, interval=86400, first=300, name="sqlite-daily-backup")
     app.job_queue.run_repeating(backup_health_job, interval=3600, first=600, name="sqlite-backup-health")
+    app.bot_data["service_started_at"] = datetime.now(timezone.utc)
+    app.job_queue.run_repeating(cycle_watchdog_job, interval=60, first=60, name="market-cycle-watchdog")
     # Start once, then cycle_job schedules the next scan after completion.
     # This fixed-delay cadence avoids overlapping jobs and skipped scans.
     app.job_queue.run_once(cycle_job, when=10, name="paper-cycle")
