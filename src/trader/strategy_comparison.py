@@ -175,6 +175,7 @@ def _walk_forward_signals(candles, *, fee_rate, slippage_bps):
         "settled_forecasts_detail": settled,
         "walk_forward": diagnostics,
         "final_metrics_by_regime": _metrics_by_regime(settled),
+        "individual_signals": individual_signals,
         "execution_effect": "NONE",
         "lookahead": False,
     }
@@ -204,6 +205,7 @@ def run_strategy_comparison(
     equal, adaptive, metadata = _walk_forward_signals(
         candles, fee_rate=fee_rate, slippage_bps=slippage_bps
     )
+    individual_signals = metadata.pop("individual_signals")
 
     def lookup_signal(signal_map, history):
         return signal_map.get(float(history[-1][0]), {"signal": "HOLD", "atr_percent": 0.0})
