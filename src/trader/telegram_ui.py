@@ -2086,7 +2086,7 @@ def build_app(s, engine, exchange):
                     "━━━━━━━━━━━━━━━━━━\n"
                     "<i>PAPER · Только виртуальные сделки</i>"
                 )
-                await send_topic(context, s.topic_general_id, report)
+                await send_topic(context, s.topic_general_id, report, parse_mode="HTML")
                 context.application.bot_data["last_general_report_at"] = now
 
             if actions:
