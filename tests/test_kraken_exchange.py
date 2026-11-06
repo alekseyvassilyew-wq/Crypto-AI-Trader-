@@ -207,14 +207,25 @@ def test_order_book_reads_and_normalizes_public_depth(monkeypatch):
     assert book["bids"] == [[100.0, 4.0], [99.0, 5.0]]
 
 
-def test_order_book_rejects_crossed_or_unsorted_book(monkeypatch):
+def test_order_book_rejects_unsorted_book(monkeypatch):
+    client = KrakenSpot()
+    monkeypatch.setattr(client, "_pair_info", lambda symbol: ("PAIR", {}))
+    monkeypatch.setattr(client, "_request", lambda *a, **k: {"PAIR": {
+        "asks": [["100", "1"], ["99", "1"]],
+        "bids": [["98", "1"], ["97", "1"]],
+    }})
+    with pytest.raises(RuntimeError, match="unsorted asks"):
+        client.order_book("PAIR")
+
+
+def test_order_book_rejects_crossed_book(monkeypatch):
     client = KrakenSpot()
     monkeypatch.setattr(client, "_pair_info", lambda symbol: ("PAIR", {}))
     monkeypatch.setattr(client, "_request", lambda *a, **k: {"PAIR": {
         "asks": [["99", "1"], ["100", "1"]],
         "bids": [["100", "1"], ["98", "1"]],
     }})
-    with pytest.raises(RuntimeError, match="unsorted asks"):
+    with pytest.raises(RuntimeError, match="crossed"):
         client.order_book("PAIR")
 
 
