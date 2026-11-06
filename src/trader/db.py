@@ -221,7 +221,8 @@ def audit(db, event, details=""):
 
 def save_paper_fx_conversion(db, *, from_currency, to_currency, spent, received,
                              fee_amount=None, fee_currency=None, fee_eur=None, legs=1, ts=None,
-                             cash_by_currency=None, cash_cost_basis_eur=None, positions=None):
+                             cash_by_currency=None, cash_cost_basis_eur=None, positions=None,
+                             audit_event=None, audit_details=None):
     """Persist a PAPER FX fee ledger row, optionally atomically with its wallet."""
     source = str(from_currency or "").strip().upper()
     target = str(to_currency or "").strip().upper()
@@ -244,6 +245,10 @@ def save_paper_fx_conversion(db, *, from_currency, to_currency, spent, received,
     timestamp = None if ts is None else str(ts).strip()
     if timestamp == "":
         raise ValueError("PAPER FX conversion timestamp must not be empty")
+    event = None if audit_event is None else str(audit_event).strip()
+    details = None if audit_details is None else str(audit_details)
+    if (event is None) != (details is None) or event == "":
+        raise ValueError("PAPER FX audit event and details must be provided together")
 
     wallet_payload = None
     wallet_args = (cash_by_currency, cash_cost_basis_eur, positions)
@@ -278,6 +283,11 @@ def save_paper_fx_conversion(db, *, from_currency, to_currency, spent, received,
                 "(ts,from_currency,to_currency,spent,received,fee_amount,fee_currency,fee_eur,legs) "
                 "VALUES(?,?,?,?,?,?,?,?,?)",
                 (timestamp, source, target, values[0], values[1], fee_amount, currency, fee_eur, legs),
+            )
+        if event is not None:
+            db.execute(
+                "INSERT INTO audit(event,details) VALUES(?,?)",
+                (event, details),
             )
 
 def save_trade(db, mode, symbol, side, qty, quote, fee, price, status, order_id=None, *, fee_eur=None, realized_pnl_eur=None):
