@@ -1,6 +1,7 @@
 import json
 import math
 import os
+import re
 import sqlite3
 from pathlib import Path
 from datetime import datetime, timezone
@@ -303,6 +304,87 @@ def set_state(db, key, value):
     payload = json.dumps(value, separators=(",", ":"), allow_nan=False)
     with db:
         db.execute("INSERT INTO app_state(key,value,updated_at) VALUES(?,?,CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP", (key, payload))
+
+
+def backfill_paper_seed_fx_ledger(db):
+    """Recover legacy wallet-seed FX fees from audit rows without touching the wallet."""
+    if get_state(db, "paper_seed_fx_backfill_done", False):
+        return {"already_done": True, "backfilled": 0, "already_present": 0, "unparsed": 0}
+
+    pattern = re.compile(
+        r"^(?P<source>[A-Z0-9]+)->(?P<target>[A-Z0-9]+) "
+        r"spent=(?P<spent>[0-9.eE+-]+) received=(?P<received>[0-9.eE+-]+) "
+        r"fee=(?P<fee>[0-9.eE+-]+)$"
+    )
+    rows = db.execute(
+        "SELECT id,details FROM audit WHERE event='PAPER_WALLET_SEED' ORDER BY id"
+    ).fetchall()
+    backfilled = 0
+    already_present = 0
+    unparsed = 0
+
+    for row in rows:
+        match = pattern.fullmatch(str(row["details"] or "").strip())
+        if match is None:
+            unparsed += 1
+            continue
+        source = match.group("source")
+        target = match.group("target")
+        spent, received, fee = (
+            float(match.group("spent")),
+            float(match.group("received")),
+            float(match.group("fee")),
+        )
+        if (
+            source == target
+            or not all(math.isfinite(value) for value in (spent, received, fee))
+            or spent <= 0 or received <= 0 or fee < 0
+            or received + fee <= 0
+        ):
+            unparsed += 1
+            continue
+
+        # Old seed audit messages retain eight decimal places. Match the
+        # recorded conversion, not just its currencies, to avoid duplicating
+        # a seed row that was already written by a newer version.
+        existing = db.execute(
+            "SELECT 1 FROM paper_fx_conversions "
+            "WHERE from_currency=? AND to_currency=? AND fee_currency=? AND legs=1 "
+            "AND ABS(spent-?) < 0.0000001 "
+            "AND ABS(received-?) < 0.0000001 "
+            "AND fee_amount IS NOT NULL AND ABS(fee_amount-?) < 0.0000001 "
+            "LIMIT 1",
+            (source, target, target, spent, received, fee),
+        ).fetchone()
+        if existing is not None:
+            already_present += 1
+            continue
+
+        implied_rate = (received + fee) / spent
+        fee_eur = fee / implied_rate
+        save_paper_fx_conversion(
+            db,
+            from_currency=source,
+            to_currency=target,
+            spent=spent,
+            received=received,
+            fee_amount=fee,
+            fee_currency=target,
+            fee_eur=fee_eur,
+            legs=1,
+        )
+        backfilled += 1
+
+    # Do not mark the migration complete while any historical seed row is
+    # ambiguous; a later code version can still recover it safely.
+    if unparsed == 0:
+        set_state(db, "paper_seed_fx_backfill_done", True)
+    return {
+        "already_done": False,
+        "backfilled": backfilled,
+        "already_present": already_present,
+        "unparsed": unparsed,
+    }
 
 
 
