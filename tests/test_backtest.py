@@ -63,7 +63,6 @@ def test_backtest_rejects_unsorted_or_invalid_candles():
         run_backtest(rows)
 
 
-@pytest.mark.parametrize("fee,slippage", [(-0.1, 0), (0, -1), (float("nan"), 0), (0, 1000)])
 def test_backtest_rejects_missing_candles():
     rows = candles()
     del rows[20]
@@ -87,6 +86,7 @@ def test_backtest_rejects_invalid_explicit_interval():
         run_backtest(candles(), interval_seconds=0)
 
 
+@pytest.mark.parametrize("fee,slippage", [(-0.1, 0), (0, -1), (float("nan"), 0), (0, 1000)])
 def test_backtest_rejects_invalid_cost_assumptions(fee, slippage):
     with pytest.raises(ValueError):
         run_backtest(candles(), fee_rate=fee, slippage_bps=slippage)
