@@ -1291,13 +1291,32 @@ def build_app(s, engine, exchange):
                     f"   Сделок: {item['trades']}  ·  Win rate: {metric(item, 'win_rate_pct', 1, '%')}  ·  PF: {pf(item)}",
                     f"   Макс. просадка: {metric(item, 'max_drawdown_pct', 2, '%')}",
                     f"   Комиссии: {metric(item, 'fees_paid', 4)} EUR",
+                    f"   Buy & hold (то же окно): {metric(item, 'buy_hold_return_pct', 2, '%')}",
                 ])
+            last_bar = meta.get("walk_forward", [])[-1] if meta.get("walk_forward") else {}
+            final_regime = last_bar.get("regime", "UNKNOWN")
+            final_weights = last_bar.get("weights", {})
+            qualified_weights = sum(1 for value in final_weights.values() if float(value) > 1.0)
+            regime_metrics = meta.get("final_metrics_by_regime", {}).get(final_regime, {})
             lines.extend([
                 "",
                 "🧠 WALK-FORWARD · SHADOW",
                 f"Завершённых прогнозов: {meta['settled_forecasts']}  ·  Незавершённых: {meta['unresolved_forecasts']}",
+                f"Текущий режим: {final_regime}  ·  Стратегий с повышенным весом: {qualified_weights}/5",
                 "Адаптивные веса учитывают только прогнозы, завершившиеся до текущей свечи.",
                 "Пересекающиеся прогнозы одной стратегии исключены.",
+            ])
+            if regime_metrics:
+                lines.extend(["", f"📚 ИСТОРИЧЕСКИЕ ОЦЕНКИ · {final_regime}"])
+                for name in sorted(regime_metrics):
+                    stats = regime_metrics[name]
+                    pf_value = stats.get("profit_factor", 0.0)
+                    pf_text = "∞" if pf_value == "INF" else metric({"pf": pf_value}, "pf", 2)
+                    lines.append(
+                        f"   {name}: n={stats.get('resolved', 0)} · "
+                        f"net={metric({'value': stats.get('net_return_pct', 0.0)}, 'value', 2, '%')} · "
+                        f"PF={pf_text} · WR={metric({'value': stats.get('win_rate_pct', 0.0)}, 'value', 1, '%')}"
+                    )
                 "",
                 "⚙️ ОДИНАКОВЫЕ УСЛОВИЯ",
                 f"Комиссия: {s.fee_rate * 100:.3f}% на сторону  ·  Проскальзывание: 5 bps на сторону",
