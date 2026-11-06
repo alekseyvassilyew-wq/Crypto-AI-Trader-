@@ -2039,28 +2039,54 @@ def build_app(s, engine, exchange):
             last_report = context.application.bot_data.get("last_general_report_at", 0.0)
             if state["last_scan_at"] and not state["paused"] and now - last_report >= 900:
                 scan_time = state["last_scan_at"].strftime("%Y-%m-%d %H:%M:%S UTC")
-                signal_lines = [
-                    f"{item['symbol']}: {item.get('signal', 'N/A')} ({item.get('score', 0)}/5) — {float(item.get('price') or 0):,.6g}\n"
-                    f"Причина: {'; '.join(item.get('reasons', [])[:2]) or 'нет'}"
-                    for item in sorted(state["last_signals"], key=lambda item: item.get("score", 0), reverse=True)[:15]
+                cash_lines = [
+                    f"{currency}: {amount:,.2f}" if currency in ("EUR", "USD", "USDT")
+                    else f"{currency}: {amount:.8f}"
+                    for currency, amount in sorted(state["cash"].items())
+                    if float(amount) > 1e-10
                 ]
+                all_signals = sorted(
+                    state["last_signals"],
+                    key=lambda item: (item.get("score", 0), item.get("signal") in ("BUY", "SELL")),
+                    reverse=True,
+                )
+                actionable = [item for item in all_signals if item.get("signal") in ("BUY", "SELL")]
+                holds = [item for item in all_signals if item.get("signal") == "HOLD"]
+                shown_signals = actionable[:8] if actionable else holds[:5]
+                signal_lines = [
+                    f"• <b>{html.escape(str(item['symbol']))}</b>  {item.get('signal', 'N/A')}  ·  {item.get('score', 0)}/5  ·  <code>{float(item.get('price') or 0):,.6g}</code>\n"
+                    f"  <i>{html.escape('; '.join(item.get('reasons', [])[:2]) or 'Нет пояснения')}</i>"
+                    for item in shown_signals
+                ]
+                if not actionable and len(holds) > len(shown_signals):
+                    signal_lines.append(f"<i>И ещё {len(holds) - len(shown_signals)} сигналов HOLD скрыто для краткости.</i>")
+                elif actionable and len(actionable) > len(shown_signals):
+                    signal_lines.append(f"<i>Ещё сигналов BUY/SELL: {len(actionable) - len(shown_signals)}.</i>")
                 position_lines = [
-                    f"{symbol}: {position['qty']:.8f} @ {position['avg_price']:.8g} {position.get('quote_currency', 'EUR')} | peak {position.get('peak_price', position['avg_price']):.8g}"
-                    for symbol, position in state["positions"].items()
+                    f"🟢 <b>{html.escape(str(symbol))}</b>\n"
+                    f"   Количество: <code>{position['qty']:.8f}</code> {html.escape(str(position.get('quote_currency', 'EUR')))}\n"
+                    f"   Вход: <code>{position['avg_price']:.8g}</code>  ·  Пик: <code>{position.get('peak_price', position['avg_price']):.8g}</code>"
+                    for symbol, position in sorted(state["positions"].items())
                 ]
                 report = (
-                    "📊 CRYPTO AI TRADER — АВТОМАТИЧЕСКИЙ ОТЧЁТ\n"
+                    "📊 <b>CRYPTO AI TRADER</b>\n"
                     "━━━━━━━━━━━━━━━━━━\n"
-                    f"🕒 Последнее успешное сканирование: {scan_time}\n\n"
-                    "💼 ПОРТФЕЛЬ PAPER\n"
-                    f"  💰 Свободные средства: {state['cash']}\n"
-                    f"  📦 Открытые позиции: {len(state['positions'])}/{s.max_positions}\n"
-                    f"  📈 Результат за сегодня: {daily_text}\n\n"
-                    "🔎 РЫНОЧНЫЕ СИГНАЛЫ\n" + ("\n".join(signal_lines) or "Нет данных") +
-                    "\n\n📦 ОТКРЫТЫЕ ПОЗИЦИИ\n" + ("\n".join(position_lines) or "Нет открытых позиций") +
-                    "\n━━━━━━━━━━━━━━━━━━"
+                    f"🕒 <b>Сканирование:</b> <code>{scan_time}</code>\n"
+                    "━━━━━━━━━━━━━━━━━━\n"
+                    "💼 <b>PAPER · ПОРТФЕЛЬ</b>\n"
+                    + ("\n".join(f"   💰 <code>{html.escape(line)}</code>" for line in cash_lines) or "   Свободных средств нет.") + "\n"
+                    f"   📦 Позиции: <b>{len(state['positions'])}/{s.max_positions}</b>\n"
+                    f"   📈 Сегодня: <b>{html.escape(daily_text)}</b>\n"
+                    "━━━━━━━━━━━━━━━━━━\n"
+                    "🔎 <b>СИГНАЛЫ РЫНКА</b>\n"
+                    + (("\n".join(signal_lines)) if signal_lines else "Нет данных по сигналам.") + "\n"
+                    "━━━━━━━━━━━━━━━━━━\n"
+                    "📦 <b>ОТКРЫТЫЕ ПОЗИЦИИ</b>\n"
+                    + (("\n\n".join(position_lines)) if position_lines else "Открытых позиций нет.") + "\n"
+                    "━━━━━━━━━━━━━━━━━━\n"
+                    "<i>PAPER · Только виртуальные сделки</i>"
                 )
-                await send_topic(context, s.topic_general_id, report)
+                await send_topic(context, s.topic_general_id, report, parse_mode="HTML")
                 context.application.bot_data["last_general_report_at"] = now
 
             if actions:
