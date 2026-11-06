@@ -100,15 +100,30 @@ def test_daily_loss_limit_pauses_engine(tmp_path):
     db.close()
 
 
-def test_engine_starts_paused_but_keeps_monitoring_without_seed_or_trading(tmp_path):
+def test_fresh_engine_starts_running_and_manual_pause_survives_restart(tmp_path):
+    engine, db = make_engine(tmp_path)
+    assert engine.paused is False
+
+    engine.stop("user requested pause")
+    restarted = Engine(engine.s, db, DummyExchange(), engine.paper)
+    assert restarted.paused is True
+
+    restarted.start()
+    assert restarted.paused is False
+    restarted_again = Engine(engine.s, db, DummyExchange(), engine.paper)
+    assert restarted_again.paused is False
+    db.close()
+
+
+def test_engine_keeps_monitoring_without_opening_positions_when_signals_hold(tmp_path):
     engine, db = make_engine(tmp_path)
     engine.scan = lambda **kwargs: [{
-        "symbol": "XBTEUR", "quote": "EUR", "signal": "BUY", "score": 5,
+        "symbol": "XBTEUR", "quote": "EUR", "signal": "HOLD", "score": 1,
         "price": 10.0, "bid": 9.99, "ask": 10.01,
         "spread_bps": 10, "turnover": 50000, "turnover_eur": 50000, "reasons": [],
     }]
     before = dict(engine.paper.cash_by_currency)
-    assert engine.paused is True
+    assert engine.paused is False
     assert engine.cycle() == []
     assert engine.last_scan_at is not None
     assert engine.last_signals
