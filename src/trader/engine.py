@@ -174,7 +174,11 @@ class Engine:
         if minutes <= 0:
             raise ValueError("Candle interval must be positive")
         now = time.time()
-        bucket = int(now // (minutes * 60))
+        # Kraken may publish the just-closed candle a few seconds after the
+        # wall-clock boundary. Delay cache rollover to avoid caching a
+        # pre-close snapshot for the entire next timeframe.
+        cache_clock = max(0.0, now - 10.0)
+        bucket = int(cache_clock // (minutes * 60))
         key = (str(symbol).upper(), str(interval), int(limit))
         cached = self._scan_candle_cache.get(key)
         if cached and cached[0] == bucket:
@@ -187,7 +191,7 @@ class Engine:
         self._scan_candle_cache[key] = (bucket, copy.deepcopy(candles))
         # Drop expired entries first, then cap memory for long-running workers.
         for old_key, old_value in list(self._scan_candle_cache.items()):
-            if old_key[1].isdigit() and old_value[0] < int(now // (int(old_key[1]) * 60)):
+            if old_key[1].isdigit() and old_value[0] < int(cache_clock // (int(old_key[1]) * 60)):
                 self._scan_candle_cache.pop(old_key, None)
         while len(self._scan_candle_cache) > self._scan_candle_cache_limit:
             self._scan_candle_cache.pop(next(iter(self._scan_candle_cache)))
