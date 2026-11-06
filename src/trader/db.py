@@ -792,6 +792,7 @@ def import_kraken_account_history(
         raise ValueError("History completeness flags must be booleans")
 
     normalized_trades = []
+    seen_trade_ids = set()
     for item in trades:
         if not isinstance(item, dict):
             raise ValueError("Malformed Kraken trade record")
@@ -800,6 +801,9 @@ def import_kraken_account_history(
         side = str(item.get("type") or "").strip().lower()
         if not trade_id or not pair or side not in {"buy", "sell"}:
             raise ValueError("Kraken trade is missing id, pair, or valid side")
+        if trade_id in seen_trade_ids:
+            raise ValueError(f"Duplicate Kraken trade id in fetched history: {trade_id}")
+        seen_trade_ids.add(trade_id)
         normalized_trades.append((
             trade_id, str(item.get("ordertxid") or "") or None, pair,
             _account_number(item.get("time"), "trade time", non_negative=True),
@@ -812,6 +816,7 @@ def import_kraken_account_history(
         ))
 
     normalized_ledgers = []
+    seen_ledger_ids = set()
     for item in ledgers:
         if not isinstance(item, dict):
             raise ValueError("Malformed Kraken ledger record")
@@ -820,6 +825,9 @@ def import_kraken_account_history(
         entry_type = str(item.get("type") or "").strip().lower()
         if not ledger_id or not asset or not entry_type:
             raise ValueError("Kraken ledger record is missing id, asset, or type")
+        if ledger_id in seen_ledger_ids:
+            raise ValueError(f"Duplicate Kraken ledger id in fetched history: {ledger_id}")
+        seen_ledger_ids.add(ledger_id)
         raw_balance = item.get("balance")
         balance = None if raw_balance is None else _account_number(
             raw_balance, "ledger balance", non_negative=True
@@ -843,6 +851,21 @@ def import_kraken_account_history(
             amount, f"{code} balance", non_negative=True
         )
     balance_json = json.dumps(normalized_balances, separators=(",", ":"), allow_nan=False, sort_keys=True)
+
+    # A repeated exchange identifier is idempotent only when its immutable
+    # payload matches. A conflicting payload is a data-integrity failure.
+    for row in normalized_trades:
+        existing = db.execute(
+            "SELECT raw_json FROM kraken_fills WHERE trade_id=?", (row[0],)
+        ).fetchone()
+        if existing is not None and existing["raw_json"] != row[10]:
+            raise ValueError(f"Conflicting Kraken trade payload for id {row[0]}")
+    for row in normalized_ledgers:
+        existing = db.execute(
+            "SELECT raw_json FROM kraken_ledger_entries WHERE ledger_id=?", (row[0],)
+        ).fetchone()
+        if existing is not None and existing["raw_json"] != row[9]:
+            raise ValueError(f"Conflicting Kraken ledger payload for id {row[0]}")
 
     with db:
         before_fills = db.execute("SELECT COUNT(*) FROM kraken_fills").fetchone()[0]

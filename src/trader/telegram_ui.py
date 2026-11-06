@@ -1581,7 +1581,7 @@ def build_app(s, engine, exchange):
                 if amount > 0
             ]
             balance_text = "\n".join(positive) if positive else "  Нет положительных остатков"
-            status_text = "ПОЛНАЯ ИСТОРИЯ ЗАГРУЖЕНА" if result["status"] == "COMPLETE" else "ИСТОРИЯ НЕПОЛНАЯ"
+            status_text = "ВСЕ СТРАНИЦЫ ОТВЕТА KRAKEN ЗАГРУЖЕНЫ" if result["status"] == "COMPLETE" else "ИСТОРИЯ ЗАГРУЖЕНА НЕПОЛНОСТЬЮ"
             report = (
                 "🏦 <b>KRAKEN · СВЕРКА ИСТОРИИ СЧЁТА</b>\n"
                 "━━━━━━━━━━━━━━━━━━\n"
@@ -1599,7 +1599,9 @@ def build_app(s, engine, exchange):
                 "Нереализованный P/L: <b>НЕ РАССЧИТЫВАЕТСЯ</b>\n"
                 "Причина: требуется проверка полной истории, начальных остатков и исторических EUR-курсов.\n"
                 "━━━━━━━━━━━━━━━━━━\n"
-                "<i>Только чтение. Реальные ордера и переводы отключены.</i>"
+                "<i>Завершённость означает, что загружены все страницы ответа API. "
+                "Она не подтверждает полноту истории за весь срок жизни счёта. "
+                "Только чтение; реальные ордера и переводы отключены.</i>"
             )
             await send_report(update, context, report, parse_mode="HTML")
         except Exception as exc:

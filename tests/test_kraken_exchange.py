@@ -176,3 +176,15 @@ def test_history_fails_if_account_changes_during_pagination(monkeypatch):
     monkeypatch.setattr(client, "_request", lambda *a, **k: next(pages))
     with pytest.raises(RuntimeError, match="changed during pagination"):
         client.trades_history()
+
+
+def test_history_rejects_missing_or_non_integer_count(monkeypatch):
+    client = KrakenSpot()
+    for page in (
+        {"trades": {"tx-a": {"price": "10"}}},
+        {"count": 1.5, "trades": {"tx-a": {"price": "10"}}},
+        {"count": True, "trades": {"tx-a": {"price": "10"}}},
+    ):
+        monkeypatch.setattr(client, "_request", lambda *a, _page=page, **k: _page)
+        with pytest.raises(RuntimeError, match="count"):
+            client.trades_history()
