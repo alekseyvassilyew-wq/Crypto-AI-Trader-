@@ -215,3 +215,32 @@ def poll_external_events(settings, state: dict) -> list[dict[str, str]]:
             state["github_last_error"] = type(exc).__name__
             log.warning("GitHub event polling failed: %s", type(exc).__name__)
     return events
+
+
+def market_cycle_health(last_scan_at, started_at, now, scan_interval_seconds) -> dict:
+    """Classify whether the market scanner has stopped producing fresh cycles."""
+    from datetime import timezone
+    import math
+
+    reference = last_scan_at or started_at
+    if reference is None:
+        return {"status": "unknown", "age_seconds": None, "threshold_seconds": None}
+    if not hasattr(reference, "tzinfo") or not hasattr(now, "tzinfo"):
+        raise TypeError("cycle timestamps must be datetime values")
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    try:
+        interval = float(scan_interval_seconds)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("scan interval must be a finite positive number") from exc
+    if not math.isfinite(interval) or interval <= 0:
+        raise ValueError("scan interval must be a finite positive number")
+    threshold = max(180.0, interval * 3.0)
+    age = max(0.0, (now - reference).total_seconds())
+    return {
+        "status": "stale" if age > threshold else "healthy",
+        "age_seconds": age,
+        "threshold_seconds": threshold,
+    }
