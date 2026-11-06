@@ -9,7 +9,7 @@ from .learning import extract_features, predict_probability
 from .strategy_ensemble import evaluate_strategy_ensemble
 from .adaptive_strategy import evaluate_adaptive_strategy_weights
 from .paper import estimate_book_vwap
-from .db import audit, save_trade, save_paper_fill, save_paper_fx_conversion, backfill_paper_seed_fx_ledger, get_state, set_state, save_paper_snapshot, record_shadow_prediction, settle_shadow_predictions, record_strategy_shadow_prediction, settle_strategy_shadow_predictions, get_strategy_shadow_regime_metrics
+from .db import audit, save_trade, save_paper_fill, save_paper_fx_conversion, backfill_paper_seed_fx_ledger, ensure_paper_account_baseline, get_state, set_state, save_paper_snapshot, record_shadow_prediction, settle_shadow_predictions, record_strategy_shadow_prediction, settle_strategy_shadow_predictions, get_strategy_shadow_regime_metrics
 
 
 log = logging.getLogger(__name__)
@@ -135,6 +135,12 @@ class Engine:
     def __init__(self, settings, db, exchange, paper):
         self.s, self.db, self.exchange, self.paper = settings, db, exchange, paper
         seed_backfill = backfill_paper_seed_fx_ledger(db)
+        ensure_paper_account_baseline(
+            db,
+            cash_by_currency=paper.cash_by_currency,
+            positions=paper.positions,
+            cash_cost_basis_eur=paper.cash_cost_basis_eur,
+        )
         if seed_backfill.get("unparsed", 0):
             log.warning(
                 "PAPER seed FX ledger backfill incomplete: backfilled=%d already_present=%d unparsed=%d",
@@ -539,6 +545,12 @@ class Engine:
                     cash_by_currency=self.paper.cash_by_currency,
                     cash_cost_basis_eur=self.paper.cash_cost_basis_eur,
                     positions=self.paper.positions,
+                    wallet_before={
+                        "cash": cash_before.get("EUR", 0.0),
+                        "cash_by_currency": cash_before,
+                        "cash_cost_basis_eur": basis_before,
+                        "positions": self.paper.positions,
+                    },
                     audit_event="PAPER_WALLET_SEED",
                     audit_details=(
                         f"{conversion['from']}->{conversion['to']} spent={conversion['spent']:.8f} "
@@ -931,6 +943,13 @@ class Engine:
                 qty=fill["qty"], quote=fill["quote"], fee=fill["fee"],
                 price=fill["price"], fee_eur=fee_eur,
                 realized_pnl_eur=realized_pnl_eur,
+                quote_currency=fill.get("currency"),
+                wallet_before={
+                    "cash": cash_before.get("EUR", 0.0),
+                    "cash_by_currency": cash_before,
+                    "cash_cost_basis_eur": cash_basis_before,
+                    "positions": positions_before,
+                },
             )
         except Exception:
             self.paper.cash_by_currency = cash_before
@@ -1238,18 +1257,24 @@ class Engine:
                                 cash_by_currency=self.paper.cash_by_currency,
                                 cash_cost_basis_eur=self.paper.cash_cost_basis_eur,
                                 positions=self.paper.positions,
+                                wallet_before={
+                                    "cash": cash_before.get("EUR", 0.0),
+                                    "cash_by_currency": cash_before,
+                                    "cash_cost_basis_eur": basis_before,
+                                    "positions": positions_before,
+                                },
+                                audit_event="PAPER_FX_CONVERSION",
+                                audit_details=(
+                                    f"{conversion['from']}->{conversion['to']} legs={fee_legs} "
+                                    f"spent={conversion['spent']:.8f} received={conversion['received']:.8f} "
+                                    f"fees={conversion.get('fee', 0.0):.8f}"
+                                ),
                             )
                         except Exception:
                             self.paper.cash_by_currency = cash_before
                             self.paper.cash_cost_basis_eur = basis_before
                             self.paper._sync_cash()
                             raise
-                        audit(
-                            self.db, "PAPER_FX_CONVERSION",
-                            f"{conversion['from']}->{conversion['to']} legs={fee_legs} "
-                            f"spent={conversion['spent']:.8f} received={conversion['received']:.8f} "
-                            f"fees={conversion.get('fee', 0.0):.8f}",
-                        )
                         quote_balance = self.paper.balance(quote_currency)
                         target_shortfall = max(0.0, target_allocation - quote_balance)
                         if target_shortfall <= 1e-12:
