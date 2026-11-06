@@ -290,7 +290,7 @@ def test_candles_exclude_single_open_candle():
         ],
         "last": 123456,
     }
-    with pytest.raises(RuntimeError, match="no usable closed OHLC"):
+    with pytest.raises(RuntimeError, match="no usable OHLC"):
         client.candles("XBTEUR", interval="1", limit=10)
 
 
