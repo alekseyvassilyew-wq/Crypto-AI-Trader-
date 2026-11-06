@@ -399,6 +399,10 @@ def run_walk_forward_validation(
                 "profit_factor": result["profit_factor"],
                 "max_drawdown_pct": result["max_drawdown_pct"],
                 "fees_paid": result["fees_paid"],
+                "first_entry_timestamp": min(
+                    (float(trade["entry_time"]) for trade in result["trades_detail"]),
+                    default=None,
+                ),
             }
         fold_results.append({
             "fold": fold_number,
