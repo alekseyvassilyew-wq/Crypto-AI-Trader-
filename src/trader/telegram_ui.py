@@ -616,7 +616,8 @@ def build_app(s, engine, exchange):
     async def send_topic(context, topic_id, text, parse_mode=None):
         if not s.telegram_group_chat_id:
             return
-        plain_text = _telegram_plain(text).strip()
+        raw_text = str(text or "")
+        plain_text = _telegram_plain(raw_text).strip()
         if plain_text and "━━━━━━━━━━━━━━━━━━" not in plain_text:
             heading, separator, remainder = plain_text.partition("\n")
             plain_text = (
@@ -626,7 +627,15 @@ def build_app(s, engine, exchange):
             )
         is_error_topic = bool(topic_id and topic_id == s.topic_errors_id)
         pages = [plain_text[:3900]] if is_error_topic else _paginate_report_text(plain_text)
-        kwargs = {"chat_id": s.telegram_group_chat_id, "text": pages[0]}
+        # Keep HTML styling for compact reports. Long reports use plain-text
+        # pagination so a page boundary can never split an HTML tag.
+        single_styled_page = bool(parse_mode and len(pages) == 1 and len(raw_text) <= 3900)
+        kwargs = {
+            "chat_id": s.telegram_group_chat_id,
+            "text": raw_text if single_styled_page else pages[0],
+        }
+        if single_styled_page:
+            kwargs["parse_mode"] = parse_mode
         if topic_id:
             kwargs["message_thread_id"] = topic_id
         message = await context.bot.send_message(**kwargs)
