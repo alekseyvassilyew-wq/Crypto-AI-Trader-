@@ -1158,6 +1158,84 @@ def build_app(s, engine, exchange):
                 format_error(exc, f"/backtest {symbol}", update.effective_user)
             )
 
+    async def dipbacktest(update, context):
+        if not await authorized(update): return await deny(update)
+        if len(context.args) != 1:
+            return await update.effective_message.reply_text(
+                "Использование: /dipbacktest XBTEUR\\n"
+                "Проверяет стратегию поиска отскока на истории Kraken. "
+                "Только симуляция: сделки не открываются и PAPER-кошелёк не меняется."
+            )
+        symbol = context.args[0].strip().upper().replace("/", "")
+        await update.effective_message.reply_text(
+            f"🧪 Историческая проверка сигналов отскока {symbol}: загружаю закрытые свечи 1h / 4h / 1d…"
+        )
+        try:
+            def run_dip_validation():
+                pair = next(
+                    (item for item in exchange.discover_pairs() if item["symbol"] == symbol),
+                    None,
+                )
+                if pair is None:
+                    raise ValueError(f"Kraken Spot market {symbol} was not found.")
+                if str(pair.get("quote") or "").upper() != "EUR":
+                    raise ValueError("Проверка стратегии отскока доступна только для EUR-пар.")
+                from .dip_backtest import run_dip_backtest
+                hourly = exchange.candles(symbol, interval="60", limit=720)
+                four_hour = exchange.candles(symbol, interval="240", limit=720)
+                daily = exchange.candles(symbol, interval="1440", limit=720)
+                return run_dip_backtest(
+                    hourly, four_hour, daily,
+                    initial_cash=s.paper_start,
+                    max_trade=s.max_trade,
+                    fee_rate=s.fee_rate,
+                    slippage_bps=5.0,
+                    stop_loss_pct=s.stop_loss_pct,
+                    take_profit_pct=s.take_profit_pct,
+                    trailing_stop_pct=s.trailing_stop_pct,
+                    risk_per_trade_pct=s.risk_per_trade_pct,
+                    min_drop_pct=-5.0,
+                    min_turnover_eur=float(s.min_turnover),
+                    max_spread_bps=float(s.max_spread_bps),
+                    assumed_spread_bps=min(10.0, float(s.max_spread_bps)),
+                )
+            result = await context.application.bot_data["run_blocking"].run(run_dip_validation)
+            factor = result["profit_factor"]
+            factor_text = "∞" if factor == float("inf") else f"{factor:.2f}"
+            counts = result["classifications"]
+            lines = [
+                f"🧪 ИСТОРИЧЕСКАЯ ПРОВЕРКА ОТСКОКА · {symbol}",
+                "━━━━━━━━━━━━━━━━━━",
+                f"🕯 Часовых свечей: {result['candles']:,}",
+                f"🔎 Сигналов проверено: {result['evaluated_signals']:,}",
+                f"🟢 POTENTIAL BUY: {counts['POTENTIAL_BUY']}  ·  🟡 WATCH: {counts['WATCH']}",
+                f"🔴 REJECT: {counts['REJECT']}  ·  ⚪ Фильтр не пройден: {counts['FILTERED']}",
+                "━━━━━━━━━━━━━━━━━━",
+                "📊 СИМУЛЯЦИЯ СДЕЛОК ПО POTENTIAL BUY",
+                f"Начальный капитал: {result['initial_cash']:.2f} EUR",
+                f"Итоговый капитал: {result['final_equity']:.2f} EUR",
+                f"Чистый P/L: {result['net_pnl']:+.4f} EUR ({result['return_pct']:+.2f}%)",
+                f"Сделок: {result['trades']}  ·  Win rate: {result['win_rate_pct']:.1f}%",
+                f"Profit factor: {factor_text}  ·  Макс. просадка: {result['max_drawdown_pct']:.2f}%",
+                f"Buy & hold: {result['buy_hold_return_pct']:+.2f}%",
+                f"Комиссии: {result['fees_paid']:.4f} EUR  ·  Проскальзывание: 5 bps на сторону",
+                "━━━━━━━━━━━━━━━━━━",
+                "⚙️ ДОПУЩЕНИЯ И ОГРАНИЧЕНИЯ",
+                f"Комиссия: {s.fee_rate * 100:.3f}% на сторону; спред в модели: 10 bps.",
+                "Падение: rolling 24h, а не UTC-день; оборот оценён по часовым объёмам.",
+                "Исторический спред Kraken OHLC не содержит — использовано допущение 10 bps.",
+                "Сигнал считается только после закрытия 1h; 4h/1d свечи — только после их закрытия.",
+                "Вход — по открытию следующей часовой свечи; стоп/цель моделируются консервативно.",
+                "⚠️ Это историческая симуляция, не прогноз и не доказательство будущей прибыли.",
+                "Никаких реальных ордеров, изменений PAPER-баланса или запуска PAPER не выполняется.",
+            ]
+            await send_report(update, context, _format_report(lines[0], "\\n".join(lines)))
+        except Exception as exc:
+            log.error("Dip strategy historical validation failed for %s: %s", symbol, type(exc).__name__)
+            await update.effective_message.reply_text(
+                format_error(exc, f"/dipbacktest {symbol}", update.effective_user)
+            )
+
     async def account(update, context):
         if not await authorized(update): return await deny(update)
         def read_account():
@@ -2011,7 +2089,7 @@ def build_app(s, engine, exchange):
     app.bot_data["monitor_db"] = monitor_db
     app.bot_data["monitor_runner"] = monitor_runner
     app.bot_data["research_runner"] = research_runner
-    for name, fn in [("start", start), ("status", status), ("dbhealth", dbhealth), ("monitorstatus", monitorstatus), ("scan", scan), ("market", market), ("dips", dips), ("analyze", analyze_market), ("account", account), ("realbalance", realbalance), ("walletcheck", walletcheck), ("paperreport", paperreport), ("learn", learn), ("learning", learning), ("research", research_history_cmd), ("backtest", backtest), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
+    for name, fn in [("start", start), ("status", status), ("dbhealth", dbhealth), ("monitorstatus", monitorstatus), ("scan", scan), ("market", market), ("dips", dips), ("analyze", analyze_market), ("account", account), ("realbalance", realbalance), ("walletcheck", walletcheck), ("paperreport", paperreport), ("learn", learn), ("learning", learning), ("research", research_history_cmd), ("backtest", backtest), ("dipbacktest", dipbacktest), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
                      ("run", run), ("pause", pause), ("stop", stop), ("help", help_cmd)]:
         app.add_handler(CommandHandler(name, fn))
     app.add_handler(CommandHandler("test_topics", testtopics))  # Backwards-compatible alias shown in /help.
