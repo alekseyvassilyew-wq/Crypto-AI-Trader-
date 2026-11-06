@@ -274,6 +274,25 @@ def test_wallet_seeds_usd_and_usdt_from_starting_eur_once(tmp_path):
     assert engine.paper.cash_by_currency == before
     rows = db.execute("SELECT COUNT(*) AS n FROM audit WHERE event='PAPER_WALLET_SEED'").fetchone()
     assert rows["n"] == 2
+    conversions = db.execute(
+        "SELECT ts,from_currency,to_currency,spent,received,fee_amount,fee_currency,fee_eur,legs "
+        "FROM paper_fx_conversions ORDER BY id"
+    ).fetchall()
+    assert len(conversions) == 2
+    seed_audit = db.execute(
+        "SELECT ts,details FROM audit WHERE event='PAPER_WALLET_SEED' ORDER BY id"
+    ).fetchall()
+    assert len(seed_audit) == 2
+    assert [row["ts"] for row in conversions] == [row["ts"] for row in seed_audit]
+    assert [(row["from_currency"], row["to_currency"]) for row in conversions] == [
+        ("EUR", "USD"), ("EUR", "USDT"),
+    ]
+    for row in conversions:
+        assert row["spent"] == pytest.approx(5.0)
+        assert row["fee_currency"] == row["to_currency"]
+        assert row["fee_amount"] > 0
+        assert row["fee_eur"] == pytest.approx(row["fee_amount"] / buy_rates[row["to_currency"]])
+        assert row["legs"] == 1
     db.close()
 
 
@@ -1421,4 +1440,35 @@ def test_paper_does_not_open_new_position_when_triggered_exit_lacks_depth(tmp_pa
     assert "ETHEUR" not in engine.paper.positions
     assert any("visible depth insufficient" in action for action in actions)
     assert db.execute("SELECT COUNT(*) FROM trades WHERE side='Buy'").fetchone()[0] == 0
+    db.close()
+
+def test_wallet_seed_fx_ledger_failure_rolls_back_wallet_and_allows_retry(tmp_path):
+    import sqlite3
+
+    engine, db = make_engine(tmp_path)
+    db.execute(
+        "CREATE TRIGGER reject_seed_fx_ledger BEFORE INSERT ON paper_fx_conversions "
+        "BEGIN SELECT RAISE(ABORT, 'forced seed FX ledger failure'); END"
+    )
+    db.commit()
+
+    with pytest.raises(sqlite3.IntegrityError, match="forced seed FX ledger failure"):
+        engine._seed_multicurrency_wallet({"USD": 1 / 0.9, "USDT": 1 / 0.9})
+
+    assert engine.paper.balance("EUR") == pytest.approx(20.0)
+    assert engine.paper.balance("USD") == 0
+    assert engine.paper.balance("USDT") == 0
+    assert db.execute("SELECT COUNT(*) FROM paper_fx_conversions").fetchone()[0] == 0
+    assert db.execute(
+        "SELECT COUNT(*) FROM audit WHERE event='PAPER_WALLET_SEED'"
+    ).fetchone()[0] == 0
+
+    db.execute("DROP TRIGGER reject_seed_fx_ledger")
+    db.commit()
+    engine._seed_multicurrency_wallet({"USD": 1 / 0.9, "USDT": 1 / 0.9})
+
+    assert engine.paper.balance("EUR") == pytest.approx(10.0)
+    assert engine.paper.balance("USD") > 0
+    assert engine.paper.balance("USDT") > 0
+    assert db.execute("SELECT COUNT(*) FROM paper_fx_conversions").fetchone()[0] == 2
     db.close()

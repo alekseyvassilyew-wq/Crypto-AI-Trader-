@@ -654,3 +654,108 @@ def test_paper_fx_conversion_ledger_failure_rolls_back_wallet_atomically():
     assert get_state(db, "paper_broker") == previous
     assert db.execute("SELECT COUNT(*) FROM paper_fx_conversions").fetchone()[0] == 0
     db.close()
+
+
+def test_backfill_legacy_paper_seed_fx_ledger_is_idempotent_and_does_not_touch_wallet():
+    from src.trader.db import (
+        audit, backfill_paper_seed_fx_ledger, get_state, save_paper_fx_conversion, set_state,
+    )
+
+    db = connect(":memory:")
+    wallet = {
+        "cash": 10.0,
+        "cash_by_currency": {"EUR": 10.0, "USD": 5.0},
+        "cash_cost_basis_eur": {"EUR": 10.0, "USD": None},
+        "positions": {},
+    }
+    set_state(db, "paper_broker", wallet)
+    audit(
+        db, "PAPER_WALLET_SEED",
+        "EUR->USD spent=5.00000000 received=5.55000000 fee=0.00555000",
+    )
+    audit(
+        db, "PAPER_WALLET_SEED",
+        "EUR->USDT spent=5.00000000 received=5.54500000 fee=0.00555000",
+    )
+    # Simulate a seed record already written by the new code before the
+    # migration runs; the backfill must not add it twice.
+    save_paper_fx_conversion(
+        db, from_currency="EUR", to_currency="USD", spent=5.0,
+        received=5.55, fee_amount=0.00555, fee_currency="USD",
+        fee_eur=0.005, legs=1,
+    )
+
+    result = backfill_paper_seed_fx_ledger(db)
+    assert result == {
+        "already_done": False, "backfilled": 1, "already_present": 1, "unparsed": 0,
+    }
+    assert get_state(db, "paper_broker") == wallet
+    rows = db.execute(
+        "SELECT ts,from_currency,to_currency,spent,received,fee_amount,fee_currency,fee_eur,legs "
+        "FROM paper_fx_conversions ORDER BY id"
+    ).fetchall()
+    assert len(rows) == 2
+    recovered = rows[1]
+    audit_ts = db.execute(
+        "SELECT ts FROM audit WHERE event='PAPER_WALLET_SEED' ORDER BY id DESC LIMIT 1"
+    ).fetchone()["ts"]
+    assert recovered["ts"] == audit_ts
+    assert recovered["to_currency"] == "USDT"
+    assert recovered["fee_currency"] == "USDT"
+    assert recovered["fee_amount"] == pytest.approx(0.00555)
+    assert recovered["fee_eur"] == pytest.approx(0.00555 * 5.0 / (5.545 + 0.00555))
+    assert recovered["legs"] == 1
+
+    second = backfill_paper_seed_fx_ledger(db)
+    assert second["already_done"] is True
+    assert db.execute("SELECT COUNT(*) FROM paper_fx_conversions").fetchone()[0] == 2
+    db.close()
+
+
+def test_backfill_keeps_malformed_seed_audit_unresolved_for_retry():
+    from src.trader.db import audit, backfill_paper_seed_fx_ledger, get_state
+
+    db = connect(":memory:")
+    audit(db, "PAPER_WALLET_SEED", "unrecognized legacy seed event")
+    result = backfill_paper_seed_fx_ledger(db)
+
+    assert result["unparsed"] == 1
+    assert get_state(db, "paper_seed_fx_backfill_done", False) is False
+    assert db.execute("SELECT COUNT(*) FROM paper_fx_conversions").fetchone()[0] == 0
+    db.close()
+
+
+def test_paper_fx_seed_audit_failure_rolls_back_wallet_and_fee_ledger():
+    import sqlite3
+    from src.trader.db import get_state, save_paper_fx_conversion, set_state
+
+    db = connect(":memory:")
+    previous = {
+        "cash": 20.0,
+        "cash_by_currency": {"EUR": 20.0},
+        "cash_cost_basis_eur": {"EUR": 20.0},
+        "positions": {},
+    }
+    set_state(db, "paper_broker", previous)
+    db.execute(
+        "CREATE TRIGGER reject_seed_audit BEFORE INSERT ON audit "
+        "WHEN NEW.event='PAPER_WALLET_SEED' "
+        "BEGIN SELECT RAISE(ABORT, 'forced seed audit failure'); END"
+    )
+    db.commit()
+
+    with pytest.raises(sqlite3.IntegrityError, match="forced seed audit failure"):
+        save_paper_fx_conversion(
+            db, from_currency="EUR", to_currency="USD",
+            spent=5.0, received=4.995, fee_amount=0.005,
+            fee_currency="USD", fee_eur=0.005, legs=1,
+            cash_by_currency={"EUR": 15.0, "USD": 4.995},
+            cash_cost_basis_eur={"EUR": 15.0, "USD": 5.0},
+            positions={}, audit_event="PAPER_WALLET_SEED",
+            audit_details="EUR->USD spent=5.00000000 received=4.99500000 fee=0.00500000",
+        )
+
+    assert get_state(db, "paper_broker") == previous
+    assert db.execute("SELECT COUNT(*) FROM paper_fx_conversions").fetchone()[0] == 0
+    assert db.execute("SELECT COUNT(*) FROM audit WHERE event='PAPER_WALLET_SEED'").fetchone()[0] == 0
+    db.close()
