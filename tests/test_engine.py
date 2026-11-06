@@ -980,6 +980,7 @@ def test_engine_restarts_paused_with_paper_wallet_restored(tmp_path):
     engine.paper.buy("XBTEUR", 5, 10)
     expected_cash = dict(engine.paper.cash_by_currency)
     expected_positions = {key: dict(value) for key, value in engine.paper.positions.items()}
+    engine.stop("test explicitly persists paused state")
     db.close()
 
     db2 = connect(tmp_path / "engine.sqlite3")
