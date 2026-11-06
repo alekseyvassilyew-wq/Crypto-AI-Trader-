@@ -24,7 +24,7 @@ This archive is a **PAPER-only release**. It is not a live trading bot and must 
 - A PAPER equity snapshot is persisted after every successful trading cycle, with 90-day telemetry retention and forward-test reports. Cached FX rates are valuation-only fallbacks; new entries require a conversion route from the current ticker snapshot.
 - Fee- and slippage-aware single-market and multi-market portfolio historical backtests with next-candle-open fills, conservative stop/target ordering, net P/L, profit factor, win rate and maximum drawdown; available as Telegram `/backtest SYMBOL` and `/backtest portfolio`.
 - Strictly increasing private API nonces within the running process; malformed API responses are rejected.
-- Persistent SQLite state and a safe paused-on-restart behavior.
+- Persistent SQLite state; PAPER auto-starts on a fresh install/restart unless an explicit `/pause` or `/stop` state was saved, in which case the pause is preserved.
 - Telegram owner-only commands: `/start`, `/help`, `/status`, `/monitorstatus`, `/scan`, `/account` (virtual PAPER), `/realbalance` (Kraken read-only), `/walletcheck` (read-only spot pairs/minimums/fees), `/portfolio`, `/paperreport [hours]`, `/learn SYMBOL`, `/learning`, `/research [SYMBOL]`, `/backtest SYMBOL|portfolio`, `/interval`, `/run`, `/pause`, `/stop`, `/topicid`, `/testtopics`.
 - Render Background Worker blueprint with Persistent Disk mounted at `/var/data`.
 
@@ -46,7 +46,7 @@ IP restriction can remain disabled for this first connection test. This means th
 3. Configure `BOT_TOKEN` and numeric `ADMIN_ID` as secret environment variables.
 4. Optionally configure `KRAKEN_API_KEY` and `KRAKEN_API_SECRET` for the read-only Query Funds check. Never grant trading, withdrawal, deposit, staking, or funding permissions to this PAPER build.
 5. Keep `TRADING_MODE=PAPER`; startup rejects any other mode. After deployment, verify `/start`, `/status`, `/account`, `/scan`, `/realbalance`, and `/walletcheck` from the owner Telegram account.
-6. The worker starts paused after every restart. Use `/run` to start the local PAPER simulator; `/pause` or `/stop` halts simulated actions. Ticker monitoring covers the online Kraken Spot universe; OHLC analysis rotates through the configured per-cycle budget of liquid markets with valid EUR valuation routes.
+6. The worker automatically starts the local PAPER simulator on startup unless a manual `/pause` or `/stop` was saved; those deliberate pauses survive restarts. Use `/run` to clear a saved pause. `/pause` or `/stop` halts simulated actions. Ticker monitoring covers the online Kraken Spot universe; OHLC analysis rotates through the configured per-cycle budget of liquid markets with valid EUR valuation routes.
 7. Optional external alerts require `RENDER_API_KEY` + `RENDER_SERVICE_ID` and/or `GITHUB_REPOSITORY`; Telegram delivery requires `TELEGRAM_GROUP_CHAT_ID` and the appropriate topic IDs. The service polls configured external sources and retries unacknowledged events if Telegram delivery fails.
 
 The declared Render worker plan and Persistent Disk may incur charges. Review Render's current pricing before applying the Blueprint.
