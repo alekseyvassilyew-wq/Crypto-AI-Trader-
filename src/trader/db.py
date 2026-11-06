@@ -685,14 +685,46 @@ def get_paper_account_reconciliation(db):
     if unknown_position_basis:
         reasons.append("Unknown historical EUR cost basis for positions: " + ", ".join(sorted(unknown_position_basis)))
 
+    baseline_details = json.loads(
+        db.execute("SELECT details_json FROM paper_account_events WHERE id=?",
+                   (int(baseline["id"]),)).fetchone()["details_json"] or "{}"
+    )
+    trade_cutoff = int(baseline_details.get("max_trade_id", 0))
+    fx_cutoff = int(baseline_details.get("max_fx_id", 0))
     old_trades = db.execute(
-        "SELECT COUNT(*) FROM trades WHERE mode='PAPER' AND status='FILLED' "
-        "AND julianday(ts) < julianday(?)", (baseline["ts"],)
+        "SELECT COUNT(*) FROM trades WHERE mode='PAPER' AND status='FILLED' AND id<=?",
+        (trade_cutoff,),
     ).fetchone()[0]
     old_fx = db.execute(
-        "SELECT COUNT(*) FROM paper_fx_conversions WHERE julianday(ts) < julianday(?)",
-        (baseline["ts"],)
+        "SELECT COUNT(*) FROM paper_fx_conversions WHERE id<=?",
+        (fx_cutoff,),
     ).fetchone()[0]
+    post_baseline_trades = db.execute(
+        "SELECT COUNT(*) FROM trades WHERE mode='PAPER' AND status='FILLED' AND id>?",
+        (trade_cutoff,),
+    ).fetchone()[0]
+    post_baseline_fx = db.execute(
+        "SELECT COUNT(*) FROM paper_fx_conversions WHERE id>?",
+        (fx_cutoff,),
+    ).fetchone()[0]
+    if post_baseline_trades != fill_events:
+        chain_valid = False
+        reasons.append(
+            f"Fill journal coverage mismatch: {fill_events} events for {post_baseline_trades} PAPER fills"
+        )
+    if post_baseline_fx != fx_events:
+        chain_valid = False
+        reasons.append(
+            f"FX journal coverage mismatch: {fx_events} events for {post_baseline_fx} FX ledger rows"
+        )
+    missing_quote_currency = db.execute(
+        "SELECT COUNT(*) FROM trades WHERE mode='PAPER' AND status='FILLED' "
+        "AND id>? AND quote_currency IS NULL",
+        (trade_cutoff,),
+    ).fetchone()[0]
+    if missing_quote_currency:
+        chain_valid = False
+        reasons.append(f"{missing_quote_currency} post-baseline fills have no quote currency")
     if old_trades or old_fx:
         reasons.append(f"Legacy history before baseline excluded: {old_trades} fills, {old_fx} FX conversions")
 
@@ -1159,10 +1191,14 @@ def ensure_paper_account_baseline(db, *, cash_by_currency, positions, cash_cost_
         ).fetchone()
         if existing is not None:
             return False
+        cutoff = {
+            "max_trade_id": int(db.execute("SELECT COALESCE(MAX(id),0) FROM trades").fetchone()[0]),
+            "max_fx_id": int(db.execute("SELECT COALESCE(MAX(id),0) FROM paper_fx_conversions").fetchone()[0]),
+        }
         db.execute(
             "INSERT INTO paper_account_events(event_type,wallet_after_json,details_json) "
-            "VALUES('BASELINE',?,'{}')",
-            (payload,),
+            "VALUES('BASELINE',?,?)",
+            (payload, json.dumps(cutoff, separators=(",", ":"))),
         )
     return True
 
