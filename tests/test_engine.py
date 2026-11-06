@@ -1229,3 +1229,21 @@ def test_liquidation_equity_fails_closed_on_missing_position_fx_rate(tmp_path):
     with pytest.raises(ValueError, match="Missing PAPER position FX valuation.*ETHUSD"):
         engine._equity_after_liquidation({"ETHUSD": 100.0}, {"EUR": 1.0})
     db.close()
+
+
+def test_daily_pnl_does_not_treat_missing_open_position_marks_as_zero(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.paper.buy("XBTEUR", 5, 10)
+    with pytest.raises(ValueError, match="open positions have no current market marks"):
+        engine.daily_pnl({})
+    db.close()
+
+
+def test_daily_risk_baseline_rejects_cached_only_fx_rate(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.paper.cash_by_currency["USD"] = 5.0
+    set_state(db, "paper_fx_rates", {"USD": 0.9})
+    set_state(db, "daily", {"date": "2000-01-01", "start_equity": 20.0, "realized": 0.0})
+    with pytest.raises(ValueError, match="Missing or invalid PAPER cash FX valuation.*USD"):
+        engine._ensure_day({"SOME_MARKET": 1.0})
+    db.close()
