@@ -1327,6 +1327,16 @@ def build_app(s, engine, exchange):
                     f"Размер теста: {fold_results[0]['test_candles']} свечей · "
                     f"Embargo: {fold_results[0]['embargo_candles']} свечи"
                 )
+                lines.append("СВОДКА · каждое окно стартует с отдельного капитала")
+                for name, item in result.get("walk_forward_summary", {}).items():
+                    lines.append(
+                        f"  {name}: средняя {item['average_return_pct']:+.2f}% · "
+                        f"сумма P/L {item['sum_net_pnl_eur']:+.4f} EUR · "
+                        f"сделок {item['total_trades']} · "
+                        f"прибыльных окон {item['profitable_windows']}/{item['windows']} · "
+                        f"худшая DD {item['worst_fold_drawdown_pct']:.2f}%"
+                    )
+                lines.append("РАЗБИВКА ПО ОКНАМ")
                 for fold in fold_results:
                     lines.append(
                         f"Окно {fold['fold']} · train {fold['train_candles']} · "

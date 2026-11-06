@@ -179,6 +179,20 @@ def test_walk_forward_fold_backtests_are_out_of_sample_and_disjoint():
     result = run_strategy_comparison(rows, initial_cash=20, max_trade=5)
     folds = result["walk_forward_folds"]
     assert len(folds) == 3
+    summary = result["walk_forward_summary"]
+    assert set(summary) == {
+        "baseline", "equal_weight_ensemble", "adaptive_ensemble",
+        "trend_following", "mean_reversion", "breakout", "momentum",
+        "volatility_expansion",
+    }
+    assert summary["baseline"]["windows"] == 3
+    assert summary["baseline"]["sum_net_pnl_eur"] == pytest.approx(
+        sum(fold["baseline"]["net_pnl"] for fold in folds)
+    )
+    assert summary["mean_reversion"]["total_trades"] == sum(
+        fold["individual_strategies"]["mean_reversion"]["trades"] for fold in folds
+    )
+    assert all(0.0 <= item["win_rate_pct"] <= 100.0 for item in summary.values())
     assert all(item["test_candles"] == 120 for item in folds)
     assert all(item["embargo_candles"] == 3 for item in folds)
     assert folds[0]["test_start_timestamp"] > rows[folds[0]["train_candles"] - 1][0]

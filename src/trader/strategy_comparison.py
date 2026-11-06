@@ -278,8 +278,8 @@ def _evaluate_out_of_sample_folds(
 
         def compact(item):
             return {key: item[key] for key in (
-                "return_pct", "net_pnl", "trades", "win_rate_pct",
-                "profit_factor", "max_drawdown_pct", "fees_paid",
+                "return_pct", "net_pnl", "trades", "wins", "losses",
+                "win_rate_pct", "profit_factor", "max_drawdown_pct", "fees_paid",
             )}
 
         scored.append({
@@ -295,6 +295,36 @@ def _evaluate_out_of_sample_folds(
             },
         })
     return scored
+
+
+def _summarize_out_of_sample_folds(folds):
+    """Aggregate disjoint test windows without implying one continuous account."""
+    names = ("baseline", "equal_weight_ensemble", "adaptive_ensemble", *STRATEGY_NAMES)
+    summary = {}
+    for name in names:
+        rows = [
+            fold[name] if name in fold else fold.get("individual_strategies", {}).get(name)
+            for fold in folds
+        ]
+        rows = [item for item in rows if item is not None]
+        if not rows:
+            continue
+        trades = sum(int(item.get("trades", 0)) for item in rows)
+        wins = sum(int(item.get("wins", 0)) for item in rows)
+        summary[name] = {
+            "windows": len(rows),
+            "profitable_windows": sum(float(item.get("return_pct", 0.0)) > 0 for item in rows),
+            "zero_trade_windows": sum(int(item.get("trades", 0)) == 0 for item in rows),
+            "average_return_pct": sum(float(item.get("return_pct", 0.0)) for item in rows) / len(rows),
+            "sum_net_pnl_eur": sum(float(item.get("net_pnl", 0.0)) for item in rows),
+            "total_trades": trades,
+            "total_wins": wins,
+            "win_rate_pct": wins / trades * 100.0 if trades else 0.0,
+            "total_fees_eur": sum(float(item.get("fees_paid", 0.0)) for item in rows),
+            "worst_fold_drawdown_pct": max(float(item.get("max_drawdown_pct", 0.0)) for item in rows),
+        }
+    return summary
+
 
 def run_strategy_comparison(
     candles, *, initial_cash=1000.0, max_trade=100.0, fee_rate=0.0026,
@@ -358,10 +388,12 @@ def run_strategy_comparison(
         candles, common=common, fee_rate=fee_rate,
         slippage_bps=slippage_bps, interval_seconds=interval_seconds,
     )
+    out_of_sample_summary = _summarize_out_of_sample_folds(out_of_sample_folds)
     return {
         "mode": "SHADOW_ONLY",
         "execution_effect": "NONE",
         "walk_forward_folds": out_of_sample_folds,
+        "walk_forward_summary": out_of_sample_summary,
         "baseline": baseline_result,
         "equal_weight_ensemble": equal_result,
         "adaptive_ensemble": adaptive_result,
