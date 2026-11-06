@@ -232,6 +232,41 @@ def _trade_diagnostics(result, *, interval_seconds, buy_signals=None):
     }
 
 
+def _frozen_adaptive_signal_map(candles, *, test_start_index, training_metrics):
+    """Build test signals with adaptive weights frozen from training-only labels."""
+    signals = {}
+    weight_signatures = {}
+    for index in range(test_start_index, len(candles)):
+        ts = float(candles[index][0])
+        ensemble = evaluate_strategy_ensemble(candles[:index + 1])
+        regime = ensemble.get("regime", "UNKNOWN")
+        adaptive = evaluate_adaptive_strategy_weights(regime, training_metrics)
+        weights = {
+            name: float(adaptive.get("strategies", {}).get(name, {}).get("weight", 1.0))
+            for name in STRATEGY_NAMES
+        }
+        weight_signatures[regime] = weights
+        strategies = ensemble.get("strategies", {})
+        weighted_votes = sum(
+            weights[name] for name in STRATEGY_NAMES
+            if strategies.get(name, {}).get("signal") == "BUY"
+        )
+        signals[ts] = {
+            "signal": "BUY" if weighted_votes >= 2.0 else "HOLD",
+            "atr_percent": ensemble.get("atr_percent", 0.0),
+        }
+    return signals, {
+        "mode": "FROZEN_TRAINING_ONLY",
+        "training_resolved_forecasts": sum(
+            stats.get("resolved", 0)
+            for strategies in training_metrics.values()
+            for stats in strategies.values()
+        ),
+        "test_forecasts_used_for_weights": 0,
+        "weight_signatures_by_regime": weight_signatures,
+    }
+
+
 def _evaluate_out_of_sample_folds(
     candles, *, common, fee_rate, slippage_bps, interval_seconds,
     min_train_candles=240, test_candles=120, max_folds=5,
@@ -266,10 +301,25 @@ def _evaluate_out_of_sample_folds(
                 return {"signal": "HOLD", "atr_percent": 0.0}
             return analyze(history)
 
+        # Strict frozen-weight benchmark: only forecasts settled entirely inside
+        # the training slice can qualify weights. No test-period outcome can
+        # change these weights, unlike the online/prequential adaptive result.
+        _, _, training_metadata = _walk_forward_signals(
+            candles[:bounds["train_end"]],
+            fee_rate=fee_rate, slippage_bps=slippage_bps,
+        )
+        frozen_adaptive, frozen_metadata = _frozen_adaptive_signal_map(
+            prefix,
+            test_start_index=bounds["test_start"],
+            training_metrics=training_metadata["final_metrics_by_regime"],
+        )
         results = {
             "baseline": run_backtest(prefix, **common, signal_fn=baseline_signal),
             "equal_weight_ensemble": run_backtest(prefix, **common, signal_fn=gated(equal)),
             "adaptive_ensemble": run_backtest(prefix, **common, signal_fn=gated(adaptive)),
+            "frozen_adaptive_ensemble": run_backtest(
+                prefix, **common, signal_fn=gated(frozen_adaptive)
+            ),
         }
         individual_results = {
             name: run_backtest(prefix, **common, signal_fn=gated(signal_map))
@@ -289,6 +339,8 @@ def _evaluate_out_of_sample_folds(
             "test_candles": bounds["test_end"] - bounds["test_start"],
             "test_start_timestamp": test_start_ts,
             "test_end_timestamp": float(candles[bounds["test_end"] - 1][0]),
+            "adaptive_protocol": "prequential_online",
+            "frozen_adaptive_protocol": frozen_metadata,
             **{name: compact(item) for name, item in results.items()},
             "individual_strategies": {
                 name: compact(item) for name, item in individual_results.items()
@@ -299,7 +351,10 @@ def _evaluate_out_of_sample_folds(
 
 def _summarize_out_of_sample_folds(folds):
     """Aggregate disjoint test windows without implying one continuous account."""
-    names = ("baseline", "equal_weight_ensemble", "adaptive_ensemble", *STRATEGY_NAMES)
+    names = (
+        "baseline", "equal_weight_ensemble", "adaptive_ensemble",
+        "frozen_adaptive_ensemble", *STRATEGY_NAMES,
+    )
     summary = {}
     for name in names:
         rows = [
