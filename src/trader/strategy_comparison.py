@@ -60,8 +60,21 @@ def _metrics_by_regime(settled):
     return result
 
 
+def _infer_interval_seconds(candles):
+    """Infer the candle duration from observed timestamps; tolerate data gaps."""
+    deltas = sorted(
+        float(candles[index][0]) - float(candles[index - 1][0])
+        for index in range(1, len(candles))
+        if float(candles[index][0]) > float(candles[index - 1][0])
+    )
+    if not deltas:
+        raise ValueError("At least two increasing candle timestamps are required")
+    return deltas[len(deltas) // 2]
+
+
 def _walk_forward_signals(candles, *, fee_rate, slippage_bps):
     """Return equal/adaptive signal maps and auditable per-bar diagnostics."""
+    interval_seconds = _infer_interval_seconds(candles)
     pending = []
     settled = []
     equal_signals = {}
@@ -70,12 +83,13 @@ def _walk_forward_signals(candles, *, fee_rate, slippage_bps):
 
     for index, row in enumerate(candles):
         ts, close = float(row[0]), float(row[4])
+        candle_close_ts = ts + interval_seconds
 
-        # Settle before computing this bar's weights. The first candle whose
-        # timestamp is at/after the 3h target supplies the forecast exit close.
+        # A forecast is made at this candle's close. Settle it on the first
+        # candle whose CLOSE reaches its 3h target, not one full candle later.
         still_pending = []
         for forecast in pending:
-            if ts >= forecast["target_ts"]:
+            if candle_close_ts >= forecast["target_ts"]:
                 value = _net_forecast_return_pct(
                     forecast["entry_close"], close, fee_rate, slippage_bps
                 )
@@ -83,14 +97,14 @@ def _walk_forward_signals(candles, *, fee_rate, slippage_bps):
                     "strategy": forecast["strategy"],
                     "regime": forecast["regime"],
                     "return_pct": value,
-                    "settled_at": ts,
+                    "settled_at": candle_close_ts,
                     "forecast_at": forecast["forecast_ts"],
                 })
             else:
                 still_pending.append(forecast)
         pending = still_pending
 
-        # Weights are derived exclusively from forecasts settled by this bar.
+        # Weights are derived exclusively from forecasts settled by this close.
         current_metrics = _metrics_by_regime(settled)
         ensemble = evaluate_strategy_ensemble(candles[:index + 1])
         regime = ensemble.get("regime", "UNKNOWN")
@@ -115,6 +129,7 @@ def _walk_forward_signals(candles, *, fee_rate, slippage_bps):
         }
         diagnostics.append({
             "timestamp": ts,
+            "candle_close_timestamp": candle_close_ts,
             "regime": regime,
             "resolved_forecasts_before_bar": len(settled),
             "weights": {
@@ -133,14 +148,15 @@ def _walk_forward_signals(candles, *, fee_rate, slippage_bps):
                     pending.append({
                         "strategy": name,
                         "regime": regime,
-                        "forecast_ts": ts,
-                        "target_ts": ts + HORIZON_SECONDS,
+                        "forecast_ts": candle_close_ts,
+                        "target_ts": candle_close_ts + HORIZON_SECONDS,
                         "entry_close": close,
                     })
 
     return equal_signals, adaptive_signals, {
         "mode": "SHADOW_ONLY",
         "horizon_seconds": HORIZON_SECONDS,
+        "candle_interval_seconds": interval_seconds,
         "settled_forecasts": len(settled),
         "unresolved_forecasts": len(pending),
         "settled_forecasts_detail": settled,
