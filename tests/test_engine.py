@@ -479,7 +479,7 @@ def test_paused_cycle_refreshes_snapshot_using_fresh_market_valuation(tmp_path):
         "ohlc_analyzed": False, "reasons": [],
     }]
     engine.market_pairs = [{"symbol": "XBTEUR", "base": "XBT", "quote": "EUR"}]
-    assert engine.paused is True
+    engine.stop("test paused snapshot refresh")
 
     engine.cycle()
 
@@ -508,6 +508,7 @@ def test_paused_cycle_does_not_save_snapshot_with_missing_fresh_fx(tmp_path):
         "ohlc_analyzed": False, "reasons": [],
     }]
     engine.market_pairs = [{"symbol": "XBTEUR", "base": "XBT", "quote": "EUR"}]
+    engine.stop("test paused snapshot without FX")
 
     engine.cycle()
 
