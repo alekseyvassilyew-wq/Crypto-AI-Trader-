@@ -199,6 +199,8 @@ def test_paper_forward_report_has_readable_sections_and_warnings():
     }, 24)
 
     assert report.startswith("📈 <b>PAPER FORWARD-TEST</b>")
+    assert "\\n" not in report  # Telegram receives real line breaks, not literal backslash-n text.
+    assert "\n" in report
     assert "🔴 <b>РЕЗУЛЬТАТ: СНИЖЕНИЕ</b>" in report
     assert "АКТИВНОСТЬ ПОРТФЕЛЯ" in report
     assert "ЗАКРЫТЫЕ СДЕЛКИ" in report
