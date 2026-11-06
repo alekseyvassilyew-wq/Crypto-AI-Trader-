@@ -869,7 +869,7 @@ def test_paper_account_reconciliation_detects_broken_event_chain():
     )
     db.execute(
         "UPDATE paper_account_events SET wallet_before_json=? WHERE event_type='FILL'",
-        ('{"cash":20,"cash_by_currency":{"EUR":19},"cash_cost_basis_eur":{"EUR":19},"positions":{}}',),
+        ('{"cash":19,"cash_by_currency":{"EUR":19},"cash_cost_basis_eur":{"EUR":19},"positions":{}}',),
     )
     db.commit()
     result = get_paper_account_reconciliation(db)
