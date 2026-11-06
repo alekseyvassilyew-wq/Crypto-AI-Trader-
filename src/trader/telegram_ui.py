@@ -1319,6 +1319,35 @@ def build_app(s, engine, exchange):
                         f"  P/L до комиссий (после проскальзывания): {detail.get('gross_pnl_after_slippage_before_fees', 0.0):+.4f} EUR",
                         f"  Средняя прибыль/убыток сделки: {detail.get('average_winning_trade_eur', 0.0):+.4f} / {detail.get('average_losing_trade_eur', 0.0):+.4f} EUR",
                     ])
+            fold_results = result.get("walk_forward_folds", [])
+            lines.extend(["", "🧪 WALK-FORWARD · ВНЕ ВЫБОРКИ"])
+            if fold_results:
+                lines.append(
+                    f"Проверено независимых окон: {len(fold_results)} · "
+                    f"Размер теста: {fold_results[0]['test_candles']} свечей · "
+                    f"Embargo: {fold_results[0]['embargo_candles']} свечи"
+                )
+                for fold in fold_results:
+                    lines.append(
+                        f"Окно {fold['fold']} · train {fold['train_candles']} · "
+                        f"test {fold['test_candles']}"
+                    )
+                    for name in ("baseline", "equal_weight_ensemble", "adaptive_ensemble"):
+                        item = fold[name]
+                        lines.append(
+                            f"  {name}: {item['return_pct']:+.2f}% · "
+                            f"сделок {item['trades']} · DD {item['max_drawdown_pct']:.2f}%"
+                        )
+                    for name, item in fold["individual_strategies"].items():
+                        lines.append(
+                            f"  {name}: {item['return_pct']:+.2f}% · "
+                            f"сделок {item['trades']} · DD {item['max_drawdown_pct']:.2f}%"
+                        )
+            else:
+                lines.append(
+                    "Недостаточно истории для полного вневыборочного окна "
+                    "(нужно минимум 240 обучающих + embargo + 120 тестовых свечей)."
+                )
             last_bar = meta.get("walk_forward", [])[-1] if meta.get("walk_forward") else {}
             final_regime = last_bar.get("regime", "UNKNOWN")
             final_weights = last_bar.get("weights", {})
