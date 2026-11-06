@@ -223,12 +223,12 @@ class PaperBroker:
         return {"from": source, "to": target, "spent": amount, "received": received,
                 "fee": fee, "rate": rate}
 
-    def convert_route(self, legs):
-        """Apply a multi-leg virtual-cash conversion as one persisted wallet update.
+    def convert_route(self, legs, *, persist=True):
+        """Apply a multi-leg virtual-cash conversion as one wallet mutation.
 
-        Each leg is (from_currency, to_currency, amount, rate). If any leg
-        or the final persistence fails, restore the in-memory wallet and leave
-        the persisted wallet at its pre-route state.
+        Each leg is (from_currency, to_currency, amount, rate). When persist is
+        false, the caller must atomically persist the resulting wallet together
+        with its related ledger record.
         """
         cash_before = dict(self.cash_by_currency)
         basis_before = dict(self.cash_cost_basis_eur)
@@ -237,13 +237,15 @@ class PaperBroker:
                 self.convert(source, target, amount, rate, persist=False)
                 for source, target, amount, rate in legs
             ]
-            self._persist()
+            if persist:
+                self._persist()
             return conversions
         except Exception:
             self.cash_by_currency = cash_before
             self.cash_cost_basis_eur = basis_before
             self._sync_cash()
-            self._persist()
+            if persist:
+                self._persist()
             raise
 
     def buy(self, symbol, quote, price, currency="EUR", quote_to_eur_rate=None, *, persist=True):
