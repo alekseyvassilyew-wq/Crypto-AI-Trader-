@@ -68,6 +68,12 @@ def test_portfolio_daily_loss_limit_liquidates_open_positions_and_halts_entries(
     assert result["trades_detail"][0]["reason"] == "DAILY_LOSS_LIMIT"
     assert result["trades_detail"][0]["exit_price"] == pytest.approx(99.4)
     assert result["final_equity_eur"] < 100
+    assert result["assumptions"]["daily_loss_trigger_valuation"] == (
+        "net liquidation value at closed-candle marks after configured exit slippage and fee"
+    )
+    assert result["assumptions"]["daily_loss_liquidation_price_model"] == (
+        "closed-candle close adjusted by configured exit slippage and fee; no order-book depth simulation"
+    )
 
 
 def test_portfolio_backtest_no_signal_does_not_create_profit():
