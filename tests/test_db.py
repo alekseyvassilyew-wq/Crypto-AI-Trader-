@@ -321,6 +321,11 @@ def test_strategy_shadow_predictions_settle_at_target_candle_close_and_track_net
         db, symbol="XBTEUR", strategy="trend_following",
         signal_ts=100, target_ts=125, entry_price=100, regime="TREND_UP",
     )
+    # A second signal before the prior three-hour outcome resolves is skipped.
+    assert not record_strategy_shadow_prediction(
+        db, symbol="XBTEUR", strategy="trend_following",
+        signal_ts=101, target_ts=126, entry_price=101, regime="TREND_UP",
+    )
     assert record_strategy_shadow_prediction(
         db, symbol="XBTEUR", strategy="breakout",
         signal_ts=100, target_ts=125, entry_price=110, regime="TREND_UP",
