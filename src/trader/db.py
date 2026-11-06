@@ -63,7 +63,27 @@ CREATE TABLE IF NOT EXISTS paper_fx_conversions(
     legs INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_paper_fx_conversions_ts ON paper_fx_conversions(ts);
-CREATE TABLE IF NOT EXISTS trades(id INTEGER PRIMARY KEY, ts TEXT DEFAULT CURRENT_TIMESTAMP, mode TEXT NOT NULL, symbol TEXT NOT NULL, side TEXT NOT NULL, qty REAL NOT NULL, quote REAL NOT NULL, fee REAL NOT NULL, price REAL NOT NULL, status TEXT NOT NULL, order_id TEXT, fee_eur REAL, realized_pnl_eur REAL);
+CREATE TABLE IF NOT EXISTS paper_account_events(
+    id INTEGER PRIMARY KEY,
+    ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    event_type TEXT NOT NULL,
+    symbol TEXT,
+    side TEXT,
+    quote_currency TEXT,
+    from_currency TEXT,
+    to_currency TEXT,
+    qty REAL,
+    quote REAL,
+    fee REAL,
+    fee_currency TEXT,
+    fee_eur REAL,
+    realized_pnl_eur REAL,
+    wallet_before_json TEXT,
+    wallet_after_json TEXT NOT NULL,
+    details_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_paper_account_events_ts ON paper_account_events(ts);
+CREATE TABLE IF NOT EXISTS trades(id INTEGER PRIMARY KEY, ts TEXT DEFAULT CURRENT_TIMESTAMP, mode TEXT NOT NULL, symbol TEXT NOT NULL, side TEXT NOT NULL, qty REAL NOT NULL, quote REAL NOT NULL, fee REAL NOT NULL, price REAL NOT NULL, status TEXT NOT NULL, order_id TEXT, fee_eur REAL, realized_pnl_eur REAL, quote_currency TEXT);
 CREATE TABLE IF NOT EXISTS app_state(key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS telegram_report_pages(report_key TEXT PRIMARY KEY, pages_json TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE INDEX IF NOT EXISTS idx_telegram_report_pages_updated ON telegram_report_pages(updated_at);
@@ -127,6 +147,8 @@ def connect(path):
         db.execute("ALTER TABLE trades ADD COLUMN fee_eur REAL")
     if "realized_pnl_eur" not in trade_columns:
         db.execute("ALTER TABLE trades ADD COLUMN realized_pnl_eur REAL")
+    if "quote_currency" not in trade_columns:
+        db.execute("ALTER TABLE trades ADD COLUMN quote_currency TEXT")
     # Additive migration for databases created before model-version tracking.
     columns = {row["name"] for row in db.execute("PRAGMA table_info(ml_shadow_predictions)").fetchall()}
     if "model_version" not in columns:
