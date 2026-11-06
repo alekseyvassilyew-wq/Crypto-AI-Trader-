@@ -12,11 +12,13 @@ def estimate_book_vwap(levels, quantity, *, side):
     """
     if side not in {"buy", "sell"}:
         raise ValueError("side must be 'buy' or 'sell'")
-    remaining = _finite_number(quantity, "requested quantity", minimum=0, strict_minimum=True)
+    requested = _finite_number(quantity, "requested quantity", minimum=0, strict_minimum=True)
+    remaining = requested
     if not isinstance(levels, (list, tuple)) or not levels:
         raise ValueError("order book has no executable levels")
     notional = 0.0
     filled = 0.0
+    used = 0
     previous = None
     for level in levels:
         if not isinstance(level, (list, tuple)) or len(level) < 2:
@@ -30,19 +32,19 @@ def estimate_book_vwap(levels, quantity, *, side):
                 raise ValueError("bid book levels are not sorted")
         previous = price
         take = min(remaining, size)
-        notional += take * price
-        filled += take
-        remaining -= take
+        if take > 0:
+            used += 1
+            notional += take * price
+            filled += take
+            remaining -= take
         if remaining <= 1e-12:
             break
-    if remaining > max(1e-12, quantity * 1e-10):
+    if remaining > max(1e-12, requested * 1e-10):
         raise ValueError("insufficient visible order-book depth for full PAPER fill")
     average = notional / filled
     if not math.isfinite(average) or average <= 0:
         raise ValueError("invalid order-book VWAP")
-    return {"qty": filled, "quote": notional, "vwap": average, "levels_used": sum(
-        1 for level in levels if isinstance(level, (list, tuple)) and len(level) >= 2
-    )}
+    return {"qty": filled, "quote": notional, "vwap": average, "levels_used": used}
 
 
 def _finite_number(value, name, *, minimum=None, strict_minimum=False):
