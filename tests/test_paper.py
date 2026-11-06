@@ -283,3 +283,25 @@ def test_multiple_buys_accumulate_eur_basis_and_partial_sell_allocates_proportio
     assert remaining["qty"] == pytest.approx(3.0)
     assert remaining["cost_basis_eur"] == pytest.approx((20 * 0.90 + 30 * 0.95) * 3 / 4)
     assert remaining["entry_fees_eur"] == pytest.approx((20 * 0.01 * 0.90 + 30 * 0.01 * 0.95) * 3 / 4)
+
+
+def test_equity_fails_closed_when_non_eur_cash_has_no_fx_rate():
+    broker = PaperBroker(balance=20)
+    broker.cash_by_currency["USD"] = 10
+    with pytest.raises(ValueError, match="Missing FX valuation rate.*USD"):
+        broker.equity({}, {})
+
+
+def test_equity_fails_closed_when_open_position_mark_is_missing():
+    broker = PaperBroker(balance=20)
+    broker.buy("XBTEUR", 5, 10)
+    with pytest.raises(ValueError, match="Missing current PAPER mark price.*XBTEUR"):
+        broker.equity({}, {"EUR": 1.0})
+
+
+def test_equity_fails_closed_when_position_quote_fx_is_missing():
+    broker = PaperBroker(balance=20)
+    broker.cash_by_currency["USD"] = 10
+    broker.buy("ETHUSD", 5, 10, currency="USD")
+    with pytest.raises(ValueError, match="Missing FX valuation rate.*USD"):
+        broker.equity({"ETHUSD": 11}, {"EUR": 1.0})

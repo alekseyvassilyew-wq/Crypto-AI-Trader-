@@ -255,19 +255,35 @@ class Engine:
         """Estimate net liquidation value after exit fee and slippage on holdings."""
         prices = self.last_prices if prices is None else prices
         rates = self._fx_rates(prices) if fx_rates is None else fx_rates
-        cash_value = sum(
-            float(amount) * float(rates.get(currency, 0.0))
-            for currency, amount in self.paper.cash_by_currency.items()
-        )
+        cash_value = 0.0
+        for currency, amount in self.paper.cash_by_currency.items():
+            amount = float(amount)
+            if not math.isfinite(amount) or amount < 0:
+                raise ValueError(f"Invalid PAPER cash balance for {currency}")
+            if amount <= 0:
+                continue
+            rate = rates.get(currency)
+            if rate is None or not math.isfinite(float(rate)) or float(rate) <= 0:
+                raise ValueError(f"Missing or invalid PAPER cash FX valuation for {currency}")
+            cash_value += amount * float(rate)
         retention = (1.0 - self._slippage_rate()) * (1.0 - self.paper.fee_rate)
         position_value = 0.0
         for symbol, position in self.paper.positions.items():
-            mark = float(prices.get(symbol) or 0.0)
+            raw_mark = prices.get(symbol)
+            if raw_mark is None:
+                raise ValueError(f"Missing current PAPER mark price for {symbol}")
+            mark = float(raw_mark)
             quote = str(position.get("quote_currency", "EUR")).upper()
-            rate = float(rates.get(quote, 0.0))
-            if not all(math.isfinite(x) and x >= 0 for x in (mark, rate)):
+            raw_rate = rates.get(quote)
+            if raw_rate is None:
+                raise ValueError(f"Missing PAPER position FX valuation for {symbol} ({quote})")
+            rate = float(raw_rate)
+            if not all(math.isfinite(x) and x > 0 for x in (mark, rate)):
                 raise ValueError("Invalid PAPER liquidation valuation")
-            position_value += float(position["qty"]) * mark * retention * rate
+            qty = float(position["qty"])
+            if not math.isfinite(qty) or qty <= 0:
+                raise ValueError(f"Invalid PAPER position quantity for {symbol}")
+            position_value += qty * mark * retention * rate
         equity = cash_value + position_value
         if not math.isfinite(equity) or equity < 0:
             raise ValueError("PAPER liquidation equity is invalid")
@@ -280,7 +296,9 @@ class Engine:
         if state.get("date") != day:
             if prices is None:
                 return False
-            rates = self._fx_rates(prices)
+            # Daily risk baselines must use current executable-market FX marks,
+            # never a cached fallback that can conceal currency moves.
+            rates = self._fresh_fx_rates(prices)
             start_equity = self._equity_after_liquidation(prices, rates)
             set_state(self.db, "daily", {
                 "date": day,
@@ -454,11 +472,12 @@ class Engine:
     def daily_pnl(self, prices=None):
         prices = self.last_prices if prices is None else prices or {}
         if not prices and self.paper.positions:
-            return 0.0
+            raise ValueError("Cannot calculate PAPER daily PnL: open positions have no current market marks")
         if not self._ensure_day(prices if prices else None):
             return 0.0
         state = get_state(self.db, "daily", {})
-        return self._equity_after_liquidation(prices, self._fx_rates(prices)) - float(state.get("start_equity", self.paper.cash))
+        # Risk gates require fresh FX for every non-EUR wallet balance and position.
+        return self._equity_after_liquidation(prices, self._fresh_fx_rates(prices)) - float(state.get("start_equity", self.paper.cash))
 
     def scan_one(self, symbol, tickers=None, fx_rates=None, quote_currency=None):
         tickers = tickers if tickers is not None else self.exchange.tickers([symbol])
@@ -1008,7 +1027,8 @@ class Engine:
                 rates = self._fx_rates(prices)
                 fresh_rates = self._fresh_fx_rates(prices)
                 fresh_buy_rates = self._fresh_fx_buy_rates(prices)
-                equity_eur = self._equity_after_liquidation(prices, rates)
+                # Never size risk using cached FX valuation fallbacks.
+                equity_eur = self._equity_after_liquidation(prices, fresh_rates)
                 atr_percent = max(0.0, float(signal.get("atr_percent") or 0.0))
                 stop_distance_pct = max(float(self.s.stop_loss_pct), atr_percent * 1.5, 0.5)
                 risk_budget_eur = equity_eur * float(getattr(self.s, "risk_per_trade_pct", 0.5)) / 100.0

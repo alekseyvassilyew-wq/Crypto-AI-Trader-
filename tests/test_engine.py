@@ -419,7 +419,7 @@ def test_saved_fx_snapshot_values_non_eur_wallet_after_restart(tmp_path):
     rates = engine._fx_rates({})
 
     assert rates["USD"] == pytest.approx(0.9)
-    assert engine.paper.equity({}, rates) == pytest.approx(
+    assert engine.paper.equity({"ETHUSD": 10.0}, rates) == pytest.approx(
         20.0 + engine.paper.balance("USD") * 0.9
         + engine.paper.positions["ETHUSD"]["qty"] * 10.0 * 0.9
     )
@@ -1202,3 +1202,48 @@ def test_paper_trade_report_formats_realized_eur_result_and_escapes_html():
         "| entry=100 | exit=97 | change=-3% | fee_eur=0.1 | net_pnl_eur=-3"
     )
     assert "XBT&lt;EUR" in safe_message
+
+
+def test_liquidation_equity_fails_closed_on_missing_position_mark(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.paper.buy("XBTEUR", 5, 100.0)
+    with pytest.raises(ValueError, match="Missing current PAPER mark price.*XBTEUR"):
+        engine._equity_after_liquidation({}, {"EUR": 1.0})
+    db.close()
+
+
+def test_liquidation_equity_fails_closed_on_missing_cash_fx_rate(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.paper.cash_by_currency["USD"] = 5.0
+    with pytest.raises(ValueError, match="Missing or invalid PAPER cash FX valuation.*USD"):
+        engine._equity_after_liquidation({}, {"EUR": 1.0})
+    db.close()
+
+
+def test_liquidation_equity_fails_closed_on_missing_position_fx_rate(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.paper.cash_by_currency["USD"] = 0.0
+    engine.paper.positions = {
+        "ETHUSD": {"qty": 0.1, "avg_price": 100.0, "quote_currency": "USD"}
+    }
+    with pytest.raises(ValueError, match="Missing PAPER position FX valuation.*ETHUSD"):
+        engine._equity_after_liquidation({"ETHUSD": 100.0}, {"EUR": 1.0})
+    db.close()
+
+
+def test_daily_pnl_does_not_treat_missing_open_position_marks_as_zero(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.paper.buy("XBTEUR", 5, 10)
+    with pytest.raises(ValueError, match="open positions have no current market marks"):
+        engine.daily_pnl({})
+    db.close()
+
+
+def test_daily_risk_baseline_rejects_cached_only_fx_rate(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.paper.cash_by_currency["USD"] = 5.0
+    set_state(db, "paper_fx_rates", {"USD": 0.9})
+    set_state(db, "daily", {"date": "2000-01-01", "start_equity": 20.0, "realized": 0.0})
+    with pytest.raises(ValueError, match="Missing or invalid PAPER cash FX valuation.*USD"):
+        engine._ensure_day({"SOME_MARKET": 1.0})
+    db.close()
