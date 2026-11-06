@@ -274,6 +274,20 @@ def test_wallet_seeds_usd_and_usdt_from_starting_eur_once(tmp_path):
     assert engine.paper.cash_by_currency == before
     rows = db.execute("SELECT COUNT(*) AS n FROM audit WHERE event='PAPER_WALLET_SEED'").fetchone()
     assert rows["n"] == 2
+    conversions = db.execute(
+        "SELECT from_currency,to_currency,spent,received,fee_amount,fee_currency,fee_eur,legs "
+        "FROM paper_fx_conversions ORDER BY id"
+    ).fetchall()
+    assert len(conversions) == 2
+    assert [(row["from_currency"], row["to_currency"]) for row in conversions] == [
+        ("EUR", "USD"), ("EUR", "USDT"),
+    ]
+    for row in conversions:
+        assert row["spent"] == pytest.approx(5.0)
+        assert row["fee_currency"] == row["to_currency"]
+        assert row["fee_amount"] > 0
+        assert row["fee_eur"] == pytest.approx(row["fee_amount"] / buy_rates[row["to_currency"]])
+        assert row["legs"] == 1
     db.close()
 
 
