@@ -47,11 +47,7 @@ def evaluate_adaptive_strategy_weights(regime, metrics):
             "reason": "qualified" if eligible else "insufficient_or_weak_evidence",
         }
         raw_weights.append(weight)
-    # Normalize only the advisory weights; an absent strategy is not invented.
-    total = sum(raw_weights)
-    if total > 0:
-        for item in strategies.values():
-            item["weight"] = round(item["weight"] * len(strategies) / total, 4)
+    # Keep unqualified strategies exactly neutral; do not normalize them downward.
     return {
         "mode": "SHADOW_ONLY",
         "regime": regime,
