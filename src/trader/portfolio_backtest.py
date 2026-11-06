@@ -39,6 +39,7 @@ def run_portfolio_backtest(
     take_profit_pct=4.0,
     trailing_stop_pct=1.5,
     max_daily_loss_eur=None,
+    interval_seconds=None,
     signal_fn=None,
 ):
     """Simulate several spot markets against one shared multi-currency wallet.
@@ -159,6 +160,34 @@ def run_portfolio_backtest(
         elif timestamps != common_timestamps:
             raise ValueError("All markets must have identical candle timestamps")
         markets[symbol] = {"rows": rows, "quote": quote}
+
+    # Identical timestamps across symbols do not prove that the shared
+    # timeline is complete: every market could be missing the same candle.
+    # Accept an explicit source timeframe when known; otherwise infer the
+    # smallest observed step and reject larger discontinuities.
+    inferred_interval = interval_seconds is None
+    if interval_seconds is None:
+        deltas = [
+            later - earlier
+            for earlier, later in zip(common_timestamps, common_timestamps[1:])
+        ]
+        expected_interval = min(deltas)
+    else:
+        expected_interval = _positive(interval_seconds, "interval_seconds")
+    tolerance = min(1.0, expected_interval * 0.001)
+    for index, (earlier, later) in enumerate(zip(common_timestamps, common_timestamps[1:]), start=1):
+        delta = later - earlier
+        if abs(delta - expected_interval) > tolerance:
+            if delta > expected_interval:
+                missing = max(1, round(delta / expected_interval) - 1)
+                raise ValueError(
+                    f"Portfolio candle history has a gap before index {index}: "
+                    f"{missing} expected candle(s) missing"
+                )
+            raise ValueError(
+                f"Portfolio candle timestamps are misaligned before index {index}: "
+                f"expected {expected_interval:g}s, got {delta:.6f}s"
+            )
 
     signal_fn = signal_fn or (lambda symbol, history: analyze(history))
     cash = {"EUR": initial}
@@ -465,6 +494,8 @@ def run_portfolio_backtest(
             "fee_rate_pct_per_side": fee * 100,
             "slippage_bps_per_side": slip_bps,
             "execution": "next candle open",
+            "candle_interval_seconds": expected_interval,
+            "candle_interval_inferred": inferred_interval,
             "intrabar_priority": "low before high; existing stops before take-profit; new trailing peaks activate next candle",
             "buy_hold": "equal-weight same markets from first strategy entry (or first executable candle if no trades) through final close; includes conversion and two-sided fees/slippage",
             "fx_rates_fallback": rates,
