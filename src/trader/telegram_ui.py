@@ -30,6 +30,53 @@ async def _load_report_pages(runner, db, report_key):
 
 log = logging.getLogger(__name__)
 
+
+def _format_paper_trade_action(action):
+    """Render a PAPER fill as a readable Telegram card."""
+    parts = [part.strip() for part in str(action).split("|")]
+    head = parts[0].split()
+    if len(head) < 2:
+        return "• " + html.escape(str(action))
+    symbol, side = head[0], head[1].upper()
+    reason = head[2].upper() if side == "SELL" and len(head) > 2 else ""
+    fields = {}
+    for part in parts[1:]:
+        if "=" in part:
+            key, value = part.split("=", 1)
+            fields[key.strip()] = value.strip()
+    labels = {"STOP_LOSS": "Защитный Stop-Loss", "TAKE_PROFIT": "Фиксация Take-Profit",
+              "TRAILING_STOP": "Защитный Trailing Stop", "SIGNAL_SELL": "Сигнал на продажу",
+              "DAILY_LOSS_LIMIT": "Дневной лимит убытка"}
+    quote = html.escape(fields.get("quote", ""))
+    qty = html.escape(fields.get("qty", "н/д"))
+    fee = html.escape(fields.get("fee_eur", "н/д"))
+    if side == "BUY":
+        return "\n".join([
+            f"🟢 <b>ОТКРЫТА PAPER-ПОЗИЦИЯ · {html.escape(symbol)}</b>",
+            f"Объём: <code>{qty}</code> {quote}",
+            f"Цена входа: <b>{html.escape(fields.get('price', 'н/д'))}</b> {quote}",
+            f"Комиссия: <b>{fee} EUR</b>",
+            "<i>Виртуальная сделка; реальные средства не затрагиваются.</i>",
+        ])
+    if side == "SELL":
+        pnl = fields.get("net_pnl_eur", "н/д")
+        try:
+            pnl_icon = "🟢" if float(pnl) >= 0 else "🔴"
+        except (TypeError, ValueError):
+            pnl_icon = "⚪"
+        return "\n".join([
+            f"🏁 <b>ЗАКРЫТА PAPER-ПОЗИЦИЯ · {html.escape(symbol)}</b>",
+            f"Причина: <b>{html.escape(labels.get(reason, reason or 'Продажа'))}</b>",
+            f"Объём: <code>{qty}</code> {quote}",
+            f"Вход → выход: <b>{html.escape(fields.get('entry', 'н/д'))} → {html.escape(fields.get('exit', 'н/д'))}</b> {quote}",
+            f"Изменение цены: <b>{html.escape(fields.get('change', 'н/д'))}%</b>",
+            f"Комиссия: <b>{fee} EUR</b>",
+            f"{pnl_icon} Чистый реализованный результат: <b>{html.escape(pnl)} EUR</b>",
+            "<i>Результат рассчитан PAPER-движком с учётом EUR-конвертации.</i>",
+        ])
+    return "• " + html.escape(str(action))
+
+
 def _format_scan_report(rows, pair_count, ticker_count):
     """Render a compact, readable Telegram market-scan report."""
     def number(value, digits=1):
@@ -569,7 +616,8 @@ def build_app(s, engine, exchange):
     async def send_topic(context, topic_id, text, parse_mode=None):
         if not s.telegram_group_chat_id:
             return
-        plain_text = _telegram_plain(text).strip()
+        raw_text = str(text or "")
+        plain_text = _telegram_plain(raw_text).strip()
         if plain_text and "━━━━━━━━━━━━━━━━━━" not in plain_text:
             heading, separator, remainder = plain_text.partition("\n")
             plain_text = (
@@ -579,7 +627,15 @@ def build_app(s, engine, exchange):
             )
         is_error_topic = bool(topic_id and topic_id == s.topic_errors_id)
         pages = [plain_text[:3900]] if is_error_topic else _paginate_report_text(plain_text)
-        kwargs = {"chat_id": s.telegram_group_chat_id, "text": pages[0]}
+        # Keep HTML styling for compact reports. Long reports use plain-text
+        # pagination so a page boundary can never split an HTML tag.
+        single_styled_page = bool(parse_mode and len(pages) == 1 and len(raw_text) <= 3900)
+        kwargs = {
+            "chat_id": s.telegram_group_chat_id,
+            "text": raw_text if single_styled_page else pages[0],
+        }
+        if single_styled_page:
+            kwargs["parse_mode"] = parse_mode
         if topic_id:
             kwargs["message_thread_id"] = topic_id
         message = await context.bot.send_message(**kwargs)
@@ -2017,18 +2073,21 @@ def build_app(s, engine, exchange):
                     await send_topic(context, s.topic_general_id, "⏸ PAPER автоматически приостановлен из-за ошибки рыночных данных или валютной оценки.")
 
                 if trade_actions:
-                    trade_message = "📈 PAPER — сделки:\n" + "\n".join(trade_actions)
-                    await send_topic(context, s.topic_trades_id, trade_message)
+                    cards = "\n\n━━━━━━━━━━━━━━━━━━\n\n".join(_format_paper_trade_action(item) for item in trade_actions)
+                    trade_message = "📈 <b>PAPER · СДЕЛКИ</b>\n━━━━━━━━━━━━━━━━━━\n" + cards + "\n━━━━━━━━━━━━━━━━━━\n<i>Только виртуальные операции.</i>"
+                    await send_topic(context, s.topic_trades_id, trade_message, parse_mode="HTML")
                     portfolio_message = (
-                        "💼 PAPER — обновление портфеля\n"
-                        f"Доступно: {state['cash']}\n"
-                        f"Открытых позиций: {len(state['positions'])}/{s.max_positions}\n"
-                        f"P/L сегодня: {daily_text}"
+                        "💼 <b>PAPER · ОБНОВЛЕНИЕ ПОРТФЕЛЯ</b>\n━━━━━━━━━━━━━━━━━━\n"
+                        f"Свободные средства: <code>{html.escape(str(state['cash']))}</code>\n"
+                        f"Открытые позиции: <b>{len(state['positions'])}/{s.max_positions}</b>\n"
+                        f"Результат за сегодня: <b>{html.escape(daily_text)}</b>\n━━━━━━━━━━━━━━━━━━"
                     )
-                    await send_topic(context, s.topic_portfolio_id, portfolio_message)
+                    await send_topic(context, s.topic_portfolio_id, portfolio_message, parse_mode="HTML")
 
                 if profit_actions:
-                    await send_topic(context, s.topic_profit_id, "💰 PAPER — результат/риск:\n" + "\n".join(profit_actions))
+                    cards = "\n\n━━━━━━━━━━━━━━━━━━\n\n".join(_format_paper_trade_action(item) for item in profit_actions)
+                    message = "💰 <b>PAPER · РЕЗУЛЬТАТ И РИСК</b>\n━━━━━━━━━━━━━━━━━━\n" + cards + "\n━━━━━━━━━━━━━━━━━━"
+                    await send_topic(context, s.topic_profit_id, message, parse_mode="HTML")
 
                 if any("DAILY LOSS" in item for item in actions):
                     await send_topic(context, s.topic_general_id, "⏸ Достигнут дневной лимит убытка. PAPER остановлен.")

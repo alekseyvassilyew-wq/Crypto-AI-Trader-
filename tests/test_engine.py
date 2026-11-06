@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 from src.trader.db import connect, get_state, set_state
 from src.trader.engine import Engine
+from src.trader.telegram_ui import _format_paper_trade_action
 from src.trader.paper import PaperBroker
 import pytest
 
@@ -100,15 +101,30 @@ def test_daily_loss_limit_pauses_engine(tmp_path):
     db.close()
 
 
-def test_engine_starts_paused_but_keeps_monitoring_without_seed_or_trading(tmp_path):
+def test_fresh_engine_starts_running_and_manual_pause_survives_restart(tmp_path):
+    engine, db = make_engine(tmp_path)
+    assert engine.paused is False
+
+    engine.stop("user requested pause")
+    restarted = Engine(engine.s, db, DummyExchange(), engine.paper)
+    assert restarted.paused is True
+
+    restarted.start()
+    assert restarted.paused is False
+    restarted_again = Engine(engine.s, db, DummyExchange(), engine.paper)
+    assert restarted_again.paused is False
+    db.close()
+
+
+def test_engine_keeps_monitoring_without_opening_positions_when_signals_hold(tmp_path):
     engine, db = make_engine(tmp_path)
     engine.scan = lambda **kwargs: [{
-        "symbol": "XBTEUR", "quote": "EUR", "signal": "BUY", "score": 5,
+        "symbol": "XBTEUR", "quote": "EUR", "signal": "HOLD", "score": 1,
         "price": 10.0, "bid": 9.99, "ask": 10.01,
         "spread_bps": 10, "turnover": 50000, "turnover_eur": 50000, "reasons": [],
     }]
     before = dict(engine.paper.cash_by_currency)
-    assert engine.paused is True
+    assert engine.paused is False
     assert engine.cycle() == []
     assert engine.last_scan_at is not None
     assert engine.last_signals
@@ -463,7 +479,7 @@ def test_paused_cycle_refreshes_snapshot_using_fresh_market_valuation(tmp_path):
         "ohlc_analyzed": False, "reasons": [],
     }]
     engine.market_pairs = [{"symbol": "XBTEUR", "base": "XBT", "quote": "EUR"}]
-    assert engine.paused is True
+    engine.stop("test paused snapshot refresh")
 
     engine.cycle()
 
@@ -492,6 +508,7 @@ def test_paused_cycle_does_not_save_snapshot_with_missing_fresh_fx(tmp_path):
         "ohlc_analyzed": False, "reasons": [],
     }]
     engine.market_pairs = [{"symbol": "XBTEUR", "base": "XBT", "quote": "EUR"}]
+    engine.stop("test paused snapshot without FX")
 
     engine.cycle()
 
@@ -963,6 +980,7 @@ def test_engine_restarts_paused_with_paper_wallet_restored(tmp_path):
     engine.paper.buy("XBTEUR", 5, 10)
     expected_cash = dict(engine.paper.cash_by_currency)
     expected_positions = {key: dict(value) for key, value in engine.paper.positions.items()}
+    engine.stop("test explicitly persists paused state")
     db.close()
 
     db2 = connect(tmp_path / "engine.sqlite3")
@@ -1164,3 +1182,23 @@ def test_scan_candle_cache_does_not_cache_failed_exchange_requests(tmp_path, mon
         engine._scan_candles("XBTEUR")
     assert exchange.calls == 2
     db.close()
+
+
+
+def test_paper_trade_report_formats_realized_eur_result_and_escapes_html():
+    message = _format_paper_trade_action(
+        "XBTEUR SELL STOP_LOSS | qty=0.12345678 | quote=EUR "
+        "| entry=100 | exit=97.5 | change=-2.50% | fee_eur=0.0120 | net_pnl_eur=-0.3250"
+    )
+    assert "ЗАКРЫТА PAPER-ПОЗИЦИЯ" in message
+    assert "Защитный Stop-Loss" in message
+    assert "100 → 97.5" in message
+    assert "Чистый реализованный результат" in message
+    assert "-0.3250 EUR" in message
+    assert "🔴" in message
+
+    safe_message = _format_paper_trade_action(
+        "XBT<EUR SELL STOP_LOSS | qty=1 | quote=EUR "
+        "| entry=100 | exit=97 | change=-3% | fee_eur=0.1 | net_pnl_eur=-3"
+    )
+    assert "XBT&lt;EUR" in safe_message
