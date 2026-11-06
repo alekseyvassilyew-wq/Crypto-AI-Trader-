@@ -68,6 +68,8 @@ def build_walk_forward_folds(
     folds = []
     train_end = min_train_candles
     while True:
+        if train_end > len(candles):
+            break
         if time_based:
             cutoff = timestamps[train_end - 1] + float(interval_seconds) + float(embargo_seconds)
             test_start = train_end
