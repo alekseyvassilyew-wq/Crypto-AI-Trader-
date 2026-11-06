@@ -338,3 +338,42 @@ def test_monitor_status_escapes_api_error_and_shows_dashboard_sections():
     assert "отслеживается запусков — 1" in report
     assert "<bad & unsafe>" in report
     assert "secret" not in report
+
+
+def test_market_cycle_health_detects_stale_scans_and_recovery_window():
+    from datetime import datetime, timedelta, timezone
+    from src.trader.monitoring import market_cycle_health
+
+    now = datetime(2026, 11, 6, 12, 0, tzinfo=timezone.utc)
+    assert market_cycle_health(
+        now - timedelta(seconds=120), now - timedelta(seconds=300), now, 60
+    ) == {
+        "status": "healthy", "age_seconds": 120.0, "threshold_seconds": 180.0,
+    }
+    stale = market_cycle_health(
+        now - timedelta(seconds=181), now - timedelta(seconds=300), now, 60
+    )
+    assert stale["status"] == "stale"
+    assert stale["age_seconds"] == 181.0
+    assert stale["threshold_seconds"] == 180.0
+
+
+def test_market_cycle_health_uses_three_scan_intervals_for_slow_cadence():
+    from datetime import datetime, timedelta, timezone
+    from src.trader.monitoring import market_cycle_health
+
+    now = datetime(2026, 11, 6, 12, 0, tzinfo=timezone.utc)
+    result = market_cycle_health(
+        now - timedelta(seconds=500), now - timedelta(seconds=900), now, 300
+    )
+    assert result["status"] == "healthy"
+    assert result["threshold_seconds"] == 900.0
+
+
+def test_market_cycle_health_handles_startup_before_first_scan():
+    from datetime import datetime, timedelta, timezone
+    from src.trader.monitoring import market_cycle_health
+
+    now = datetime(2026, 11, 6, 12, 0, tzinfo=timezone.utc)
+    result = market_cycle_health(None, now - timedelta(seconds=181), now, 60)
+    assert result["status"] == "stale"
