@@ -1113,6 +1113,8 @@ def test_scan_candle_cache_reuses_closed_candles_until_timeframe_boundary(tmp_pa
     monkeypatch.setattr("src.trader.engine.time.time", lambda: 3600 * 101 + 10)
     engine._scan_candles("XBTEUR", interval="60", limit=120)
     assert len(exchange.calls) == 2
+    assert engine._scan_candle_cache_misses == 2
+    assert engine._scan_candle_cache_hits == 3
     db.close()
 
 
