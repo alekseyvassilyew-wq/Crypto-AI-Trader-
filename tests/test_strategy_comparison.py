@@ -1,3 +1,4 @@
+from src.trader import strategy_comparison
 from src.trader.strategy_comparison import (
     HORIZON_SECONDS,
     _walk_forward_signals,
@@ -14,6 +15,22 @@ def candles(count=150, interval=3600):
             close * 0.996, close, 1200.0 if i % 7 == 0 else 1000.0,
         ])
     return rows
+
+
+def always_buy(rows):
+    names = (
+        "trend_following", "mean_reversion", "breakout",
+        "momentum", "volatility_expansion",
+    )
+    return {
+        "mode": "SHADOW_ONLY",
+        "regime": "TREND_UP",
+        "atr_percent": 1.0,
+        "strategies": {
+            name: {"signal": "BUY", "score": 1, "reason": "test fixture"}
+            for name in names
+        },
+    }
 
 
 def test_walk_forward_diagnostics_do_not_change_when_future_data_changes():
@@ -49,7 +66,8 @@ def test_walk_forward_uses_only_settled_forecasts_for_adaptive_weights():
     assert HORIZON_SECONDS == 10800
 
 
-def test_forecasts_settle_on_first_candle_close_at_or_after_horizon():
+def test_forecasts_settle_on_first_candle_close_at_or_after_horizon(monkeypatch):
+    monkeypatch.setattr(strategy_comparison, "evaluate_strategy_ensemble", always_buy)
     rows = candles(count=150, interval=3600)
     _, _, result = _walk_forward_signals(rows, fee_rate=0.0026, slippage_bps=5)
     assert result["settled_forecasts_detail"]
@@ -59,10 +77,12 @@ def test_forecasts_settle_on_first_candle_close_at_or_after_horizon():
         assert elapsed < HORIZON_SECONDS + 3600
 
 
-def test_same_strategy_forecasts_do_not_overlap():
+def test_same_strategy_forecasts_do_not_overlap(monkeypatch):
+    monkeypatch.setattr(strategy_comparison, "evaluate_strategy_ensemble", always_buy)
     rows = candles(count=150, interval=3600)
     _, _, result = _walk_forward_signals(rows, fee_rate=0.0026, slippage_bps=5)
     forecasts = result["settled_forecasts_detail"]
+    assert forecasts
     for strategy in {item["strategy"] for item in forecasts}:
         selected = sorted(
             (item for item in forecasts if item["strategy"] == strategy),
