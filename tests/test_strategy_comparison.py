@@ -172,3 +172,22 @@ def test_trade_diagnostics_reconcile_exit_reasons_costs_and_holding_time():
     assert summary["average_holding_hours"] == pytest.approx(1.5)
     assert summary["average_winning_trade_eur"] == pytest.approx(0.13)
     assert summary["average_losing_trade_eur"] == pytest.approx(-0.40)
+
+
+def test_walk_forward_fold_backtests_are_out_of_sample_and_disjoint():
+    rows = candles(count=720, interval=3600)
+    result = run_strategy_comparison(rows, initial_cash=20, max_trade=5)
+    folds = result["walk_forward_folds"]
+    assert len(folds) == 3
+    assert all(item["test_candles"] == 120 for item in folds)
+    assert all(item["embargo_candles"] == 3 for item in folds)
+    assert folds[0]["test_start_timestamp"] > rows[folds[0]["train_candles"] - 1][0]
+    assert folds[1]["test_start_timestamp"] > folds[0]["test_end_timestamp"]
+    for fold in folds:
+        assert set(fold["individual_strategies"]) == {
+            "trend_following", "mean_reversion", "breakout",
+            "momentum", "volatility_expansion",
+        }
+        for result_name in ("baseline", "equal_weight_ensemble", "adaptive_ensemble"):
+            assert "return_pct" in fold[result_name]
+        assert all("return_pct" in item for item in fold["individual_strategies"].values())
