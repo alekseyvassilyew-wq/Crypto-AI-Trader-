@@ -925,6 +925,91 @@ def get_telegram_report_pages(db, report_key):
     return pages
 
 
+def _paper_wallet_payload(cash_by_currency, positions, cash_cost_basis_eur):
+    if not isinstance(cash_by_currency, dict) or not isinstance(positions, dict):
+        raise ValueError("PAPER wallet state must contain currency balances and positions")
+    if not isinstance(cash_cost_basis_eur, dict):
+        raise ValueError("PAPER cash EUR cost basis must be a mapping")
+    wallet = {
+        "cash": float(cash_by_currency.get("EUR", 0.0)),
+        "cash_by_currency": cash_by_currency,
+        "cash_cost_basis_eur": cash_cost_basis_eur,
+        "positions": positions,
+    }
+    return json.dumps(wallet, separators=(",", ":"), allow_nan=False)
+
+
+def _paper_wallet_financial_projection(wallet):
+    if not isinstance(wallet, dict):
+        raise ValueError("PAPER event wallet snapshot must be an object")
+    cash = wallet.get("cash_by_currency")
+    basis = wallet.get("cash_cost_basis_eur", {})
+    positions = wallet.get("positions")
+    if not isinstance(cash, dict) or not isinstance(basis, dict) or not isinstance(positions, dict):
+        raise ValueError("PAPER event wallet snapshot is missing financial mappings")
+    normalized_cash = {}
+    for currency, raw in cash.items():
+        amount = float(raw)
+        if not isinstance(currency, str) or not currency.strip() or not math.isfinite(amount) or amount < 0:
+            raise ValueError("Invalid PAPER event cash balance")
+        normalized_cash[currency.upper()] = amount
+    normalized_basis = {}
+    for currency, raw in basis.items():
+        if not isinstance(currency, str) or not currency.strip():
+            raise ValueError("Invalid PAPER event cost-basis currency")
+        amount = None if raw is None else float(raw)
+        if amount is not None and (not math.isfinite(amount) or amount < 0):
+            raise ValueError("Invalid PAPER event cash cost basis")
+        normalized_basis[currency.upper()] = amount
+    normalized_positions = {}
+    for symbol, position in positions.items():
+        if not isinstance(position, dict):
+            raise ValueError("Invalid PAPER event position")
+        qty = float(position.get("qty"))
+        avg_price = float(position.get("avg_price"))
+        quote_currency = str(position.get("quote_currency") or "").upper()
+        cost_basis = position.get("cost_basis_eur")
+        entry_fees = position.get("entry_fees_eur")
+        cost_basis = None if cost_basis is None else float(cost_basis)
+        entry_fees = None if entry_fees is None else float(entry_fees)
+        if (
+            not math.isfinite(qty) or qty <= 0 or not math.isfinite(avg_price) or avg_price <= 0
+            or not quote_currency
+            or cost_basis is not None and (not math.isfinite(cost_basis) or cost_basis < 0)
+            or entry_fees is not None and (not math.isfinite(entry_fees) or entry_fees < 0)
+        ):
+            raise ValueError("Invalid PAPER event position financial fields")
+        normalized_positions[str(symbol).upper()] = {
+            "qty": qty, "avg_price": avg_price, "quote_currency": quote_currency,
+            "cost_basis_eur": cost_basis, "entry_fees_eur": entry_fees,
+        }
+    legacy_cash = wallet.get("cash")
+    if legacy_cash is not None:
+        legacy_cash = float(legacy_cash)
+        if not math.isfinite(legacy_cash) or abs(legacy_cash - normalized_cash.get("EUR", 0.0)) > 1e-8:
+            raise ValueError("PAPER EUR cash alias does not match currency balance")
+    return {"cash_by_currency": normalized_cash, "cash_cost_basis_eur": normalized_basis,
+            "positions": normalized_positions}
+
+
+def ensure_paper_account_baseline(db, *, cash_by_currency, positions, cash_cost_basis_eur):
+    """Create one immutable baseline; later events are replayable from this point."""
+    payload = _paper_wallet_payload(cash_by_currency, positions, cash_cost_basis_eur)
+    _paper_wallet_financial_projection(json.loads(payload))
+    with db:
+        existing = db.execute(
+            "SELECT id FROM paper_account_events WHERE event_type='BASELINE' ORDER BY id LIMIT 1"
+        ).fetchone()
+        if existing is not None:
+            return False
+        db.execute(
+            "INSERT INTO paper_account_events(event_type,wallet_after_json,details_json) "
+            "VALUES('BASELINE',?,'{}')",
+            (payload,),
+        )
+    return True
+
+
 def save_paper_fill(db, *, cash_by_currency, positions, symbol, side, qty, quote, fee, price,
                     fee_eur=None, realized_pnl_eur=None, cash_cost_basis_eur=None):
     """Atomically persist a PAPER wallet mutation and its corresponding trade fill."""
