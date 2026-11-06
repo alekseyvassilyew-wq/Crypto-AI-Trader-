@@ -410,3 +410,23 @@ def test_conversion_route_carries_unknown_basis_without_inventing_value():
     assert second["received"] == pytest.approx(7.05672)
     assert broker.cash_cost_basis_eur["GBP"] is None
 
+
+
+def test_conversion_route_can_defer_wallet_persistence_for_atomic_ledger(tmp_path):
+    from src.trader.db import connect, get_state
+
+    db = connect(tmp_path / "deferred-fx.sqlite3")
+    broker = PaperBroker(balance=20.0, fee_rate=0.01, db=db)
+    before = get_state(db, "paper_broker")
+
+    conversions = broker.convert_route([
+        ("EUR", "USD", 10.0, 0.9),
+    ], persist=False)
+
+    assert conversions[0]["received"] == pytest.approx(8.91)
+    assert broker.balance("EUR") == pytest.approx(10.0)
+    assert broker.balance("USD") == pytest.approx(8.91)
+    # The in-memory mutation is deliberately not durable until the caller
+    # commits the wallet and its corresponding fee-ledger row together.
+    assert get_state(db, "paper_broker") == before
+    db.close()
