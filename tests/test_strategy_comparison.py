@@ -1,4 +1,6 @@
-import pytest\n\nfrom src.trader import strategy_comparison
+import pytest
+
+from src.trader import strategy_comparison
 from src.trader.strategy_comparison import (
     HORIZON_SECONDS,
     _walk_forward_signals,
@@ -163,7 +165,7 @@ def test_trade_diagnostics_reconcile_exit_reasons_costs_and_holding_time():
     assert summary["trades"] == 2
     assert summary["buy_signals"] == 7
     assert summary["exit_reasons"] == {"STOP_LOSS": 1, "TAKE_PROFIT": 1}
-    assert summary["gross_pnl_after_slippage_before_fees"] ==  pytest.approx(-0.15)
+    assert summary["gross_pnl_after_slippage_before_fees"] == pytest.approx(-0.15)
     assert summary["fees_paid"] == pytest.approx(0.12)
     assert summary["net_pnl"] == pytest.approx(-0.32)
     assert summary["average_holding_hours"] == pytest.approx(1.5)
