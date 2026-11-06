@@ -5,12 +5,12 @@ from src.trader.strategy_comparison import (
 )
 
 
-def candles(count=150):
+def candles(count=150, interval=3600):
     rows = []
     for i in range(count):
         close = 100.0 * (1.001 ** i)
         rows.append([
-            i * 3600.0, close * 0.999, close * 1.004,
+            i * interval, close * 0.999, close * 1.004,
             close * 0.996, close, 1200.0 if i % 7 == 0 else 1000.0,
         ])
     return rows
@@ -45,7 +45,18 @@ def test_walk_forward_uses_only_settled_forecasts_for_adaptive_weights():
     )
     assert result["settled_forecasts"] >= 0
     assert result["unresolved_forecasts"] >= 0
+    assert result["candle_interval_seconds"] == 3600
     assert HORIZON_SECONDS == 10800
+
+
+def test_forecasts_settle_on_first_candle_close_at_or_after_horizon():
+    rows = candles(count=150, interval=3600)
+    _, _, result = _walk_forward_signals(rows, fee_rate=0.0026, slippage_bps=5)
+    assert result["settled_forecasts_detail"]
+    for forecast in result["settled_forecasts_detail"]:
+        elapsed = forecast["settled_at"] - forecast["forecast_at"]
+        assert elapsed >= HORIZON_SECONDS
+        assert elapsed < HORIZON_SECONDS + 3600
 
 
 def test_comparison_runs_all_three_modes_with_identical_cost_assumptions():
