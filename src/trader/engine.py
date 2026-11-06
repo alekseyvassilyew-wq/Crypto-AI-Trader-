@@ -137,6 +137,7 @@ class Engine:
         self.paused = bool(get_state(db, "paper_paused", False))
         self.scan_interval_seconds = settings.scan_interval
         self.last_scan_at = None
+        self.market_snapshot_at = None
         saved_scan_metrics = get_state(db, "last_scan_metrics", {})
         self.last_scan_metrics = (
             saved_scan_metrics
@@ -609,6 +610,7 @@ class Engine:
             stage_started = time.monotonic()
             tickers = self.exchange.tickers()
             ticker_seconds = time.monotonic() - stage_started
+            self.market_snapshot_at = datetime.now(timezone.utc)
             self.market_pairs = pairs
             self.market_ticker_count = len(tickers)
             ticker_by_symbol = {item["symbol"]: item for item in tickers}
@@ -780,6 +782,7 @@ class Engine:
         stage_started = time.monotonic()
         tickers = self.exchange.tickers(symbols)
         ticker_seconds = time.monotonic() - stage_started
+        self.market_snapshot_at = datetime.now(timezone.utc)
         self.market_pairs = [{"symbol": symbol, "quote": "EUR"} for symbol in symbols]
         self.market_ticker_count = len(tickers)
         results = []
@@ -851,7 +854,8 @@ class Engine:
         # Market monitoring continues while paused; only PAPER trading is gated.
         try:
             results = self.scan(seed_wallet=not self.paused)
-            self.last_scan_at = datetime.now(timezone.utc)
+            # Timestamp the market data itself, not the end of slower OHLC analysis.
+            self.last_scan_at = self.market_snapshot_at or datetime.now(timezone.utc)
             self.last_prices = {x["symbol"]: float(x.get("price") or 0) for x in results if float(x.get("price") or 0) > 0}
             self.last_signals = results
             set_state(self.db, "paper_fx_rates", self._fx_rates(self.last_prices))

@@ -445,6 +445,29 @@ def test_position_size_shrinks_when_atr_volatility_increases(tmp_path):
 
 
 
+def test_cycle_uses_market_snapshot_timestamp_not_scan_completion(tmp_path):
+    from datetime import datetime, timezone
+
+    engine, db = make_engine(tmp_path)
+    snapshot_time = datetime(2026, 11, 6, 20, 0, tzinfo=timezone.utc)
+
+    def scan_with_snapshot_time(**kwargs):
+        engine.market_snapshot_at = snapshot_time
+        return [{
+            "symbol": "XBTEUR", "quote": "EUR", "signal": "HOLD", "score": 0,
+            "price": 10.0, "bid": 9.99, "ask": 10.01, "spread_bps": 10,
+            "turnover": 50000, "turnover_eur": 50000,
+            "ohlc_analyzed": True, "reasons": [],
+        }]
+
+    engine.scan = scan_with_snapshot_time
+    engine.start()
+    engine.cycle()
+
+    assert engine.last_scan_at == snapshot_time
+    db.close()
+
+
 def test_successful_cycle_persists_paper_snapshot(tmp_path):
     engine, db = make_engine(tmp_path)
     engine.scan = lambda **kwargs: [{
