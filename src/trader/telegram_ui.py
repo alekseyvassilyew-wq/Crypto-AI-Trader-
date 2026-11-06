@@ -305,7 +305,7 @@ def _format_paper_report(metrics, hours):
         pf_text = "н/д" if pf_value in (None, "") else html.escape(str(pf_value))
 
     by_symbol = metrics.get("by_symbol") or []
-    by_symbol_text = "\\n".join(
+    by_symbol_text = "\n".join(
         f"  • <code>{html.escape(str(item.get('symbol') or '—'))}</code>: "
         f"<b>{number(item.get('realized_pnl_eur'), 4, signed=True)} EUR</b>"
         for item in by_symbol[:5]
@@ -357,7 +357,7 @@ def _format_paper_report(metrics, hours):
         "━━━━━━━━━━━━━━━━━━",
         "<i>Изменение стоимости PAPER-портфеля не является доказательством будущей доходности. Охват измерениями не гарантирует непрерывную работу.</i>",
     ])
-    return "\\n".join(lines)
+    return "\n".join(lines)
 
 
 def build_app(s, engine, exchange):
