@@ -143,8 +143,12 @@ def _walk_forward_signals(candles, *, fee_rate, slippage_bps):
         # Forecasts are recorded only after this bar's weights/signals are set.
         # Each BUY opinion is a distinct hypothetical forecast, never an order.
         if strategies:
+            # Avoid overlapping 3h forecasts for the same strategy. Otherwise
+            # adjacent candles would count nearly identical outcomes as
+            # independent evidence and qualify adaptive weights too quickly.
+            active_strategies = {item["strategy"] for item in pending}
             for name, opinion in strategies.items():
-                if opinion.get("signal") == "BUY":
+                if opinion.get("signal") == "BUY" and name not in active_strategies:
                     pending.append({
                         "strategy": name,
                         "regime": regime,
