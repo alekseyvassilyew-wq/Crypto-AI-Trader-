@@ -599,6 +599,44 @@ def get_strategy_shadow_metrics(db, symbol=None):
     return output
 
 
+
+
+def get_strategy_shadow_regime_metrics(db, symbol=None):
+    """Return net-of-cost strategy metrics grouped by market regime."""
+    query = (
+        "SELECT strategy,regime,realized_return FROM strategy_shadow_predictions "
+        "WHERE realized_return IS NOT NULL"
+    )
+    params = []
+    if symbol is not None:
+        query += " AND symbol=?"
+        params.append(str(symbol).upper())
+    query += " ORDER BY regime,strategy,signal_ts"
+    grouped = {}
+    for row in db.execute(query, tuple(params)).fetchall():
+        key = (row["regime"] or "UNKNOWN", row["strategy"])
+        grouped.setdefault(key, []).append(float(row["realized_return"]))
+    output = {}
+    for (regime, strategy), returns in grouped.items():
+        equity = peak = 1.0
+        drawdown = 0.0
+        wins, losses = [], []
+        for value in returns:
+            equity *= 1.0 + value
+            peak = max(peak, equity)
+            drawdown = max(drawdown, (peak - equity) / peak if peak else 0.0)
+            (wins if value > 0 else losses).append(value)
+        gross_loss = abs(sum(losses))
+        output.setdefault(regime, {})[strategy] = {
+            "resolved": len(returns),
+            "win_rate_pct": len(wins) / len(returns) * 100.0,
+            "net_return_pct": (equity - 1.0) * 100.0,
+            "profit_factor": sum(wins) / gross_loss if gross_loss else ("INF" if wins else 0.0),
+            "max_drawdown_pct": drawdown * 100.0,
+        }
+    return output
+
+
 def save_telegram_report_pages(db, report_key, pages, *, keep=100):
     """Persist Telegram report pages so inline navigation survives process restarts."""
     if not isinstance(report_key, str) or not report_key.strip() or len(report_key) > 128:
