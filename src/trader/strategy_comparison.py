@@ -9,6 +9,8 @@ from collections import defaultdict
 from .adaptive_strategy import evaluate_adaptive_strategy_weights
 from .backtest import run_backtest
 from .strategy_ensemble import evaluate_strategy_ensemble
+from .indicators import analyze
+from .validation import build_walk_forward_folds
 
 HORIZON_SECONDS = 3 * 60 * 60
 STRATEGY_NAMES = (
@@ -305,4 +307,150 @@ def run_strategy_comparison(
             "adaptive_weighted_vote_threshold": 2.0,
             "adaptive_weights_use_only_prior_settled_forecasts": True,
         },
+    }
+
+
+
+def run_walk_forward_validation(
+    candles, *, min_train_candles=240, test_candles=120,
+    embargo_candles=3, initial_cash=1000.0, max_trade=100.0,
+    fee_rate=0.0026, slippage_bps=5.0, stop_loss_pct=2.0,
+    take_profit_pct=4.0, trailing_stop_pct=1.5,
+    risk_per_trade_pct=0.5,
+):
+    """Evaluate baseline and shadow strategies on disjoint future-only folds.
+
+    Each fold starts with a fresh virtual balance. Signals are calculated with
+    the full candle prefix (training history plus the current test prefix), but
+    orders are gated until the test window. Adaptive weights may update online
+    only from forecasts that have settled by each current candle close.
+    Results are independent fold simulations, not one compounded portfolio.
+    """
+    folds = build_walk_forward_folds(
+        candles,
+        min_train_candles=min_train_candles,
+        test_candles=test_candles,
+        embargo_candles=embargo_candles,
+    )
+    if not folds:
+        raise ValueError(
+            "Not enough candles for one complete walk-forward test fold "
+            "with the requested training, embargo, and test lengths"
+        )
+
+    common = {
+        "initial_cash": initial_cash,
+        "max_trade": max_trade,
+        "fee_rate": fee_rate,
+        "slippage_bps": slippage_bps,
+        "stop_loss_pct": stop_loss_pct,
+        "take_profit_pct": take_profit_pct,
+        "trailing_stop_pct": trailing_stop_pct,
+        "risk_per_trade_pct": risk_per_trade_pct,
+    }
+    strategy_names = (
+        "baseline", "equal_weight_ensemble", "adaptive_ensemble",
+        *STRATEGY_NAMES,
+    )
+    fold_results = []
+    accumulated = {name: [] for name in strategy_names}
+
+    for fold_number, fold in enumerate(folds, start=1):
+        prefix = candles[:fold["test_end"]]
+        test_start_ts = float(candles[fold["test_start"]][0])
+        equal, adaptive, metadata = _walk_forward_signals(
+            prefix, fee_rate=fee_rate, slippage_bps=slippage_bps
+        )
+        individual = metadata["individual_signals"]
+
+        def gated(signal_function):
+            def _signal(history):
+                if float(history[-1][0]) < test_start_ts:
+                    return {"signal": "HOLD", "score": 0.0, "atr_percent": 0.0}
+                return signal_function(history)
+            return _signal
+
+        def signal_from_map(signal_map):
+            def _signal(history):
+                return signal_map.get(
+                    float(history[-1][0]),
+                    {"signal": "HOLD", "score": 0.0, "atr_percent": 0.0},
+                )
+            return _signal
+
+        signal_functions = {
+            "baseline": gated(analyze),
+            "equal_weight_ensemble": gated(signal_from_map(equal)),
+            "adaptive_ensemble": gated(signal_from_map(adaptive)),
+        }
+        for name in STRATEGY_NAMES:
+            signal_functions[name] = gated(signal_from_map(individual[name]))
+
+        metrics = {}
+        for name, signal_function in signal_functions.items():
+            result = run_backtest(prefix, **common, signal_fn=signal_function)
+            accumulated[name].append(result)
+            metrics[name] = {
+                "return_pct": result["return_pct"],
+                "net_pnl": result["net_pnl"],
+                "trades": result["trades"],
+                "wins": result["wins"],
+                "losses": result["losses"],
+                "profit_factor": result["profit_factor"],
+                "max_drawdown_pct": result["max_drawdown_pct"],
+                "fees_paid": result["fees_paid"],
+            }
+        fold_results.append({
+            "fold": fold_number,
+            "train_start": fold["train_start"],
+            "train_end": fold["train_end"],
+            "embargo_start": fold["embargo_start"],
+            "embargo_end": fold["embargo_end"],
+            "test_start": fold["test_start"],
+            "test_end": fold["test_end"],
+            "test_start_timestamp": test_start_ts,
+            "test_end_timestamp": float(candles[fold["test_end"] - 1][0]),
+            "strategies": metrics,
+        })
+
+    summary = {}
+    for name, results in accumulated.items():
+        returns = [float(item["return_pct"]) for item in results]
+        trades = [trade for item in results for trade in item["trades_detail"]]
+        winners = [float(t["net_pnl"]) for t in trades if float(t["net_pnl"]) > 0]
+        losers = [abs(float(t["net_pnl"])) for t in trades if float(t["net_pnl"]) < 0]
+        trade_count = len(trades)
+        summary[name] = {
+            "folds": len(results),
+            "profitable_folds": sum(value > 0 for value in returns),
+            "average_return_pct": sum(returns) / len(returns),
+            "worst_fold_return_pct": min(returns),
+            "total_net_pnl_eur": sum(float(item["net_pnl"]) for item in results),
+            "total_trades": trade_count,
+            "wins": sum(int(item["wins"]) for item in results),
+            "losses": sum(int(item["losses"]) for item in results),
+            "win_rate_pct": (
+                sum(int(item["wins"]) for item in results) / trade_count * 100.0
+                if trade_count else 0.0
+            ),
+            "profit_factor": (
+                sum(winners) / sum(losers) if sum(losers)
+                else (float("inf") if sum(winners) else 0.0)
+            ),
+            "max_fold_drawdown_pct": max(
+                float(item["max_drawdown_pct"]) for item in results
+            ),
+            "total_fees_eur": sum(float(item["fees_paid"]) for item in results),
+        }
+
+    return {
+        "mode": "SHADOW_ONLY",
+        "execution_effect": "NONE",
+        "fold_count": len(fold_results),
+        "min_train_candles": min_train_candles,
+        "test_candles": test_candles,
+        "embargo_candles": embargo_candles,
+        "independent_fold_balances": True,
+        "folds": fold_results,
+        "summary": summary,
     }
