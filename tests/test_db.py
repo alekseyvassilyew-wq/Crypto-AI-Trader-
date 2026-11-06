@@ -309,6 +309,7 @@ def test_paper_fill_rolls_back_wallet_if_trade_insert_fails(tmp_path):
         )
     assert get_state(db, "paper_broker") == original
     assert db.execute("SELECT COUNT(*) FROM trades").fetchone()[0] == 0
+    assert db.execute("SELECT COUNT(*) FROM paper_account_events").fetchone()[0] == 0
     db.close()
 
 
