@@ -375,12 +375,13 @@ class KrakenSpot:
             rows = next((v for k, v in result.items() if k != "last"), [])
         if not isinstance(rows, list):
             raise RuntimeError(f"Kraken returned malformed OHLC data for {symbol}")
-        # Kraken returns oldest first; the final candle is still open.
-        rows = rows[:-1] if len(rows) > 1 else rows
+        # Kraken always appends the currently-forming candle. Exclude it
+        # unconditionally, including responses containing only one row.
+        rows = rows[:-1]
         normalized = []
         for row in rows[-limit:]:
             if not isinstance(row, (list, tuple)) or len(row) < 7:
-                continue
+                raise RuntimeError(f"Kraken returned malformed OHLC candle for {symbol}")
             try:
                 timestamp = _finite_number(row[0], "candle timestamp", non_negative=True)
                 open_price = _finite_number(row[1], "candle open", positive=True)
@@ -388,13 +389,26 @@ class KrakenSpot:
                 low = _finite_number(row[3], "candle low", positive=True)
                 close = _finite_number(row[4], "candle close", positive=True)
                 volume = _finite_number(row[6], "candle volume", non_negative=True)
-            except ValueError:
-                continue
+            except ValueError as exc:
+                raise RuntimeError(f"Kraken returned invalid OHLC candle for {symbol}: {exc}") from exc
             if low > min(open_price, close) or high < max(open_price, close) or low > high:
-                continue
+                raise RuntimeError(f"Kraken returned inconsistent OHLC candle for {symbol}")
             normalized.append([timestamp, open_price, high, low, close, volume])
         if not normalized:
-            raise RuntimeError(f"Kraken returned no usable OHLC candles for {symbol}")
+            raise RuntimeError(f"Kraken returned no usable closed OHLC candles for {symbol}")
+        try:
+            interval_seconds = int(interval) * 60
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("Kraken candle interval must be a positive integer") from exc
+        if isinstance(interval, bool) or interval_seconds <= 0:
+            raise ValueError("Kraken candle interval must be a positive integer")
+        for previous, current in zip(normalized, normalized[1:]):
+            delta = current[0] - previous[0]
+            if abs(delta - interval_seconds) > 1.0:
+                raise RuntimeError(
+                    f"Kraken OHLC history contains a missing or misaligned candle for {symbol}: "
+                    f"expected {interval_seconds}s, got {delta:.3f}s"
+                )
         return normalized
 
     def balance(self):
