@@ -107,3 +107,15 @@ def test_time_based_embargo_rejects_non_monotonic_timestamps():
             embargo_seconds=3 * 3600,
             interval_seconds=3600,
         )
+
+
+
+def test_time_based_embargo_returns_no_folds_when_history_is_shorter_than_training_window():
+    candles = [[index * 3600, 1, 1, 1, 1] for index in range(20)]
+    assert build_walk_forward_folds(
+        candles,
+        min_train_candles=200,
+        test_candles=10,
+        embargo_seconds=3 * 3600,
+        interval_seconds=3600,
+    ) == []
