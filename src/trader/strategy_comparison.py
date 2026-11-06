@@ -17,10 +17,10 @@ STRATEGY_NAMES = (
 )
 
 
-def _net_forecast_return_pct(entry_close, exit_close, fee_rate, slippage_bps):
+def _net_forecast_return_pct(entry_price, exit_close, fee_rate, slippage_bps):
     """Round-trip hypothetical return with the backtest's adverse cost model."""
     slip = float(slippage_bps) / 10000.0
-    entry = entry_close * (1.0 + slip)
+    entry = entry_price * (1.0 + slip)
     exit_price = exit_close * (1.0 - slip)
     if entry <= 0:
         return 0.0
@@ -91,7 +91,7 @@ def _walk_forward_signals(candles, *, fee_rate, slippage_bps):
         for forecast in pending:
             if candle_close_ts >= forecast["target_ts"]:
                 value = _net_forecast_return_pct(
-                    forecast["entry_close"], close, fee_rate, slippage_bps
+                    forecast["entry_price"], close, fee_rate, slippage_bps
                 )
                 settled.append({
                     "strategy": forecast["strategy"],
@@ -142,7 +142,9 @@ def _walk_forward_signals(candles, *, fee_rate, slippage_bps):
 
         # Forecasts are recorded only after this bar's weights/signals are set.
         # Each BUY opinion is a distinct hypothetical forecast, never an order.
-        if strategies:
+        if strategies and index + 1 < len(candles):
+            # Forecasts fill at the next candle OPEN, matching run_backtest;
+            # using the signal candle close here would overstate comparability.
             # Avoid overlapping 3h forecasts for the same strategy. Otherwise
             # adjacent candles would count nearly identical outcomes as
             # independent evidence and qualify adaptive weights too quickly.
@@ -154,7 +156,7 @@ def _walk_forward_signals(candles, *, fee_rate, slippage_bps):
                         "regime": regime,
                         "forecast_ts": candle_close_ts,
                         "target_ts": candle_close_ts + HORIZON_SECONDS,
-                        "entry_close": close,
+                        "entry_price": float(candles[index + 1][1]),
                     })
 
     return equal_signals, adaptive_signals, {
