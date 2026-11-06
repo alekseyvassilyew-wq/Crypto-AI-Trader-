@@ -539,15 +539,17 @@ class Engine:
                     cash_by_currency=self.paper.cash_by_currency,
                     cash_cost_basis_eur=self.paper.cash_cost_basis_eur,
                     positions=self.paper.positions,
+                    audit_event="PAPER_WALLET_SEED",
+                    audit_details=(
+                        f"{conversion['from']}->{conversion['to']} spent={conversion['spent']:.8f} "
+                        f"received={conversion['received']:.8f} fee={conversion['fee']:.8f}"
+                    ),
                 )
             except Exception:
                 self.paper.cash_by_currency = cash_before
                 self.paper.cash_cost_basis_eur = basis_before
                 self.paper._sync_cash()
                 raise
-            audit(self.db, "PAPER_WALLET_SEED",
-                  f"{conversion['from']}->{conversion['to']} spent={conversion['spent']:.8f} "
-                  f"received={conversion['received']:.8f} fee={conversion['fee']:.8f}")
             seeded[currency] = True
             set_state(self.db, "paper_seeded_currencies", seeded)
 
