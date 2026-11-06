@@ -265,22 +265,49 @@ def test_ticker_rejects_missing_or_malformed_payload():
         client.tickers(["XBTEUR"])
 
 
-def test_candles_skip_non_finite_and_impossible_rows():
+def test_candles_fail_closed_on_invalid_closed_candle():
     client = KrakenSpot()
     client._pair_cache["XBTEUR"] = ("XXBTZEUR", {})
     client._request = lambda *args, **kwargs: {
         "XXBTZEUR": [
             [1000, "10", "12", "9", "11", "10.5", "100", 5],
             [1060, "nan", "13", "10", "12", "11.5", "200", 6],
-            [1120, "12", "11", "10", "13", "12.5", "300", 7],
-            [1180, "12", "14", "11", "13", "12.5", "300", 7],
+            [1120, "12", "14", "11", "13", "12.5", "300", 7],
+            [1180, "13", "15", "12", "14", "13.5", "400", 8],
         ],
         "last": 123456,
     }
-    rows = client.candles("XBTEUR", interval="1", limit=10)
-    assert rows == [
-        [1000.0, 10.0, 12.0, 9.0, 11.0, 100.0],
-    ]
+    with pytest.raises(RuntimeError, match="invalid OHLC candle"):
+        client.candles("XBTEUR", interval="1", limit=10)
+
+
+def test_candles_exclude_single_open_candle():
+    client = KrakenSpot()
+    client._pair_cache["XBTEUR"] = ("XXBTZEUR", {})
+    client._request = lambda *args, **kwargs: {
+        "XXBTZEUR": [
+            [1000, "10", "12", "9", "11", "10.5", "100", 5],
+        ],
+        "last": 123456,
+    }
+    with pytest.raises(RuntimeError, match="no usable closed OHLC"):
+        client.candles("XBTEUR", interval="1", limit=10)
+
+
+def test_candles_reject_missing_closed_interval():
+    client = KrakenSpot()
+    client._pair_cache["XBTEUR"] = ("XXBTZEUR", {})
+    client._request = lambda *args, **kwargs: {
+        "XXBTZEUR": [
+            [1000, "10", "12", "9", "11", "10.5", "100", 5],
+            [1060, "11", "13", "10", "12", "11.5", "200", 6],
+            [1180, "12", "14", "11", "13", "12.5", "300", 7],
+            [1240, "13", "15", "12", "14", "13.5", "400", 8],
+        ],
+        "last": 123456,
+    }
+    with pytest.raises(RuntimeError, match="missing or misaligned candle"):
+        client.candles("XBTEUR", interval="1", limit=10)
 
 
 def test_candles_require_positive_limit():
