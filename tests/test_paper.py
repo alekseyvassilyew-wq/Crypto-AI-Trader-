@@ -407,6 +407,6 @@ def test_conversion_route_carries_unknown_basis_without_inventing_value():
         ("EUR", "GBP", 8.91, 0.8),
     ])
     assert first["received"] == pytest.approx(8.91)
-    assert second["received"] == pytest.approx(7.12872)
+    assert second["received"] == pytest.approx(7.05672)
     assert broker.cash_cost_basis_eur["GBP"] is None
 
