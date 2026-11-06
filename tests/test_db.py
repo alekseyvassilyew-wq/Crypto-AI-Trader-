@@ -480,3 +480,60 @@ def test_kraken_sync_status_unknown_before_first_import():
         "reason": "No Kraken account history has been imported",
     }
     db.close()
+
+
+def test_kraken_history_import_rejects_duplicate_ids_within_payload():
+    from src.trader.db import import_kraken_account_history
+
+    db = connect(":memory:")
+    trade = {
+        "id": "TX-DUP", "pair": "XBTEUR", "time": "1", "type": "buy",
+        "price": "10", "cost": "10", "fee": "0", "vol": "1",
+    }
+    with pytest.raises(ValueError, match="Duplicate Kraken trade id"):
+        import_kraken_account_history(
+            db, trades=[trade, dict(trade)], ledgers=[], balances={},
+            fetched_at="2026-11-06T20:00:00Z", fills_complete=True, ledger_complete=True,
+        )
+    assert db.execute("SELECT COUNT(*) FROM kraken_fills").fetchone()[0] == 0
+    db.close()
+
+
+def test_kraken_history_import_rejects_conflicting_existing_trade_payload():
+    from src.trader.db import import_kraken_account_history
+
+    db = connect(":memory:")
+    trade = {
+        "id": "TX-CONFLICT", "pair": "XBTEUR", "time": "1", "type": "buy",
+        "price": "10", "cost": "10", "fee": "0", "vol": "1",
+    }
+    args = dict(
+        ledgers=[], balances={}, fetched_at="2026-11-06T20:00:00Z",
+        fills_complete=True, ledger_complete=True,
+    )
+    import_kraken_account_history(db, trades=[trade], **args)
+    changed = dict(trade, price="11", cost="11")
+    with pytest.raises(ValueError, match="Conflicting Kraken trade payload"):
+        import_kraken_account_history(db, trades=[changed], **args)
+    stored = db.execute(
+        "SELECT raw_json FROM kraken_fills WHERE trade_id='TX-CONFLICT'"
+    ).fetchone()[0]
+    assert '"price":"10"' in stored
+    db.close()
+
+
+def test_kraken_history_import_rejects_duplicate_ledger_ids():
+    from src.trader.db import import_kraken_account_history
+
+    db = connect(":memory:")
+    ledger = {
+        "id": "LEDGER-DUP", "asset": "ZEUR", "type": "deposit",
+        "time": "1", "amount": "10", "fee": "0",
+    }
+    with pytest.raises(ValueError, match="Duplicate Kraken ledger id"):
+        import_kraken_account_history(
+            db, trades=[], ledgers=[ledger, dict(ledger)], balances={},
+            fetched_at="2026-11-06T20:00:00Z", fills_complete=True, ledger_complete=True,
+        )
+    assert db.execute("SELECT COUNT(*) FROM kraken_ledger_entries").fetchone()[0] == 0
+    db.close()
