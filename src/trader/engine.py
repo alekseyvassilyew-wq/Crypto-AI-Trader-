@@ -8,6 +8,7 @@ from .indicators import analyze, confirm_multi_timeframe
 from .learning import extract_features, predict_probability
 from .strategy_ensemble import evaluate_strategy_ensemble
 from .adaptive_strategy import evaluate_adaptive_strategy_weights
+from .paper import estimate_book_vwap
 from .db import audit, save_trade, save_paper_fill, get_state, set_state, save_paper_snapshot, record_shadow_prediction, settle_shadow_predictions, record_strategy_shadow_prediction, settle_strategy_shadow_predictions, get_strategy_shadow_regime_metrics
 
 
@@ -213,6 +214,42 @@ class Engine:
         if not math.isfinite(price) or price <= 0:
             raise ValueError("Invalid PAPER sell fill price")
         return price
+
+    def _paper_book_fill(self, symbol, quantity, side, *, max_quote=None):
+        """Estimate a full PAPER fill from live L2 depth; never extrapolate.
+
+        Legacy exchange adapters without order_book retain the conservative
+        bid/ask plus slippage model. Kraken uses visible depth and VWAP instead,
+        so spread and depth impact are not charged a second time as slippage.
+        """
+        order_book = getattr(self.exchange, "order_book", None)
+        if not callable(order_book):
+            return None
+        try:
+            depth = getattr(self.s, "paper_order_book_depth", 10)
+            book = order_book(symbol, depth=depth)
+            if not isinstance(book, dict):
+                raise ValueError("malformed order-book response")
+            side_key = "asks" if side == "buy" else "bids" if side == "sell" else None
+            if side_key is None:
+                raise ValueError("side must be buy or sell")
+            levels = book.get(side_key)
+            if not isinstance(levels, (list, tuple)) or not levels:
+                raise ValueError(f"empty {side_key} order-book")
+            requested = float(quantity)
+            if max_quote is not None:
+                if side != "buy":
+                    raise ValueError("max_quote is only valid for buys")
+                budget = float(max_quote)
+                worst_visible_price = float(levels[-1][0])
+                if not math.isfinite(budget) or budget <= 0 or not math.isfinite(worst_visible_price) or worst_visible_price <= 0:
+                    raise ValueError("invalid PAPER order-book quote budget")
+                requested = min(requested, budget / worst_visible_price)
+            return estimate_book_vwap(levels, requested, side=side)
+        except Exception as exc:
+            raise ValueError(
+                f"order-book {side} unavailable for {symbol}: {type(exc).__name__}: {exc}"
+            ) from exc
 
     def _paper_trade_eur_values(self, quote_currency, fee, prices, *, position=None, qty=None, exit_price=None):
         """Value PAPER fees and realized PnL using entry-time and exit-time EUR FX."""
@@ -906,6 +943,7 @@ class Engine:
         if not missing_fx:
             self._ensure_day(prices)
         actions = []
+        exit_blocked = False
         # Risk exits are checked before new entries.
         for symbol, pos in list(self.paper.positions.items()):
             price = prices.get(symbol)
@@ -931,6 +969,15 @@ class Engine:
                 else None
             )
             if reason:
+                try:
+                    depth_fill = self._paper_book_fill(symbol, pos["qty"], "sell")
+                except ValueError as exc:
+                    audit(self.db, "PAPER_EXIT_SKIPPED", f"{symbol}: {exc}")
+                    actions.append(f"{symbol} HOLD — exit not simulated; visible depth insufficient or unavailable")
+                    exit_blocked = True
+                    continue
+                if depth_fill is not None:
+                    exit_price = depth_fill["vwap"]
                 position_before_exit = dict(pos)
                 # Profit-taking/strategy exits require positive net EUR P/L
                 # after all costs. Protective exits (STOP_LOSS and TRAILING_STOP)
@@ -984,6 +1031,16 @@ class Engine:
             for symbol, pos in list(self.paper.positions.items()):
                 quote_row = result_by_symbol[str(symbol).upper()]
                 exit_price = self._paper_sell_price(float(quote_row["bid"]))
+                try:
+                    depth_fill = self._paper_book_fill(symbol, pos["qty"], "sell")
+                except ValueError as exc:
+                    reason = f"Daily loss limit reached; {symbol} cannot be fully simulated from visible depth: {exc}"
+                    audit(self.db, "PAPER_DAILY_LIQUIDATION_INCOMPLETE", reason)
+                    self._save_cycle_snapshot(results, prices)
+                    self.stop(reason)
+                    return actions + ["DAILY LOSS LIMIT — paused; position remains open because visible depth is insufficient"]
+                if depth_fill is not None:
+                    exit_price = depth_fill["vwap"]
                 position_before_exit = dict(pos)
                 fill, fee_eur, realized_pnl_eur = self._execute_paper_fill(
                     "Sell", symbol, pos["qty"], exit_price, prices,
@@ -1004,6 +1061,12 @@ class Engine:
             self._save_cycle_snapshot(results, prices)
             self.stop("Daily loss limit reached; remaining PAPER positions liquidated")
             return actions + ["DAILY LOSS LIMIT — paused"]
+        if exit_blocked:
+            # Do not add exposure while a triggered exit could not be represented
+            # by executable visible depth. Keep the existing position open and
+            # retry its exit on the next market cycle.
+            self._save_cycle_snapshot(results, prices)
+            return actions
         # Rank BUY candidates by strategy score first, then liquidity in EUR.
         # This prevents exchange pair ordering from deciding capital allocation.
         buy_candidates = sorted(
@@ -1114,11 +1177,25 @@ class Engine:
                 if allocation <= 0:
                     audit(self.db, "ENTRY_SKIPPED", f"{signal['symbol']}: no PAPER funds in {quote_currency}")
                     continue
-                # A PAPER buy crosses the spread and therefore fills at ask.
-                entry_price = self._paper_buy_price(float(signal.get("ask") or signal["price"]))
+                # Kraken PAPER buys consume visible asks. The quote budget is
+                # capped by the worst requested visible level; no extra spread
+                # or slippage penalty is layered on top of the book VWAP.
+                ask_price = float(signal.get("ask") or signal["price"])
+                depth_fill = self._paper_book_fill(
+                    signal["symbol"], allocation / ask_price, "buy", max_quote=allocation,
+                )
+                if depth_fill is None:
+                    entry_price = self._paper_buy_price(ask_price)
+                    fill_quote = allocation
+                else:
+                    entry_price = depth_fill["vwap"]
+                    fill_quote = depth_fill["quote"]
+                    if fill_quote * (1.0 + self.paper.fee_rate) > quote_balance + 1e-9:
+                        audit(self.db, "ENTRY_SKIPPED", f"{signal['symbol']}: depth VWAP exceeds available PAPER quote balance")
+                        continue
                 quote_to_eur_rate = self._fresh_fx_rates(prices).get(str(quote_currency).upper())
                 fill, fee_eur, _ = self._execute_paper_fill(
-                    "Buy", signal["symbol"], allocation, entry_price, prices,
+                    "Buy", signal["symbol"], fill_quote, entry_price, prices,
                     currency=quote_currency, quote_to_eur_rate=quote_to_eur_rate,
                 )
                 actions.append(
