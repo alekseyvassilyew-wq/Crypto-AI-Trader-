@@ -1125,14 +1125,13 @@ def _paper_wallet_financial_projection(wallet):
             raise ValueError("Invalid PAPER event position")
         qty = float(position.get("qty"))
         avg_price = float(position.get("avg_price"))
-        quote_currency = str(position.get("quote_currency") or "").upper()
+        quote_currency = str(position.get("quote_currency") or "UNKNOWN").upper()
         cost_basis = position.get("cost_basis_eur")
         entry_fees = position.get("entry_fees_eur")
         cost_basis = None if cost_basis is None else float(cost_basis)
         entry_fees = None if entry_fees is None else float(entry_fees)
         if (
             not math.isfinite(qty) or qty <= 0 or not math.isfinite(avg_price) or avg_price <= 0
-            or not quote_currency
             or cost_basis is not None and (not math.isfinite(cost_basis) or cost_basis < 0)
             or entry_fees is not None and (not math.isfinite(entry_fees) or entry_fees < 0)
         ):
