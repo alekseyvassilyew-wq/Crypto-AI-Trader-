@@ -113,6 +113,38 @@ def load_candles(db, symbol, interval="60"):
     return [[float(row[i]) for i in range(6)] for row in rows]
 
 
+
+def validate_candle_continuity(candles, interval="60", tolerance_seconds=1.0):
+    """Reject research windows with missing or misaligned interval candles."""
+    try:
+        interval_minutes = int(interval)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Research candle interval must be a positive integer") from exc
+    if isinstance(interval, bool) or interval_minutes <= 0:
+        raise ValueError("Research candle interval must be a positive integer")
+    expected_seconds = interval_minutes * 60
+    if not math.isfinite(float(tolerance_seconds)) or tolerance_seconds < 0:
+        raise ValueError("Candle continuity tolerance must be finite and non-negative")
+    if len(candles) < 2:
+        return True
+    previous = float(candles[0][0])
+    for index, row in enumerate(candles[1:], start=1):
+        current = float(row[0])
+        delta = current - previous
+        if abs(delta - expected_seconds) > tolerance_seconds:
+            if delta > expected_seconds:
+                missing = max(1, round(delta / expected_seconds) - 1)
+                raise ValueError(
+                    f"Research candle history has a gap before index {index}: "
+                    f"{missing} expected candle(s) missing"
+                )
+            raise ValueError(
+                f"Research candle timestamps are misaligned before index {index}: "
+                f"expected {expected_seconds}s, got {delta:.3f}s"
+            )
+        previous = current
+    return True
+
 def _report_payload(candidate):
     # The fitted weights remain in app_state for shadow inference. The history
     # table stores metrics and assumptions, not a second copy of model weights.
@@ -206,6 +238,7 @@ def perform_research(db, exchange, settings, symbol, source="manual"):
         latest = exchange.candles(symbol, interval="60", limit=720)
         store_candles(db, symbol, latest, interval="60")
         history = load_candles(db, symbol, interval="60")
+        validate_candle_continuity(history, interval="60")
         # If the history table is new, this is the same recent window as Kraken.
         candidate = research_candidate(
             history,
