@@ -1301,11 +1301,11 @@ def test_paper_buy_uses_visible_ask_depth_vwap_without_double_slippage(tmp_path)
     assert trade["quote"] < 5.0
     assert trade["qty"] == pytest.approx(trade["quote"] / trade["price"])
     book_audit = db.execute(
-        "SELECT detail FROM audit WHERE event='PAPER_BOOK_VWAP_ESTIMATE'"
+        "SELECT details FROM audit WHERE event='PAPER_BOOK_VWAP_ESTIMATE'"
     ).fetchall()
     assert len(book_audit) == 1
-    assert "side=buy" in book_audit[0]["detail"]
-    assert "levels_used=2" in book_audit[0]["detail"]
+    assert "side=buy" in book_audit[0]["details"]
+    assert "levels_used=2" in book_audit[0]["details"]
     db.close()
 
 
@@ -1353,11 +1353,11 @@ def test_paper_sell_uses_visible_bid_depth_vwap_without_double_slippage(tmp_path
     trade = db.execute("SELECT price FROM trades WHERE side='Sell'").fetchone()
     assert trade["price"] == pytest.approx(101.2)
     book_audit = db.execute(
-        "SELECT detail FROM audit WHERE event='PAPER_BOOK_VWAP_ESTIMATE'"
+        "SELECT details FROM audit WHERE event='PAPER_BOOK_VWAP_ESTIMATE'"
     ).fetchall()
     assert len(book_audit) == 1
-    assert "side=sell" in book_audit[0]["detail"]
-    assert "levels_used=2" in book_audit[0]["detail"]
+    assert "side=sell" in book_audit[0]["details"]
+    assert "levels_used=2" in book_audit[0]["details"]
     db.close()
 
 
