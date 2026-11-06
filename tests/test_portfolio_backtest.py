@@ -66,6 +66,40 @@ def test_portfolio_backtest_rejects_misaligned_market_candles():
         )
 
 
+def test_portfolio_backtest_rejects_missing_candles_even_when_all_markets_share_the_gap():
+    gapped = flat_candles()
+    del gapped[20]
+    with pytest.raises(ValueError, match="history has a gap"):
+        run_portfolio_backtest(
+            {"BTCEUR": gapped, "ETHUSD": gapped},
+            quote_currencies={"BTCEUR": "EUR", "ETHUSD": "USD"},
+            fx_rates={"EUR": 1.0, "USD": 0.9},
+        )
+
+
+def test_portfolio_backtest_validates_explicit_candle_interval():
+    candles = [[float(i * 60), 100.0, 101.0, 99.0, 100.0, 1000.0] for i in range(64)]
+    result = run_portfolio_backtest(
+        {"BTCEUR": candles},
+        quote_currencies={"BTCEUR": "EUR"},
+        fx_rates={"EUR": 1.0},
+        interval_seconds=60,
+        signal_fn=lambda symbol, history: {"signal": "HOLD"},
+    )
+    assert result["assumptions"]["candle_interval_seconds"] == 60
+    assert result["assumptions"]["candle_interval_inferred"] is False
+
+
+def test_portfolio_backtest_rejects_invalid_explicit_candle_interval():
+    with pytest.raises(ValueError, match="interval_seconds"):
+        run_portfolio_backtest(
+            {"BTCEUR": flat_candles()},
+            quote_currencies={"BTCEUR": "EUR"},
+            fx_rates={"EUR": 1.0},
+            interval_seconds=0,
+        )
+
+
 def test_portfolio_backtest_rejects_unknown_quote_fx_rate():
     with pytest.raises(ValueError, match="Missing quote currency"):
         run_portfolio_backtest(
