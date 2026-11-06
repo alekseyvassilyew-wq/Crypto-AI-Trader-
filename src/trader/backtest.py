@@ -116,26 +116,21 @@ def run_backtest(
             prior_stop = max(stop_price, prior_trail)
             target_price = entry * (1.0 + target_pct)
             exit_reason = exit_at = None
-            # The open is first: apply gaps to the prior stop, then assume
-            # the candle high occurs before its low for conservative trailing.
+            # OHLC candles do not reveal whether the high or low came first.
+            # Use the adverse low-before-high path: only stops active before this
+            # candle can trigger. A new trailing peak becomes active next candle.
             if op <= prior_stop:
                 exit_reason, exit_at = ("STOP_LOSS" if prior_stop == stop_price else "TRAILING_STOP"), op
             elif op >= target_price:
                 exit_reason, exit_at = "TAKE_PROFIT", op
+            elif low <= prior_stop:
+                exit_reason, exit_at = (
+                    "STOP_LOSS" if prior_stop == stop_price else "TRAILING_STOP"
+                ), prior_stop
+            elif high >= target_price:
+                exit_reason, exit_at = "TAKE_PROFIT", target_price
             else:
-                # If the original stop and target are both touched in one
-                # candle, the path is unknowable: take the base stop first.
-                if low <= stop_price:
-                    exit_reason, exit_at = "STOP_LOSS", stop_price
-                else:
-                    peak = max(peak, high)
-                    trail_price = peak * (1.0 - trail_pct) if peak > entry else 0.0
-                    active_stop = max(stop_price, trail_price)
-                    if low <= active_stop:
-                        exit_reason = "STOP_LOSS" if active_stop == stop_price else "TRAILING_STOP"
-                        exit_at = active_stop
-                    elif high >= target_price:
-                        exit_reason, exit_at = "TAKE_PROFIT", target_price
+                peak = max(peak, high)
             if exit_reason:
                 close_position(exit_at, ts, exit_reason)
 
@@ -183,18 +178,16 @@ def run_backtest(
         elif last_open >= target_price:
             reason, exit_price = "TAKE_PROFIT", last_open
         else:
-            if last_low <= stop_price:
-                reason, exit_price = "STOP_LOSS", stop_price
+            if last_low <= prior_stop:
+                reason, exit_price = (
+                    "STOP_LOSS" if prior_stop == stop_price else "TRAILING_STOP"
+                ), prior_stop
+            elif last_high >= target_price:
+                reason, exit_price = "TAKE_PROFIT", target_price
             else:
-                peak = max(peak, last_high)
-                trail_price = peak * (1.0 - trail_pct) if peak > entry else 0.0
-                active_stop = max(stop_price, trail_price)
-                if last_low <= active_stop:
-                    reason, exit_price = ("STOP_LOSS" if active_stop == stop_price else "TRAILING_STOP"), active_stop
-                elif last_high >= target_price:
-                    reason, exit_price = "TAKE_PROFIT", target_price
-                else:
-                    reason, exit_price = "END_OF_DATA", last_close
+                # A peak first observed in the final candle cannot trigger a
+                # trailing exit within that same candle without intrabar data.
+                reason, exit_price = "END_OF_DATA", last_close
         close_position(exit_price, last_ts, reason)
         equity_curve.append(cash)
         max_equity = max(max_equity, cash)
@@ -236,7 +229,7 @@ def run_backtest(
             "fee_rate_pct_per_side": fee * 100.0,
             "slippage_bps_per_side": slip_bps,
             "execution": "next candle open",
-            "intrabar_priority": "stop before take-profit",
+            "intrabar_priority": "low before high; existing stops before take-profit; new trailing peaks activate next candle",
             "risk_per_trade_pct": risk_pct,
             "buy_hold_window": "first strategy entry (or first executable candle if no trades) through final close",
         },
