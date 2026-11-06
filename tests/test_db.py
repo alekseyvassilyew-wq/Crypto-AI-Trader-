@@ -544,3 +544,24 @@ def test_kraken_history_import_rejects_duplicate_ledger_ids():
         )
     assert db.execute("SELECT COUNT(*) FROM kraken_ledger_entries").fetchone()[0] == 0
     db.close()
+
+
+
+def test_paper_fx_conversion_fees_are_reported_separately_and_unvalued_are_counted():
+    from src.trader.db import save_paper_fx_conversion
+
+    db = connect(":memory:")
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    save_paper_fx_conversion(
+        db, from_currency="EUR", to_currency="USD", spent=10.0, received=10.89,
+        fee_amount=0.11, fee_currency="USD", fee_eur=0.10, legs=1,
+    )
+    save_paper_fx_conversion(
+        db, from_currency="USD", to_currency="EUR", spent=5.0, received=4.95,
+        fee_amount=0.05, fee_currency="EUR", fee_eur=None, legs=1,
+    )
+    metrics = get_paper_metrics(db, hours=24)
+    assert metrics["fx_conversions"] == 2
+    assert metrics["total_fx_conversion_fees_eur"] == pytest.approx(0.10)
+    assert metrics["fx_conversions_without_eur_fee_valuation"] == 1
+    db.close()
