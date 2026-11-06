@@ -587,3 +587,70 @@ def test_paper_fill_persists_cash_eur_cost_basis_atomically():
     assert db.execute("SELECT COUNT(*) FROM trades WHERE mode='PAPER'").fetchone()[0] == 1
     db.close()
 
+
+
+def test_paper_fx_conversion_persists_wallet_and_fee_ledger_atomically():
+    from src.trader.db import get_state, save_paper_fx_conversion
+
+    db = connect(":memory:")
+    wallet = {
+        "EUR": 5.0,
+        "USD": 20.0,
+    }
+    basis = {
+        "EUR": 5.0,
+        "USD": 18.0,
+    }
+    positions = {
+        "ETHUSD": {
+            "qty": 1.0, "avg_price": 20.0, "quote_currency": "USD",
+            "cost_basis_eur": 18.0, "entry_fees_eur": 0.018,
+        }
+    }
+
+    save_paper_fx_conversion(
+        db, from_currency="EUR", to_currency="USD",
+        spent=10.0, received=9.9, fee_amount=0.1,
+        fee_currency="USD", fee_eur=0.1, legs=1,
+        cash_by_currency=wallet, cash_cost_basis_eur=basis, positions=positions,
+    )
+
+    saved = get_state(db, "paper_broker")
+    assert saved["cash_by_currency"] == wallet
+    assert saved["cash_cost_basis_eur"] == basis
+    assert saved["positions"] == positions
+    assert db.execute("SELECT COUNT(*) FROM paper_fx_conversions").fetchone()[0] == 1
+    db.close()
+
+
+def test_paper_fx_conversion_ledger_failure_rolls_back_wallet_atomically():
+    import sqlite3
+    from src.trader.db import get_state, save_paper_fx_conversion, set_state
+
+    db = connect(":memory:")
+    previous = {
+        "cash": 20.0,
+        "cash_by_currency": {"EUR": 20.0},
+        "cash_cost_basis_eur": {"EUR": 20.0},
+        "positions": {},
+    }
+    set_state(db, "paper_broker", previous)
+    db.execute(
+        "CREATE TRIGGER reject_paper_fx_ledger BEFORE INSERT ON paper_fx_conversions "
+        "BEGIN SELECT RAISE(ABORT, 'forced FX ledger failure'); END"
+    )
+    db.commit()
+
+    with pytest.raises(sqlite3.IntegrityError, match="forced FX ledger failure"):
+        save_paper_fx_conversion(
+            db, from_currency="EUR", to_currency="USD",
+            spent=10.0, received=9.9, fee_amount=0.1,
+            fee_currency="USD", fee_eur=0.1, legs=1,
+            cash_by_currency={"EUR": 10.0, "USD": 9.9},
+            cash_cost_basis_eur={"EUR": 10.0, "USD": 10.0},
+            positions={},
+        )
+
+    assert get_state(db, "paper_broker") == previous
+    assert db.execute("SELECT COUNT(*) FROM paper_fx_conversions").fetchone()[0] == 0
+    db.close()
