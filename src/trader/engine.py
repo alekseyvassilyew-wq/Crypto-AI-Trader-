@@ -887,6 +887,7 @@ class Engine:
                 raise ValueError(f"Unsupported PAPER fill side: {side}")
             save_paper_fill(
                 self.db, cash_by_currency=self.paper.cash_by_currency,
+                cash_cost_basis_eur=self.paper.cash_cost_basis_eur,
                 positions=self.paper.positions, symbol=symbol, side=side,
                 qty=fill["qty"], quote=fill["quote"], fee=fill["fee"],
                 price=fill["price"], fee_eur=fee_eur,
