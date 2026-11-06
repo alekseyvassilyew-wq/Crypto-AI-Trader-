@@ -861,6 +861,7 @@ class Engine:
     def _execute_paper_fill(self, side, symbol, amount, price, prices, *, currency="EUR", quote_to_eur_rate=None):
         """Apply a simulated fill and atomically persist wallet plus trade history."""
         cash_before = dict(self.paper.cash_by_currency)
+        cash_basis_before = dict(self.paper.cash_cost_basis_eur)
         positions_before = copy.deepcopy(self.paper.positions)
         try:
             if side == "Buy":
@@ -873,15 +874,20 @@ class Engine:
                 )
             elif side == "Sell":
                 position_before = copy.deepcopy(self.paper.positions.get(symbol, {}))
-                fill = self.paper.sell(symbol, amount, price, persist=False)
+                sell_currency = str(position_before.get("quote_currency", currency)).upper()
+                sell_fx_rate = self._fresh_fx_rates(prices).get(sell_currency)
+                fill = self.paper.sell(
+                    symbol, amount, price, quote_to_eur_rate=sell_fx_rate, persist=False,
+                )
                 fee_eur, realized_pnl_eur = self._paper_trade_eur_values(
-                    position_before.get("quote_currency", currency), fill["fee"], prices,
+                    sell_currency, fill["fee"], prices,
                     position=position_before, qty=fill["qty"], exit_price=fill["price"],
                 )
             else:
                 raise ValueError(f"Unsupported PAPER fill side: {side}")
             save_paper_fill(
                 self.db, cash_by_currency=self.paper.cash_by_currency,
+                cash_cost_basis_eur=self.paper.cash_cost_basis_eur,
                 positions=self.paper.positions, symbol=symbol, side=side,
                 qty=fill["qty"], quote=fill["quote"], fee=fill["fee"],
                 price=fill["price"], fee_eur=fee_eur,
@@ -889,6 +895,7 @@ class Engine:
             )
         except Exception:
             self.paper.cash_by_currency = cash_before
+            self.paper.cash_cost_basis_eur = cash_basis_before
             self.paper.positions = positions_before
             self.paper._sync_cash()
             raise

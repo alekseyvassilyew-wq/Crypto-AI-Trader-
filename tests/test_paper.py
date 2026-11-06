@@ -275,14 +275,16 @@ def test_multiple_buys_accumulate_eur_basis_and_partial_sell_allocates_proportio
 
     position = broker.positions["ETHEUR"]
     assert position["qty"] == pytest.approx(20 / 10 + 30 / 15)
-    assert position["cost_basis_eur"] == pytest.approx(20 * 0.90 + 30 * 0.95)
-    assert position["entry_fees_eur"] == pytest.approx(20 * 0.01 * 0.90 + 30 * 0.01 * 0.95)
+    # The second buy consumes the remaining inventory at its weighted-average
+    # historical EUR basis; a new spot FX mark must not revalue existing cash.
+    assert position["cost_basis_eur"] == pytest.approx(50 * 0.90)
+    assert position["entry_fees_eur"] == pytest.approx(50 * 0.01 * 0.90)
 
     broker.sell("ETHEUR", 1.0, 16)
     remaining = broker.positions["ETHEUR"]
     assert remaining["qty"] == pytest.approx(3.0)
-    assert remaining["cost_basis_eur"] == pytest.approx((20 * 0.90 + 30 * 0.95) * 3 / 4)
-    assert remaining["entry_fees_eur"] == pytest.approx((20 * 0.01 * 0.90 + 30 * 0.01 * 0.95) * 3 / 4)
+    assert remaining["cost_basis_eur"] == pytest.approx((50 * 0.90) * 3 / 4)
+    assert remaining["entry_fees_eur"] == pytest.approx((50 * 0.01 * 0.90) * 3 / 4)
 
 
 def test_equity_fails_closed_when_non_eur_cash_has_no_fx_rate():
@@ -338,3 +340,73 @@ def test_estimate_book_vwap_rejects_unsorted_or_invalid_levels():
         estimate_book_vwap([[10, 1], [9, 1]], 1.5, side="buy")
     with pytest.raises(ValueError):
         estimate_book_vwap([[10, 0]], 1, side="buy")
+
+def test_fx_conversion_basis_flows_into_asset_cost_and_partial_sale_proceeds(tmp_path):
+    from src.trader.db import connect
+    db = connect(tmp_path / "cash-cost-basis.sqlite3")
+    broker = PaperBroker(balance=100, fee_rate=0.01, db=db)
+
+    conversion = broker.convert("EUR", "USD", 50, 2.0)
+    assert conversion["received"] == pytest.approx(99.0)
+    assert broker.cash_cost_basis_eur["EUR"] == pytest.approx(50.0)
+    assert broker.cash_cost_basis_eur["USD"] == pytest.approx(50.0)
+
+    broker.buy("ETHUSD", 49.5, 10, currency="USD")
+    position = broker.positions["ETHUSD"]
+    assert position["cost_basis_eur"] == pytest.approx(25.0)
+    assert position["entry_fees_eur"] == pytest.approx(0.25)
+    assert broker.cash_cost_basis_eur["USD"] == pytest.approx(24.75)
+
+    restored = PaperBroker(balance=100, fee_rate=0.01, db=db)
+    assert restored.cash_cost_basis_eur["USD"] == pytest.approx(24.75)
+    assert restored.positions["ETHUSD"]["cost_basis_eur"] == pytest.approx(25.0)
+
+    restored.sell("ETHUSD", 2.0, 12.0, quote_to_eur_rate=0.5)
+    remaining = restored.positions["ETHUSD"]
+    assert remaining["cost_basis_eur"] == pytest.approx(25.0 * (1 - 2.0 / 4.95))
+    assert remaining["entry_fees_eur"] == pytest.approx(0.25 * (1 - 2.0 / 4.95))
+    assert restored.cash_cost_basis_eur["USD"] == pytest.approx(
+        24.75 + (24.0 - 0.24) * 0.5
+    )
+    restarted = PaperBroker(balance=100, fee_rate=0.01, db=db)
+    assert restarted.cash_cost_basis_eur["USD"] == pytest.approx(
+        24.75 + (24.0 - 0.24) * 0.5
+    )
+    db.close()
+
+
+def test_legacy_non_eur_cash_basis_remains_unknown_after_restart(tmp_path):
+    from src.trader.db import connect, set_state, get_state
+    db = connect(tmp_path / "legacy-cash-basis.sqlite3")
+    set_state(db, "paper_broker", {
+        "cash": 20.0,
+        "cash_by_currency": {"EUR": 20.0, "USD": 50.0},
+        "positions": {},
+    })
+    broker = PaperBroker(balance=20, fee_rate=0.01, db=db)
+    assert broker.cash_cost_basis_eur["EUR"] == pytest.approx(20.0)
+    assert broker.cash_cost_basis_eur["USD"] is None
+
+    # A fresh spot mark must not fabricate the acquisition cost of legacy USD.
+    broker.buy("ETHUSD", 10.0, 2.0, currency="USD", quote_to_eur_rate=0.9)
+    assert broker.positions["ETHUSD"]["cost_basis_eur"] is None
+    assert broker.positions["ETHUSD"]["entry_fees_eur"] is None
+    restored = PaperBroker(balance=20, fee_rate=0.01, db=db)
+    assert restored.cash_cost_basis_eur["USD"] is None
+    assert restored.positions["ETHUSD"]["cost_basis_eur"] is None
+    assert get_state(db, "paper_broker")["cash_cost_basis_eur"]["USD"] is None
+    db.close()
+
+
+def test_conversion_route_carries_unknown_basis_without_inventing_value():
+    broker = PaperBroker(balance=20, fee_rate=0.01)
+    broker.cash_by_currency["USD"] = 50.0
+    broker.cash_cost_basis_eur["USD"] = None
+    first, second = broker.convert_route([
+        ("USD", "EUR", 10.0, 0.9),
+        ("EUR", "GBP", 8.91, 0.8),
+    ])
+    assert first["received"] == pytest.approx(8.91)
+    assert second["received"] == pytest.approx(7.05672)
+    assert broker.cash_cost_basis_eur["GBP"] is None
+

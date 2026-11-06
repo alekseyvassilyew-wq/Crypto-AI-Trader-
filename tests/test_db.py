@@ -565,3 +565,25 @@ def test_paper_fx_conversion_fees_are_reported_separately_and_unvalued_are_count
     assert metrics["total_fx_conversion_fees_eur"] == pytest.approx(0.10)
     assert metrics["fx_conversions_without_eur_fee_valuation"] == 1
     db.close()
+
+def test_paper_fill_persists_cash_eur_cost_basis_atomically():
+    from src.trader.db import get_state, save_paper_fill
+
+    db = connect(":memory:")
+    save_paper_fill(
+        db,
+        cash_by_currency={"EUR": 10.0, "USD": 20.0},
+        cash_cost_basis_eur={"EUR": 10.0, "USD": 18.0},
+        positions={"ETHUSD": {
+            "qty": 1.0, "avg_price": 20.0, "quote_currency": "USD",
+            "peak_price": 20.0, "cost_basis_eur": 18.0, "entry_fees_eur": 0.018,
+        }},
+        symbol="ETHUSD", side="Buy", qty=1.0, quote=20.0,
+        fee=0.02, price=20.0, fee_eur=0.018,
+    )
+    wallet = get_state(db, "paper_broker")
+    assert wallet["cash_cost_basis_eur"] == {"EUR": 10.0, "USD": 18.0}
+    assert wallet["positions"]["ETHUSD"]["cost_basis_eur"] == 18.0
+    assert db.execute("SELECT COUNT(*) FROM trades WHERE mode='PAPER'").fetchone()[0] == 1
+    db.close()
+

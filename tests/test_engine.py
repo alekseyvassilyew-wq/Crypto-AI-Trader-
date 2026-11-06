@@ -1032,6 +1032,7 @@ def test_engine_paper_fill_commits_wallet_and_trade_together(tmp_path):
     assert fill["status"] == "FILLED"
     assert engine.paper.balance("EUR") < before
     assert saved["cash_by_currency"]["EUR"] == pytest.approx(engine.paper.balance("EUR"))
+    assert saved["cash_cost_basis_eur"] == engine.paper.cash_cost_basis_eur
     assert saved["positions"]["XBTEUR"]["qty"] == pytest.approx(fill["qty"])
     assert row["side"] == "Buy"
     assert row["status"] == "FILLED"
@@ -1044,6 +1045,7 @@ def test_engine_paper_fill_rolls_back_memory_when_database_commit_fails(tmp_path
     import sqlite3
     engine, db = make_engine(tmp_path)
     before_cash = dict(engine.paper.cash_by_currency)
+    before_cash_basis = dict(engine.paper.cash_cost_basis_eur)
     before_positions = dict(engine.paper.positions)
     db.execute(
         "CREATE TRIGGER reject_engine_paper_trade BEFORE INSERT ON trades "
@@ -1057,11 +1059,13 @@ def test_engine_paper_fill_rolls_back_memory_when_database_commit_fails(tmp_path
         )
 
     assert engine.paper.cash_by_currency == before_cash
+    assert engine.paper.cash_cost_basis_eur == before_cash_basis
     assert engine.paper.positions == before_positions
     assert db.execute("SELECT COUNT(*) FROM trades").fetchone()[0] == 0
     from src.trader.db import get_state
     saved = get_state(db, "paper_broker")
     assert saved["cash_by_currency"] == before_cash
+    assert saved["cash_cost_basis_eur"] == before_cash_basis
     assert saved["positions"] == before_positions
     db.close()
 

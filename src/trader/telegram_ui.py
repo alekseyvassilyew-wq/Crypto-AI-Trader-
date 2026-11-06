@@ -362,7 +362,7 @@ def _format_paper_forward_report(metrics, hours, by_symbol_text, span_text, cove
         "",
         "💸 КОМИССИИ И ОЦЕНКА",
         f"Комиссии исполнений: {value('total_fees_eur', 4)} EUR",
-        f"Комиссии конвертации (отдельно, не включены в P/L сделок): {value('total_fx_conversion_fees_eur', 4)} EUR",
+        f"Комиссии конвертации (справочно; известная стоимость уже в себестоимости): {value('total_fx_conversion_fees_eur', 4)} EUR",
         f"Конвертаций без EUR-оценки комиссии: {metrics.get('fx_conversions_without_eur_fee_valuation', 0)} / {metrics.get('fx_conversions', 0)}",
         f"Сделок без EUR-оценки: {metrics.get('closed_trades_without_eur_valuation', 0)}",
         f"Исполнений без EUR-оценки комиссии: {metrics.get('fills_without_eur_fee_valuation', 0)}",

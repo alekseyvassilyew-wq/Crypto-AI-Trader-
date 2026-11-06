@@ -90,6 +90,27 @@ class PaperBroker:
                     raw_amount, f"{currency} cash", minimum=0
                 )
             self.cash_by_currency.setdefault("EUR", 0.0)
+            if "cash_cost_basis_eur" not in saved:
+                # Legacy non-EUR balances have no trustworthy acquisition history.
+                self.cash_cost_basis_eur = {
+                    currency: (amount if currency == "EUR" else None)
+                    for currency, amount in self.cash_by_currency.items()
+                }
+            else:
+                raw_basis = saved["cash_cost_basis_eur"]
+                if not isinstance(raw_basis, dict):
+                    raise ValueError("Invalid saved PAPER cash EUR cost basis")
+                self.cash_cost_basis_eur = {}
+                for raw_currency, raw_amount in raw_basis.items():
+                    currency = self._validate_currency(raw_currency)
+                    if currency in self.cash_cost_basis_eur:
+                        raise ValueError(f"Duplicate saved cash cost basis for {currency}")
+                    self.cash_cost_basis_eur[currency] = (
+                        None if raw_amount is None
+                        else _finite_number(raw_amount, f"{currency} cash EUR cost basis", minimum=0)
+                    )
+                for currency in self.cash_by_currency:
+                    self.cash_cost_basis_eur.setdefault(currency, None)
             raw_positions = saved.get("positions", {})
             if not isinstance(raw_positions, dict):
                 raise ValueError("Invalid saved paper positions")
@@ -109,6 +130,7 @@ class PaperBroker:
                 }
         else:
             self.cash_by_currency = {"EUR": initial}
+            self.cash_cost_basis_eur = {"EUR": initial}
         self._sync_cash()
         self._persist()
 
@@ -134,11 +156,26 @@ class PaperBroker:
     def balance(self, currency="EUR"):
         return self.cash_by_currency.get(str(currency).upper(), 0.0)
 
+    @staticmethod
+    def _combine_cost_basis(existing_amount, existing_basis, added_amount, added_basis):
+        """Combine weighted-average EUR inventory basis without inventing unknown history."""
+        if added_amount <= 1e-12:
+            return existing_basis
+        if existing_amount <= 1e-12:
+            return added_basis
+        if existing_basis is None or added_basis is None:
+            return None
+        result = float(existing_basis) + float(added_basis)
+        if not math.isfinite(result) or result < 0:
+            raise ValueError("PAPER cash EUR cost basis is invalid")
+        return result
+
     def _persist(self):
         if self.db is not None:
             set_state(self.db, "paper_broker", {
                 "cash": self.cash_by_currency.get("EUR", 0.0),
                 "cash_by_currency": self.cash_by_currency,
+                "cash_cost_basis_eur": self.cash_cost_basis_eur,
                 "positions": self.positions,
             })
 
@@ -157,12 +194,29 @@ class PaperBroker:
         received = gross - fee
         if not all(math.isfinite(x) for x in (gross, fee, received)) or received <= 0:
             raise ValueError("Invalid PAPER currency conversion")
-        new_source_balance = self.balance(source) - amount
-        new_target_balance = self.balance(target) + received
+        source_balance = self.balance(source)
+        target_balance = self.balance(target)
+        new_source_balance = source_balance - amount
+        new_target_balance = target_balance + received
         if not math.isfinite(new_source_balance) or not math.isfinite(new_target_balance) or new_source_balance < -1e-9:
             raise ValueError("PAPER conversion would create an invalid wallet balance")
+        source_basis = self.cash_cost_basis_eur.get(source)
+        allocated_source_basis = (
+            None if source_basis is None
+            else float(source_basis) * (amount / source_balance)
+        )
+        remaining_source_basis = (
+            None if source_basis is None
+            else max(0.0, float(source_basis) - float(allocated_source_basis))
+        )
+        target_basis = self._combine_cost_basis(
+            target_balance, self.cash_cost_basis_eur.get(target),
+            received, allocated_source_basis,
+        )
         self.cash_by_currency[source] = max(0.0, new_source_balance)
         self.cash_by_currency[target] = new_target_balance
+        self.cash_cost_basis_eur[source] = remaining_source_basis
+        self.cash_cost_basis_eur[target] = target_basis
         self._sync_cash()
         if persist:
             self._persist()
@@ -177,6 +231,7 @@ class PaperBroker:
         the persisted wallet at its pre-route state.
         """
         cash_before = dict(self.cash_by_currency)
+        basis_before = dict(self.cash_cost_basis_eur)
         try:
             conversions = [
                 self.convert(source, target, amount, rate, persist=False)
@@ -186,6 +241,7 @@ class PaperBroker:
             return conversions
         except Exception:
             self.cash_by_currency = cash_before
+            self.cash_cost_basis_eur = basis_before
             self._sync_cash()
             self._persist()
             raise
@@ -195,8 +251,10 @@ class PaperBroker:
         currency = self._validate_currency(currency)
         quote = _finite_number(quote, "quote", minimum=0, strict_minimum=True)
         price = _finite_number(price, "price", minimum=0, strict_minimum=True)
-        rate = None if quote_to_eur_rate is None else _finite_number(
-            quote_to_eur_rate, "quote_to_eur_rate", minimum=0, strict_minimum=True
+        rate = (
+            1.0 if currency == "EUR" and quote_to_eur_rate is None
+            else None if quote_to_eur_rate is None
+            else _finite_number(quote_to_eur_rate, "quote_to_eur_rate", minimum=0, strict_minimum=True)
         )
         fee = quote * self.fee_rate
         total_cost = quote + fee
@@ -218,13 +276,31 @@ class PaperBroker:
             raise ValueError("Paper buy would create an invalid account state")
         old_basis = old.get("cost_basis_eur")
         old_fees = old.get("entry_fees_eur")
-        cost_basis_eur = None
-        entry_fees_eur = None
-        if rate is not None and (old_qty == 0 or old_basis is not None):
-            cost_basis_eur = (float(old_basis or 0.0) + quote * rate)
-        if rate is not None and (old_qty == 0 or old_fees is not None):
-            entry_fees_eur = (float(old_fees or 0.0) + fee * rate)
+        cash_basis = self.cash_cost_basis_eur.get(currency)
+        if currency not in self.cash_cost_basis_eur and rate is not None:
+            # Compatibility for a caller that explicitly injects a fresh balance;
+            # persisted legacy balances are explicitly marked unknown above.
+            unit_basis = rate
+            cash_basis = available * rate
+        elif cash_basis is not None and available > 0:
+            unit_basis = float(cash_basis) / available
+        else:
+            unit_basis = None
+        allocated_quote_basis = None if unit_basis is None else quote * unit_basis
+        allocated_fee_basis = None if unit_basis is None else fee * unit_basis
+        cost_basis_eur = (
+            None if allocated_quote_basis is None or (old_qty > 0 and old_basis is None)
+            else float(old_basis or 0.0) + allocated_quote_basis
+        )
+        entry_fees_eur = (
+            None if allocated_fee_basis is None or (old_qty > 0 and old_fees is None)
+            else float(old_fees or 0.0) + allocated_fee_basis
+        )
         self.cash_by_currency[currency] = max(0.0, new_cash)
+        self.cash_cost_basis_eur[currency] = (
+            None if cash_basis is None or unit_basis is None
+            else max(0.0, float(cash_basis) - (total_cost * unit_basis))
+        )
         self._sync_cash()
         peak_price = max(float(old.get("peak_price", old_avg) or old_avg), price)
         self.positions[symbol] = {
@@ -250,7 +326,7 @@ class PaperBroker:
             self._persist()
         return peak
 
-    def sell(self, symbol, qty, price, *, persist=True):
+    def sell(self, symbol, qty, price, *, quote_to_eur_rate=None, persist=True):
         symbol = self._validate_symbol(symbol)
         qty = _finite_number(qty, "qty", minimum=0, strict_minimum=True)
         price = _finite_number(price, "price", minimum=0, strict_minimum=True)
@@ -259,13 +335,24 @@ class PaperBroker:
         if qty > held + 1e-12:
             raise ValueError("Invalid paper sell")
         currency = self._validate_currency(pos.get("quote_currency", "EUR"))
+        rate = (
+            1.0 if currency == "EUR" and quote_to_eur_rate is None
+            else None if quote_to_eur_rate is None
+            else _finite_number(quote_to_eur_rate, "quote_to_eur_rate", minimum=0, strict_minimum=True)
+        )
         gross = qty * price
         fee = gross * self.fee_rate
         net = gross - fee
         remaining = max(0.0, held - qty)
-        new_cash = self.balance(currency) + net
+        old_cash = self.balance(currency)
+        new_cash = old_cash + net
         if not all(math.isfinite(x) for x in (gross, fee, net, remaining, new_cash)) or net < 0:
             raise ValueError("Paper sell would create an invalid account state")
+        existing_cash_basis = self.cash_cost_basis_eur.get(currency)
+        proceeds_basis = None if rate is None else net * rate
+        new_cash_basis = self._combine_cost_basis(
+            old_cash, existing_cash_basis, net, proceeds_basis,
+        )
         if remaining < 1e-12:
             self.positions.pop(symbol, None)
         else:
@@ -276,6 +363,7 @@ class PaperBroker:
                 if value is not None:
                     self.positions[symbol][field] = float(value) * remaining_ratio
         self.cash_by_currency[currency] = new_cash
+        self.cash_cost_basis_eur[currency] = new_cash_basis
         self._sync_cash()
         if persist:
             self._persist()
