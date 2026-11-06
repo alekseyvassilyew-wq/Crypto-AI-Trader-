@@ -141,7 +141,7 @@ def test_trade_diagnostics_reconcile_exit_reasons_costs_and_holding_time():
     result = {
         "trades": 2,
         "fees_paid": 0.12,
-        "net_pnl": -0.32,
+        "net_pnl": -0.27,
         "trades_detail": [
             {
                 "reason": "STOP_LOSS",
@@ -149,7 +149,7 @@ def test_trade_diagnostics_reconcile_exit_reasons_costs_and_holding_time():
                 "exit_time": 7200,
                 "gross_entry_notional": 10.0,
                 "gross_exit_notional": 9.7,
-                "net_pnl": -0.35,
+                "net_pnl": -0.40,
             },
             {
                 "reason": "TAKE_PROFIT",
@@ -157,7 +157,7 @@ def test_trade_diagnostics_reconcile_exit_reasons_costs_and_holding_time():
                 "exit_time": 14400,
                 "gross_entry_notional": 10.0,
                 "gross_exit_notional": 10.15,
-                "net_pnl": 0.03,
+                "net_pnl": 0.13,
             },
         ],
     }
@@ -167,7 +167,8 @@ def test_trade_diagnostics_reconcile_exit_reasons_costs_and_holding_time():
     assert summary["exit_reasons"] == {"STOP_LOSS": 1, "TAKE_PROFIT": 1}
     assert summary["gross_pnl_after_slippage_before_fees"] == pytest.approx(-0.15)
     assert summary["fees_paid"] == pytest.approx(0.12)
-    assert summary["net_pnl"] == pytest.approx(-0.32)
+    assert summary["net_pnl"] == pytest.approx(-0.27)
+    assert summary["net_reconciliation_difference"] == pytest.approx(0.0)
     assert summary["average_holding_hours"] == pytest.approx(1.5)
-    assert summary["average_winning_trade_eur"] == pytest.approx(0.03)
-    assert summary["average_losing_trade_eur"] == pytest.approx(-0.35)
+    assert summary["average_winning_trade_eur"] == pytest.approx(0.13)
+    assert summary["average_losing_trade_eur"] == pytest.approx(-0.40)

@@ -214,6 +214,11 @@ def _trade_diagnostics(result, *, interval_seconds, buy_signals=None):
         "gross_pnl_after_slippage_before_fees": gross_before_fees,
         "fees_paid": float(result.get("fees_paid", 0.0)),
         "net_pnl": float(result.get("net_pnl", 0.0)),
+        "net_reconciliation_difference": (
+            gross_before_fees
+            - float(result.get("fees_paid", 0.0))
+            - float(result.get("net_pnl", 0.0))
+        ),
         "average_holding_hours": (
             sum(holding_hours) / len(holding_hours) if holding_hours else 0.0
         ),
