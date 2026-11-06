@@ -47,6 +47,25 @@ def test_research_candles_reject_bad_order_and_ohlc():
     db.close()
 
 
+def test_research_candles_reject_conflicting_history_without_partial_insert():
+    db = connect(":memory:")
+    original = candles(3)
+    store_candles(db, "XBTEUR", original)
+
+    incoming = [list(row) for row in original[1:]]
+    incoming[0][4] += 0.25
+    new_row = list(original[-1])
+    new_row[0] += 3600
+    incoming.append(new_row)
+
+    with pytest.raises(ValueError, match="Conflicting historical research candle"):
+        store_candles(db, "XBTEUR", incoming)
+
+    saved = load_candles(db, "XBTEUR")
+    assert saved == original
+    db.close()
+
+
 def test_research_run_history_persists_metrics_and_reasons():
     db = connect(":memory:")
     candidate = {
