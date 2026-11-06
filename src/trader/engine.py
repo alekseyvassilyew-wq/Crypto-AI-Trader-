@@ -833,12 +833,11 @@ class Engine:
             )
             if reason:
                 position_before_exit = dict(pos)
-                # Strategy exits may close a position only when the estimated
-                # realized EUR P/L is strictly positive after entry fees,
-                # exit fees, spread and configured PAPER slippage. Hard risk
-                # exits (STOP_LOSS and the daily-loss kill switch below) remain
-                # authoritative and may realize a loss.
-                if reason != "STOP_LOSS":
+                # Profit-taking/strategy exits require positive net EUR P/L
+                # after all costs. Protective exits (STOP_LOSS and TRAILING_STOP)
+                # remain authoritative and may realize a loss; otherwise a
+                # trailing stop could be neutralized by the profit-only guard.
+                if reason not in {"STOP_LOSS", "TRAILING_STOP"}:
                     estimated_exit_fee = (
                         float(pos["qty"]) * exit_price * self.paper.fee_rate
                     )
