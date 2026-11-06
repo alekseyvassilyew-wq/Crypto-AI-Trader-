@@ -59,6 +59,21 @@ def test_forecasts_settle_on_first_candle_close_at_or_after_horizon():
         assert elapsed < HORIZON_SECONDS + 3600
 
 
+def test_same_strategy_forecasts_do_not_overlap():
+    rows = candles(count=150, interval=3600)
+    _, _, result = _walk_forward_signals(rows, fee_rate=0.0026, slippage_bps=5)
+    forecasts = result["settled_forecasts_detail"]
+    for strategy in {item["strategy"] for item in forecasts}:
+        selected = sorted(
+            (item for item in forecasts if item["strategy"] == strategy),
+            key=lambda item: item["forecast_at"],
+        )
+        assert all(
+            current["forecast_at"] >= previous["settled_at"]
+            for previous, current in zip(selected, selected[1:])
+        )
+
+
 def test_comparison_runs_all_three_modes_with_identical_cost_assumptions():
     result = run_strategy_comparison(
         candles(), initial_cash=500, max_trade=50,
