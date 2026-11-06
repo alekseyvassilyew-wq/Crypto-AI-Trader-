@@ -505,6 +505,7 @@ class Engine:
                 settle_shadow_predictions(
                     self.db, symbol=symbol, candles=base_candles,
                     fee_rate=self.s.fee_rate, slippage_bps=self._slippage_rate() * 10000.0,
+                    interval_seconds=3600,
                 )
                 # Use the latest closed candle for features and the current
                 # executable ask as the forward-test entry. Never backdate a
