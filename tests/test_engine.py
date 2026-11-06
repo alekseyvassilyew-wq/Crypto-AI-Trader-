@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 from src.trader.db import connect, get_state, set_state
 from src.trader.engine import Engine
+from src.trader.telegram_ui import _format_paper_trade_action
 from src.trader.paper import PaperBroker
 import pytest
 
@@ -1179,3 +1180,23 @@ def test_scan_candle_cache_does_not_cache_failed_exchange_requests(tmp_path, mon
         engine._scan_candles("XBTEUR")
     assert exchange.calls == 2
     db.close()
+
+
+
+def test_paper_trade_report_formats_realized_eur_result_and_escapes_html():
+    message = _format_paper_trade_action(
+        "XBTEUR SELL STOP_LOSS | qty=0.12345678 | quote=EUR "
+        "| entry=100 | exit=97.5 | change=-2.50% | fee_eur=0.0120 | net_pnl_eur=-0.3250"
+    )
+    assert "ЗАКРЫТА PAPER-ПОЗИЦИЯ" in message
+    assert "Защитный Stop-Loss" in message
+    assert "100 → 97.5" in message
+    assert "Чистый реализованный результат" in message
+    assert "-0.3250 EUR" in message
+    assert "🔴" in message
+
+    safe_message = _format_paper_trade_action(
+        "XBT<EUR SELL STOP_LOSS | qty=1 | quote=EUR "
+        "| entry=100 | exit=97 | change=-3% | fee_eur=0.1 | net_pnl_eur=-3"
+    )
+    assert "XBT&lt;EUR" in safe_message
