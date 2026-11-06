@@ -1199,6 +1199,78 @@ def test_scan_candle_cache_does_not_cache_failed_exchange_requests(tmp_path, mon
     engine.exchange = exchange
     monkeypatch.setattr("src.trader.engine.time.time", lambda: 3600 * 100 + 10)
 
+    with pytest.raises(TimeoutError):
+        engine._scan_candles("XBTEUR")
+    with pytest.raises(TimeoutError):
+        engine._scan_candles("XBTEUR")
+    assert exchange.calls == 2
+    db.close()
+
+
+
+def test_paper_trade_report_formats_realized_eur_result_and_escapes_html():
+    message = _format_paper_trade_action(
+        "XBTEUR SELL STOP_LOSS | qty=0.12345678 | quote=EUR "
+        "| entry=100 | exit=97.5 | change=-2.50% | fee_eur=0.0120 | net_pnl_eur=-0.3250"
+    )
+    assert "ЗАКРЫТА PAPER-ПОЗИЦИЯ" in message
+    assert "Защитный Stop-Loss" in message
+    assert "100 → 97.5" in message
+    assert "Чистый реализованный результат" in message
+    assert "-0.3250 EUR" in message
+    assert "🔴" in message
+
+    safe_message = _format_paper_trade_action(
+        "XBT<EUR SELL STOP_LOSS | qty=1 | quote=EUR "
+        "| entry=100 | exit=97 | change=-3% | fee_eur=0.1 | net_pnl_eur=-3"
+    )
+    assert "XBT&lt;EUR" in safe_message
+
+
+def test_liquidation_equity_fails_closed_on_missing_position_mark(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.paper.buy("XBTEUR", 5, 100.0)
+    with pytest.raises(ValueError, match="Missing current PAPER mark price.*XBTEUR"):
+        engine._equity_after_liquidation({}, {"EUR": 1.0})
+    db.close()
+
+
+def test_liquidation_equity_fails_closed_on_missing_cash_fx_rate(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.paper.cash_by_currency["USD"] = 5.0
+    with pytest.raises(ValueError, match="Missing or invalid PAPER cash FX valuation.*USD"):
+        engine._equity_after_liquidation({}, {"EUR": 1.0})
+    db.close()
+
+
+def test_liquidation_equity_fails_closed_on_missing_position_fx_rate(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.paper.cash_by_currency["USD"] = 0.0
+    engine.paper.positions = {
+        "ETHUSD": {"qty": 0.1, "avg_price": 100.0, "quote_currency": "USD"}
+    }
+    with pytest.raises(ValueError, match="Missing PAPER position FX valuation.*ETHUSD"):
+        engine._equity_after_liquidation({"ETHUSD": 100.0}, {"EUR": 1.0})
+    db.close()
+
+
+def test_daily_pnl_does_not_treat_missing_open_position_marks_as_zero(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.paper.buy("XBTEUR", 5, 10)
+    with pytest.raises(ValueError, match="open positions have no current market marks"):
+        engine.daily_pnl({})
+    db.close()
+
+
+def test_daily_risk_baseline_rejects_cached_only_fx_rate(tmp_path):
+    engine, db = make_engine(tmp_path)
+    engine.paper.cash_by_currency["USD"] = 5.0
+    set_state(db, "paper_fx_rates", {"USD": 0.9})
+    set_state(db, "daily", {"date": "2000-01-01", "start_equity": 20.0, "realized": 0.0})
+    with pytest.raises(ValueError, match="Missing or invalid PAPER cash FX valuation.*USD"):
+        engine._ensure_day({"SOME_MARKET": 1.0})
+    db.close()
+
 class OrderBookExchange:
     def __init__(self, book):
         self.book = book
