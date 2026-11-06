@@ -63,7 +63,27 @@ CREATE TABLE IF NOT EXISTS paper_fx_conversions(
     legs INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_paper_fx_conversions_ts ON paper_fx_conversions(ts);
-CREATE TABLE IF NOT EXISTS trades(id INTEGER PRIMARY KEY, ts TEXT DEFAULT CURRENT_TIMESTAMP, mode TEXT NOT NULL, symbol TEXT NOT NULL, side TEXT NOT NULL, qty REAL NOT NULL, quote REAL NOT NULL, fee REAL NOT NULL, price REAL NOT NULL, status TEXT NOT NULL, order_id TEXT, fee_eur REAL, realized_pnl_eur REAL);
+CREATE TABLE IF NOT EXISTS paper_account_events(
+    id INTEGER PRIMARY KEY,
+    ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    event_type TEXT NOT NULL,
+    symbol TEXT,
+    side TEXT,
+    quote_currency TEXT,
+    from_currency TEXT,
+    to_currency TEXT,
+    qty REAL,
+    quote REAL,
+    fee REAL,
+    fee_currency TEXT,
+    fee_eur REAL,
+    realized_pnl_eur REAL,
+    wallet_before_json TEXT,
+    wallet_after_json TEXT NOT NULL,
+    details_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_paper_account_events_ts ON paper_account_events(ts);
+CREATE TABLE IF NOT EXISTS trades(id INTEGER PRIMARY KEY, ts TEXT DEFAULT CURRENT_TIMESTAMP, mode TEXT NOT NULL, symbol TEXT NOT NULL, side TEXT NOT NULL, qty REAL NOT NULL, quote REAL NOT NULL, fee REAL NOT NULL, price REAL NOT NULL, status TEXT NOT NULL, order_id TEXT, fee_eur REAL, realized_pnl_eur REAL, quote_currency TEXT);
 CREATE TABLE IF NOT EXISTS app_state(key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS telegram_report_pages(report_key TEXT PRIMARY KEY, pages_json TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE INDEX IF NOT EXISTS idx_telegram_report_pages_updated ON telegram_report_pages(updated_at);
@@ -127,6 +147,8 @@ def connect(path):
         db.execute("ALTER TABLE trades ADD COLUMN fee_eur REAL")
     if "realized_pnl_eur" not in trade_columns:
         db.execute("ALTER TABLE trades ADD COLUMN realized_pnl_eur REAL")
+    if "quote_currency" not in trade_columns:
+        db.execute("ALTER TABLE trades ADD COLUMN quote_currency TEXT")
     # Additive migration for databases created before model-version tracking.
     columns = {row["name"] for row in db.execute("PRAGMA table_info(ml_shadow_predictions)").fetchall()}
     if "model_version" not in columns:
@@ -222,7 +244,7 @@ def audit(db, event, details=""):
 def save_paper_fx_conversion(db, *, from_currency, to_currency, spent, received,
                              fee_amount=None, fee_currency=None, fee_eur=None, legs=1, ts=None,
                              cash_by_currency=None, cash_cost_basis_eur=None, positions=None,
-                             audit_event=None, audit_details=None):
+                             wallet_before=None, audit_event=None, audit_details=None):
     """Persist a PAPER FX fee ledger row, optionally atomically with its wallet."""
     source = str(from_currency or "").strip().upper()
     target = str(to_currency or "").strip().upper()
@@ -262,6 +284,13 @@ def save_paper_fx_conversion(db, *, from_currency, to_currency, spent, received,
             "positions": positions,
         }
         wallet_payload = json.dumps(wallet, separators=(",", ":"), allow_nan=False)
+        _paper_wallet_financial_projection(json.loads(wallet_payload))
+    before_payload = None
+    if wallet_before is not None:
+        if not isinstance(wallet_before, dict):
+            raise ValueError("PAPER pre-conversion wallet snapshot must be a mapping")
+        before_payload = json.dumps(wallet_before, separators=(",", ":"), allow_nan=False)
+        _paper_wallet_financial_projection(json.loads(before_payload))
 
     with db:
         if wallet_payload is not None:
@@ -283,6 +312,16 @@ def save_paper_fx_conversion(db, *, from_currency, to_currency, spent, received,
                 "(ts,from_currency,to_currency,spent,received,fee_amount,fee_currency,fee_eur,legs) "
                 "VALUES(?,?,?,?,?,?,?,?,?)",
                 (timestamp, source, target, values[0], values[1], fee_amount, currency, fee_eur, legs),
+            )
+        if wallet_payload is not None:
+            db.execute(
+                "INSERT INTO paper_account_events"
+                "(event_type,from_currency,to_currency,quote,fee,fee_currency,fee_eur,"
+                "wallet_before_json,wallet_after_json,details_json) "
+                "VALUES('FX_CONVERSION',?,?,?,?,?,?,?,?,?)",
+                (source, target, values[0], fee_amount, currency, fee_eur,
+                 before_payload, wallet_payload,
+                 json.dumps({"received": values[1], "legs": legs}, separators=(",", ":"))),
             )
         if event is not None:
             db.execute(
@@ -549,6 +588,179 @@ def get_paper_metrics(db, hours=24):
         "avg_analyzed_markets": sum(int(row["analyzed_markets"]) for row in rows) / len(rows),
         "first_ts": rows[0]["ts"], "last_ts": rows[-1]["ts"],
         **trade_metrics,
+    }
+
+
+def get_paper_account_reconciliation(db):
+    """Read-only integrity and event-chain reconciliation from the recorded baseline."""
+    wallet = get_state(db, "paper_broker")
+    baseline = db.execute(
+        "SELECT id,ts,wallet_after_json FROM paper_account_events "
+        "WHERE event_type='BASELINE' ORDER BY id LIMIT 1"
+    ).fetchone()
+    if wallet is None:
+        return {"status": "NO_WALLET", "full_history_reconciled": False,
+                "blocking_reasons": ["Persisted PAPER wallet is missing"]}
+    if baseline is None:
+        return {"status": "NO_BASELINE", "full_history_reconciled": False,
+                "blocking_reasons": ["Immutable PAPER account baseline has not been recorded"]}
+
+    reasons = []
+    baseline_wallet = json.loads(baseline["wallet_after_json"])
+    previous_projection = _paper_wallet_financial_projection(baseline_wallet)
+    event_rows = db.execute(
+        "SELECT * FROM paper_account_events WHERE id>? ORDER BY id",
+        (int(baseline["id"]),),
+    ).fetchall()
+    chain_valid = True
+    realized_values, execution_fees, fx_fees = [], [], []
+    unvalued_sells = fill_events = fx_events = 0
+    for row in event_rows:
+        try:
+            after = _paper_wallet_financial_projection(json.loads(row["wallet_after_json"]))
+            if not row["wallet_before_json"]:
+                raise ValueError("event has no pre-operation wallet snapshot")
+            before = _paper_wallet_financial_projection(json.loads(row["wallet_before_json"]))
+            if before != previous_projection:
+                raise ValueError("event pre-operation wallet does not match prior event")
+            previous_projection = after
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            chain_valid = False
+            reasons.append(f"Event #{row['id']} snapshot chain: {exc}")
+            try:
+                previous_projection = _paper_wallet_financial_projection(
+                    json.loads(row["wallet_after_json"])
+                )
+            except (TypeError, ValueError, json.JSONDecodeError):
+                pass
+            continue
+
+        event_type = str(row["event_type"]).upper()
+        if event_type == "FILL":
+            fill_events += 1
+            if not row["quote_currency"]:
+                chain_valid = False
+                reasons.append(f"Fill event #{row['id']} has no quote currency")
+            execution_fees.append(None if row["fee_eur"] is None else float(row["fee_eur"]))
+            if str(row["side"] or "").upper() == "SELL":
+                if row["realized_pnl_eur"] is None:
+                    unvalued_sells += 1
+                else:
+                    realized_values.append(float(row["realized_pnl_eur"]))
+        elif event_type == "FX_CONVERSION":
+            fx_events += 1
+            fx_fees.append(None if row["fee_eur"] is None else float(row["fee_eur"]))
+        else:
+            chain_valid = False
+            reasons.append(f"Unknown account event type in row #{row['id']}")
+
+    try:
+        current_projection = _paper_wallet_financial_projection(wallet)
+    except (TypeError, ValueError) as exc:
+        current_projection = None
+        chain_valid = False
+        reasons.append(f"Current PAPER wallet invalid: {exc}")
+    current_matches = current_projection == previous_projection
+    if not current_matches:
+        chain_valid = False
+        reasons.append("Current persisted wallet does not match the latest journal snapshot")
+
+    unknown_cash_basis = []
+    for currency, amount in (current_projection or {}).get("cash_by_currency", {}).items():
+        if amount > 1e-12 and current_projection["cash_cost_basis_eur"].get(currency) is None:
+            unknown_cash_basis.append(currency)
+    if unknown_cash_basis:
+        reasons.append("Unknown historical EUR cost basis for cash: " + ", ".join(sorted(unknown_cash_basis)))
+
+    unknown_position_basis, position_rows = [], []
+    for symbol, position in (current_projection or {}).get("positions", {}).items():
+        if position["cost_basis_eur"] is None or position["entry_fees_eur"] is None:
+            unknown_position_basis.append(symbol)
+        position_rows.append({
+            "symbol": symbol, "qty": position["qty"],
+            "quote_currency": position["quote_currency"],
+            "cost_basis_eur": position["cost_basis_eur"],
+            "entry_fees_eur": position["entry_fees_eur"],
+        })
+    if unknown_position_basis:
+        reasons.append("Unknown historical EUR cost basis for positions: " + ", ".join(sorted(unknown_position_basis)))
+
+    baseline_details = json.loads(
+        db.execute("SELECT details_json FROM paper_account_events WHERE id=?",
+                   (int(baseline["id"]),)).fetchone()["details_json"] or "{}"
+    )
+    trade_cutoff = int(baseline_details.get("max_trade_id", 0))
+    fx_cutoff = int(baseline_details.get("max_fx_id", 0))
+    old_trades = db.execute(
+        "SELECT COUNT(*) FROM trades WHERE mode='PAPER' AND status='FILLED' AND id<=?",
+        (trade_cutoff,),
+    ).fetchone()[0]
+    old_fx = db.execute(
+        "SELECT COUNT(*) FROM paper_fx_conversions WHERE id<=?",
+        (fx_cutoff,),
+    ).fetchone()[0]
+    post_baseline_trades = db.execute(
+        "SELECT COUNT(*) FROM trades WHERE mode='PAPER' AND status='FILLED' AND id>?",
+        (trade_cutoff,),
+    ).fetchone()[0]
+    post_baseline_fx = db.execute(
+        "SELECT COUNT(*) FROM paper_fx_conversions WHERE id>?",
+        (fx_cutoff,),
+    ).fetchone()[0]
+    if post_baseline_trades != fill_events:
+        chain_valid = False
+        reasons.append(
+            f"Fill journal coverage mismatch: {fill_events} events for {post_baseline_trades} PAPER fills"
+        )
+    if post_baseline_fx != fx_events:
+        chain_valid = False
+        reasons.append(
+            f"FX journal coverage mismatch: {fx_events} events for {post_baseline_fx} FX ledger rows"
+        )
+    missing_quote_currency = db.execute(
+        "SELECT COUNT(*) FROM trades WHERE mode='PAPER' AND status='FILLED' "
+        "AND id>? AND quote_currency IS NULL",
+        (trade_cutoff,),
+    ).fetchone()[0]
+    if missing_quote_currency:
+        chain_valid = False
+        reasons.append(f"{missing_quote_currency} post-baseline fills have no quote currency")
+    if old_trades or old_fx:
+        reasons.append(f"Legacy history before baseline excluded: {old_trades} fills, {old_fx} FX conversions")
+
+    cash = (current_projection or {}).get("cash_by_currency", {})
+    basis = (current_projection or {}).get("cash_cost_basis_eur", {})
+    return {
+        "status": "CONSISTENT_SINCE_BASELINE" if chain_valid else "INCONSISTENT",
+        "full_history_reconciled": False,
+        "baseline_ts": baseline["ts"],
+        "baseline_event_id": int(baseline["id"]),
+        "journal_events": len(event_rows),
+        "fill_events": fill_events,
+        "fx_events": fx_events,
+        "journal_chain_valid": chain_valid,
+        "current_wallet_matches_journal": current_matches,
+        "cash_by_currency": cash,
+        "cash_cost_basis_eur": basis,
+        "unknown_cash_basis_currencies": sorted(unknown_cash_basis),
+        "open_positions": position_rows,
+        "unknown_position_basis_symbols": sorted(unknown_position_basis),
+        "realized_pnl_eur_since_baseline": sum(realized_values),
+        "valued_closed_fills_since_baseline": len(realized_values),
+        "unvalued_closed_fills_since_baseline": unvalued_sells,
+        "execution_fees_eur_since_baseline": sum(v for v in execution_fees if v is not None),
+        "execution_fills_without_eur_fee_since_baseline": sum(v is None for v in execution_fees),
+        "fx_conversion_fees_eur_since_baseline": sum(v for v in fx_fees if v is not None),
+        "fx_conversions_without_eur_fee_since_baseline": sum(v is None for v in fx_fees),
+        "legacy_fills_excluded": int(old_trades),
+        "legacy_fx_conversions_excluded": int(old_fx),
+        "unrealized_pnl_eur": None,
+        "blocking_reasons": reasons,
+        "limitation": (
+            "This is a wallet/event-chain integrity check since the baseline, not a full "
+            "economic P/L reconciliation. Unrealized P/L needs fresh marks and FX; "
+            "pre-baseline history is not replayable from legacy records."
+        ),
     }
 
 
@@ -903,8 +1115,97 @@ def get_telegram_report_pages(db, report_key):
     return pages
 
 
+def _paper_wallet_payload(cash_by_currency, positions, cash_cost_basis_eur):
+    if not isinstance(cash_by_currency, dict) or not isinstance(positions, dict):
+        raise ValueError("PAPER wallet state must contain currency balances and positions")
+    if not isinstance(cash_cost_basis_eur, dict):
+        raise ValueError("PAPER cash EUR cost basis must be a mapping")
+    wallet = {
+        "cash": float(cash_by_currency.get("EUR", 0.0)),
+        "cash_by_currency": cash_by_currency,
+        "cash_cost_basis_eur": cash_cost_basis_eur,
+        "positions": positions,
+    }
+    return json.dumps(wallet, separators=(",", ":"), allow_nan=False)
+
+
+def _paper_wallet_financial_projection(wallet):
+    if not isinstance(wallet, dict):
+        raise ValueError("PAPER event wallet snapshot must be an object")
+    cash = wallet.get("cash_by_currency")
+    basis = wallet.get("cash_cost_basis_eur", {})
+    positions = wallet.get("positions")
+    if not isinstance(cash, dict) or not isinstance(basis, dict) or not isinstance(positions, dict):
+        raise ValueError("PAPER event wallet snapshot is missing financial mappings")
+    normalized_cash = {}
+    for currency, raw in cash.items():
+        amount = float(raw)
+        if not isinstance(currency, str) or not currency.strip() or not math.isfinite(amount) or amount < 0:
+            raise ValueError("Invalid PAPER event cash balance")
+        normalized_cash[currency.upper()] = amount
+    normalized_basis = {}
+    for currency, raw in basis.items():
+        if not isinstance(currency, str) or not currency.strip():
+            raise ValueError("Invalid PAPER event cost-basis currency")
+        amount = None if raw is None else float(raw)
+        if amount is not None and (not math.isfinite(amount) or amount < 0):
+            raise ValueError("Invalid PAPER event cash cost basis")
+        normalized_basis[currency.upper()] = amount
+    normalized_positions = {}
+    for symbol, position in positions.items():
+        if not isinstance(position, dict):
+            raise ValueError("Invalid PAPER event position")
+        qty = float(position.get("qty"))
+        avg_price = float(position.get("avg_price"))
+        quote_currency = str(position.get("quote_currency") or "UNKNOWN").upper()
+        cost_basis = position.get("cost_basis_eur")
+        entry_fees = position.get("entry_fees_eur")
+        cost_basis = None if cost_basis is None else float(cost_basis)
+        entry_fees = None if entry_fees is None else float(entry_fees)
+        if (
+            not math.isfinite(qty) or qty <= 0 or not math.isfinite(avg_price) or avg_price <= 0
+            or cost_basis is not None and (not math.isfinite(cost_basis) or cost_basis < 0)
+            or entry_fees is not None and (not math.isfinite(entry_fees) or entry_fees < 0)
+        ):
+            raise ValueError("Invalid PAPER event position financial fields")
+        normalized_positions[str(symbol).upper()] = {
+            "qty": qty, "avg_price": avg_price, "quote_currency": quote_currency,
+            "cost_basis_eur": cost_basis, "entry_fees_eur": entry_fees,
+        }
+    legacy_cash = wallet.get("cash")
+    if legacy_cash is not None:
+        legacy_cash = float(legacy_cash)
+        if not math.isfinite(legacy_cash) or abs(legacy_cash - normalized_cash.get("EUR", 0.0)) > 1e-8:
+            raise ValueError("PAPER EUR cash alias does not match currency balance")
+    return {"cash_by_currency": normalized_cash, "cash_cost_basis_eur": normalized_basis,
+            "positions": normalized_positions}
+
+
+def ensure_paper_account_baseline(db, *, cash_by_currency, positions, cash_cost_basis_eur):
+    """Create one immutable baseline; later events are replayable from this point."""
+    payload = _paper_wallet_payload(cash_by_currency, positions, cash_cost_basis_eur)
+    _paper_wallet_financial_projection(json.loads(payload))
+    with db:
+        existing = db.execute(
+            "SELECT id FROM paper_account_events WHERE event_type='BASELINE' ORDER BY id LIMIT 1"
+        ).fetchone()
+        if existing is not None:
+            return False
+        cutoff = {
+            "max_trade_id": int(db.execute("SELECT COALESCE(MAX(id),0) FROM trades").fetchone()[0]),
+            "max_fx_id": int(db.execute("SELECT COALESCE(MAX(id),0) FROM paper_fx_conversions").fetchone()[0]),
+        }
+        db.execute(
+            "INSERT INTO paper_account_events(event_type,wallet_after_json,details_json) "
+            "VALUES('BASELINE',?,?)",
+            (payload, json.dumps(cutoff, separators=(",", ":"))),
+        )
+    return True
+
+
 def save_paper_fill(db, *, cash_by_currency, positions, symbol, side, qty, quote, fee, price,
-                    fee_eur=None, realized_pnl_eur=None, cash_cost_basis_eur=None):
+                    fee_eur=None, realized_pnl_eur=None, cash_cost_basis_eur=None,
+                    quote_currency=None, wallet_before=None):
     """Atomically persist a PAPER wallet mutation and its corresponding trade fill."""
     if not isinstance(cash_by_currency, dict) or not isinstance(positions, dict):
         raise ValueError("PAPER wallet state must contain currency balances and positions")
@@ -932,6 +1233,18 @@ def save_paper_fill(db, *, cash_by_currency, positions, symbol, side, qty, quote
             normalized_basis[currency.strip().upper()] = value
         wallet["cash_cost_basis_eur"] = normalized_basis
     payload = json.dumps(wallet, separators=(",", ":"), allow_nan=False)
+    before_payload = None
+    if wallet_before is not None:
+        if not isinstance(wallet_before, dict):
+            raise ValueError("PAPER pre-fill wallet snapshot must be a mapping")
+        before_payload = json.dumps(wallet_before, separators=(",", ":"), allow_nan=False)
+        _paper_wallet_financial_projection(json.loads(before_payload))
+    _paper_wallet_financial_projection(json.loads(payload))
+    normalized_quote_currency = (
+        None if quote_currency is None else str(quote_currency).strip().upper()
+    )
+    if normalized_quote_currency == "":
+        raise ValueError("PAPER quote currency must not be empty")
     numeric = (float(qty), float(quote), float(fee), float(price))
     if not all(math.isfinite(value) for value in numeric):
         raise ValueError("PAPER fill values must be finite")
@@ -944,10 +1257,19 @@ def save_paper_fill(db, *, cash_by_currency, positions, symbol, side, qty, quote
             (payload,),
         )
         db.execute(
-            "INSERT INTO trades(mode,symbol,side,qty,quote,fee,price,status,fee_eur,realized_pnl_eur) "
-            "VALUES('PAPER',?,?,?,?,?,?, 'FILLED',?,?)",
+            "INSERT INTO trades(mode,symbol,side,qty,quote,fee,price,status,fee_eur,realized_pnl_eur,quote_currency) "
+            "VALUES('PAPER',?,?,?,?,?,?, 'FILLED',?,?,?)",
             (str(symbol), str(side), numeric[0], numeric[1], numeric[2], numeric[3],
-             normalized_fee_eur, normalized_pnl_eur),
+             normalized_fee_eur, normalized_pnl_eur, normalized_quote_currency),
+        )
+        db.execute(
+            "INSERT INTO paper_account_events"
+            "(event_type,symbol,side,quote_currency,qty,quote,fee,fee_currency,fee_eur,"
+            "realized_pnl_eur,wallet_before_json,wallet_after_json,details_json) "
+            "VALUES('FILL',?,?,?,?,?,?,?,?,?,?,?,?)",
+            (str(symbol).upper(), str(side).upper(), normalized_quote_currency,
+             numeric[0], numeric[1], numeric[2], normalized_quote_currency,
+             normalized_fee_eur, normalized_pnl_eur, before_payload, payload, "{}"),
         )
 
 
