@@ -1328,6 +1328,10 @@ def build_app(s, engine, exchange):
                     f"Embargo: {fold_results[0]['embargo_candles']} свечи"
                 )
                 lines.append("СВОДКА · каждое окно стартует с отдельного капитала")
+                lines.append(
+                    "Адаптивный online: веса обновляются только по уже закрытым прогнозам; "
+                    "frozen adaptive: веса рассчитаны на train и не меняются на test."
+                )
                 for name, item in result.get("walk_forward_summary", {}).items():
                     lines.append(
                         f"  {name}: средняя {item['average_return_pct']:+.2f}% · "
