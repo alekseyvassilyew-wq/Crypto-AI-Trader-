@@ -41,6 +41,35 @@ def test_portfolio_backtest_shares_cash_across_eur_and_usd_markets():
     assert result["cash_by_currency"]["USD"] >= 0
 
 
+def test_portfolio_daily_loss_limit_liquidates_open_positions_and_halts_entries():
+    rows = flat_candles(count=65)
+    rows[62] = [62.0, 100.0, 101.0, 99.0, 99.4, 1000.0]
+    rows[63] = [63.0, 99.4, 100.0, 99.0, 99.5, 1000.0]
+    rows[64] = [64.0, 99.5, 100.0, 99.0, 99.5, 1000.0]
+
+    result = run_portfolio_backtest(
+        {"BTCEUR": rows},
+        quote_currencies={"BTCEUR": "EUR"},
+        fx_rates={"EUR": 1.0},
+        initial_cash_eur=100,
+        max_trade_eur=50,
+        max_positions=1,
+        risk_per_trade_pct=0.5,
+        fee_rate=0,
+        slippage_bps=0,
+        stop_loss_pct=2,
+        take_profit_pct=50,
+        trailing_stop_pct=10,
+        max_daily_loss_eur=0.1,
+        signal_fn=buy_on_first_eligible_close,
+    )
+
+    assert result["trades"] == 1
+    assert result["trades_detail"][0]["reason"] == "DAILY_LOSS_LIMIT"
+    assert result["trades_detail"][0]["exit_price"] == pytest.approx(99.4)
+    assert result["final_equity_eur"] < 100
+
+
 def test_portfolio_backtest_no_signal_does_not_create_profit():
     result = run_portfolio_backtest(
         {"BTCEUR": flat_candles()},

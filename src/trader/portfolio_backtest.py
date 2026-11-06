@@ -210,6 +210,18 @@ def run_portfolio_backtest(
             total += pos["qty"] * price * current_rates[pos["quote"]]
         return total
 
+    def liquidation_equity(marks, timestamp):
+        """Value the wallet at executable sell prices after slippage and exit fees."""
+        current_rates = rates_at(timestamp)
+        total = sum(amount * current_rates.get(currency, 0.0) for currency, amount in cash.items())
+        retention = (1.0 - slippage) * (1.0 - fee)
+        for symbol, pos in positions.items():
+            price = marks.get(symbol)
+            if price is None or not math.isfinite(float(price)) or float(price) <= 0:
+                raise ValueError(f"Missing or invalid liquidation mark for {symbol}")
+            total += pos["qty"] * float(price) * retention * current_rates[pos["quote"]]
+        return total
+
     def close(symbol, price, timestamp, reason):
         nonlocal fees_paid
         pos = positions.pop(symbol)
@@ -242,12 +254,15 @@ def run_portfolio_backtest(
         day = int(timestamp // 86400)
         if active_day != day:
             active_day = day
-            daily_start = equity({s: m["rows"][index][4] for s, m in markets.items()}, timestamp)
+            daily_start = liquidation_equity(
+                {s: m["rows"][index][4] for s, m in markets.items()}, timestamp
+            )
             trading_halted = False
         marks = {s: m["rows"][index][4] for s, m in markets.items()}
 
-        # Capture the full intrabar range for every open position before
-        # any stop/target closes it, so stopped trades remain in drawdown.
+        # Capture intrabar extremes for drawdown reporting. Daily-loss
+        # enforcement is evaluated after ordinary protective exits, matching
+        # PAPER's end-of-cycle risk-check ordering.
         high_marks = {symbol: markets[symbol]["rows"][index][2] for symbol in positions}
         low_marks = {symbol: markets[symbol]["rows"][index][3] for symbol in positions}
         intrabar_high_equity = equity(high_marks, timestamp)
@@ -255,9 +270,6 @@ def run_portfolio_backtest(
         max_equity = max(max_equity, intrabar_high_equity)
         if max_equity > 0:
             max_drawdown = max(max_drawdown, (max_equity - intrabar_low_equity) / max_equity)
-        if daily_limit is not None and intrabar_low_equity - daily_start <= -daily_limit:
-            trading_halted = True
-
         # Manage all existing positions before considering new entries.
         for symbol in list(positions):
             row = markets[symbol]["rows"][index]
@@ -289,6 +301,16 @@ def run_portfolio_backtest(
                 close(symbol, exit_price, timestamp, reason)
 
         current_equity = equity(marks, timestamp)
+
+        # PAPER checks daily risk after ordinary exits, using net liquidation
+        # value, then liquidates every remaining position and pauses entries.
+        if daily_limit is not None and not trading_halted:
+            net_liquidation_equity = liquidation_equity(marks, timestamp)
+            if net_liquidation_equity - daily_start <= -daily_limit:
+                trading_halted = True
+                for symbol in list(positions):
+                    close(symbol, marks[symbol], timestamp, "DAILY_LOSS_LIMIT")
+                current_equity = equity(marks, timestamp)
 
         # Signals are based on this closed candle; any order fills at next open.
         candidates = []
