@@ -1166,25 +1166,22 @@ def build_app(s, engine, exchange):
                 "Проверяет стратегию поиска отскока на истории Kraken. "
                 "Только симуляция: сделки не открываются и PAPER-кошелёк не меняется."
             )
-        symbol = context.args[0].strip().upper().replace("/", "")
+        requested_symbol = context.args[0].strip().upper()
         await update.effective_message.reply_text(
-            f"🧪 Историческая проверка сигналов отскока {symbol}: загружаю закрытые свечи 1h / 4h / 1d…"
+            f"🧪 Историческая проверка сигналов отскока {html.escape(requested_symbol)}: "
+            "проверяю рынок и загружаю закрытые свечи 1h / 4h / 1d…",
+            parse_mode="HTML",
         )
+        from .exchange import MarketPairInputError, resolve_eur_pair
         try:
             def run_dip_validation():
-                pair = next(
-                    (item for item in exchange.discover_pairs() if item["symbol"] == symbol),
-                    None,
-                )
-                if pair is None:
-                    raise ValueError(f"Kraken Spot market {symbol} was not found.")
-                if str(pair.get("quote") or "").upper() != "EUR":
-                    raise ValueError("Проверка стратегии отскока доступна только для EUR-пар.")
+                pair = resolve_eur_pair(exchange.discover_pairs(), requested_symbol)
+                symbol = pair["symbol"]
                 from .dip_backtest import run_dip_backtest
                 hourly = exchange.candles(symbol, interval="60", limit=720)
                 four_hour = exchange.candles(symbol, interval="240", limit=720)
                 daily = exchange.candles(symbol, interval="1440", limit=720)
-                return run_dip_backtest(
+                result = run_dip_backtest(
                     hourly, four_hour, daily,
                     initial_cash=s.paper_start,
                     max_trade=s.max_trade,
@@ -1199,7 +1196,8 @@ def build_app(s, engine, exchange):
                     max_spread_bps=float(s.max_spread_bps),
                     assumed_spread_bps=min(10.0, float(s.max_spread_bps)),
                 )
-            result = await context.application.bot_data["run_blocking"].run(run_dip_validation)
+                return symbol, result
+            symbol, result = await context.application.bot_data["run_blocking"].run(run_dip_validation)
             factor = result["profit_factor"]
             factor_text = "∞" if factor == float("inf") else f"{factor:.2f}"
             counts = result["classifications"]
@@ -1230,10 +1228,21 @@ def build_app(s, engine, exchange):
                 "Никаких реальных ордеров, изменений PAPER-баланса или запуска PAPER не выполняется.",
             ]
             await send_report(update, context, _format_report(lines[0], "\n".join(lines)))
-        except Exception as exc:
-            log.error("Dip strategy historical validation failed for %s: %s", symbol, type(exc).__name__)
+        except MarketPairInputError as exc:
             await update.effective_message.reply_text(
-                format_error(exc, f"/dipbacktest {symbol}", update.effective_user)
+                "⚠️ <b>РЫНОК НЕ ПОДХОДИТ ДЛЯ ПРОВЕРКИ</b>\n"
+                "━━━━━━━━━━━━━━━━━━\n"
+                f"{html.escape(str(exc))}\n\n"
+                "Формат команды: <code>/dipbacktest XBTEUR</code>\n"
+                "Можно указать и тикер монеты — например <code>/dipbacktest TON</code>, "
+                "если у неё есть онлайн-пара EUR на Kraken.",
+                parse_mode="HTML",
+            )
+            return
+        except Exception as exc:
+            log.error("Dip strategy historical validation failed for %s: %s", requested_symbol, type(exc).__name__)
+            await update.effective_message.reply_text(
+                format_error(exc, f"/dipbacktest {requested_symbol}", update.effective_user)
             )
 
     async def account(update, context):
