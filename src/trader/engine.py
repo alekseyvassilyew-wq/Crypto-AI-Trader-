@@ -131,8 +131,8 @@ def fresh_fx_rates_from_market(settings, market_pairs, ticker_data, prices):
 class Engine:
     def __init__(self, settings, db, exchange, paper):
         self.s, self.db, self.exchange, self.paper = settings, db, exchange, paper
-        # A restart must never silently resume simulated trading.
-        self.paused = True
+        # Fresh installs auto-run PAPER; deliberate and safety pauses survive restarts.
+        self.paused = bool(get_state(db, "paper_paused", False))
         self.scan_interval_seconds = settings.scan_interval
         self.last_scan_at = None
         saved_scan_metrics = get_state(db, "last_scan_metrics", {})
@@ -289,10 +289,12 @@ class Engine:
 
     def start(self):
         self.paused = False
+        set_state(self.db, "paper_paused", False)
         audit(self.db, "PAPER_STARTED", "Automatic paper trading enabled")
 
     def stop(self, reason="manual"):
         self.paused = True
+        set_state(self.db, "paper_paused", True)
         self.scan_interval_seconds = self.s.scan_interval
         audit(self.db, "PAPER_STOPPED", reason)
 
@@ -906,7 +908,13 @@ class Engine:
                     f"exit={exit_price:.10g} change={realized_pct:.3f}% "
                     f"net_pnl_eur={realized_pnl_eur!r}",
                 )
-                actions.append(f"{symbol} SELL {reason} {realized_pct:.2f}%")
+                quote_currency = str(position_before_exit.get("quote_currency", "EUR")).upper()
+                pnl_text = "n/a" if realized_pnl_eur is None else f"{realized_pnl_eur:+.4f}"
+                actions.append(
+                    f"{symbol} SELL {reason} | qty={fill['qty']:.8f} | quote={quote_currency} "
+                    f"| entry={entry:.10g} | exit={fill['price']:.10g} "
+                    f"| change={realized_pct:+.2f}% | fee_eur={fee_eur:.4f} | net_pnl_eur={pnl_text}"
+                )
         if missing_fx:
             reason = "Missing fresh EUR FX routes for: " + ", ".join(missing_fx)
             audit(self.db, "PAPER_FX_ROUTE_MISSING", reason)
@@ -929,7 +937,13 @@ class Engine:
                     self.db, "DAILY_LOSS_LIQUIDATION",
                     f"{symbol} qty={fill['qty']:.10g} bid={exit_price:.10g} change={realized_pct:.3f}%",
                 )
-                actions.append(f"{symbol} SELL DAILY_LOSS_LIMIT {realized_pct:.2f}%")
+                quote_currency = str(position_before_exit.get("quote_currency", "EUR")).upper()
+                pnl_text = "n/a" if realized_pnl_eur is None else f"{realized_pnl_eur:+.4f}"
+                actions.append(
+                    f"{symbol} SELL DAILY_LOSS_LIMIT | qty={fill['qty']:.8f} | quote={quote_currency} "
+                    f"| entry={position_before_exit['avg_price']:.10g} | exit={fill['price']:.10g} "
+                    f"| change={realized_pct:+.2f}% | fee_eur={fee_eur:.4f} | net_pnl_eur={pnl_text}"
+                )
             self._save_cycle_snapshot(results, prices)
             self.stop("Daily loss limit reached; remaining PAPER positions liquidated")
             return actions + ["DAILY LOSS LIMIT — paused"]
@@ -1049,7 +1063,10 @@ class Engine:
                     "Buy", signal["symbol"], allocation, entry_price, prices,
                     currency=quote_currency, quote_to_eur_rate=quote_to_eur_rate,
                 )
-                actions.append(f"{signal['symbol']} BUY {fill['qty']:.8f} @ {fill['price']}")
+                actions.append(
+                    f"{signal['symbol']} BUY | qty={fill['qty']:.8f} | quote={quote_currency} "
+                    f"| price={fill['price']:.10g} | fee_eur={fee_eur:.4f}"
+                )
             except (ValueError, PermissionError) as exc:
                 audit(self.db, "ENTRY_SKIPPED", f"{signal['symbol']}: {exc}")
         self._save_cycle_snapshot(results, prices)
