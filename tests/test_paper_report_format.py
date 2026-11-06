@@ -12,7 +12,8 @@ def sample_metrics():
         "avg_open_positions": 1.98,
         "buy_signals": 306,
         "avg_analyzed_markets": 16.6,
-        "closed_trades": 0,
+        "closed_trades": 2,
+        "closed_trades_with_eur_valuation": 0,
         "winning_trades": 0,
         "losing_trades": 0,
         "win_rate_pct": 0,
@@ -43,6 +44,9 @@ def test_paper_forward_report_has_clear_sections_and_preserves_metrics():
     assert "5.71%" in report
     assert "Сигналов BUY: 306" in report
     assert "Без EUR-оценки" not in report  # counters are explicitly labelled below
+    assert "Всего закрытий: 2" in report
+    assert "С P/L в EUR: 0 / 2" in report
+    assert "Реализованный P/L оценённых сделок:" in report
     assert "Сделок без EUR-оценки: 2" in report
     assert "Исполнений без EUR-оценки комиссии: 2" in report
     assert "04.11.2026 15:13 — 05.11.2026 14:33 UTC" in report
