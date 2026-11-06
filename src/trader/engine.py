@@ -161,6 +161,8 @@ class Engine:
         # to request fresh exchange data through the exchange client directly.
         self._scan_candle_cache = {}
         self._scan_candle_cache_limit = 512
+        self._scan_candle_cache_hits = 0
+        self._scan_candle_cache_misses = 0
 
     def _scan_candles(self, symbol, interval="60", limit=120):
         """Reuse closed candles until the next UTC timeframe boundary.
@@ -182,11 +184,13 @@ class Engine:
         key = (str(symbol).upper(), str(interval), int(limit))
         cached = self._scan_candle_cache.get(key)
         if cached and cached[0] == bucket:
+            self._scan_candle_cache_hits += 1
             # Refresh insertion order for bounded LRU eviction.
             self._scan_candle_cache.pop(key, None)
             self._scan_candle_cache[key] = cached
             return copy.deepcopy(cached[1])
 
+        self._scan_candle_cache_misses += 1
         candles = self.exchange.candles(symbol, interval=str(interval), limit=int(limit))
         self._scan_candle_cache[key] = (bucket, copy.deepcopy(candles))
         # Drop expired entries first, then cap memory for long-running workers.
@@ -542,6 +546,8 @@ class Engine:
 
     def scan(self, seed_wallet=False):
         scan_started = time.monotonic()
+        self._scan_candle_cache_hits = 0
+        self._scan_candle_cache_misses = 0
         discovery_seconds = 0.0
         ticker_seconds = 0.0
         fx_seconds = 0.0
@@ -706,16 +712,19 @@ class Engine:
                 "ohlc_selected": len(selected),
                 "ohlc_budget": analysis_limit,
                 "ohlc_analyzed": ohlc_analyzed_count,
+                "candle_cache_hits": self._scan_candle_cache_hits,
+                "candle_cache_misses": self._scan_candle_cache_misses,
                 "duration_seconds": total_seconds,
                 "completed_at": datetime.now(timezone.utc).isoformat(),
             }
             set_state(self.db, "last_scan_metrics", self.last_scan_metrics)
             log.info(
                 "Market scan timing: pairs=%d tickers=%d eligible=%d OHLC_selected=%d OHLC_budget=%d "
-                "OHLC_analyzed=%d priority_selected=%d discovery=%.2fs ticker=%.2fs fx=%.2fs "
-                "OHLC=%.2fs total=%.2fs",
+                "OHLC_analyzed=%d priority_selected=%d candle_cache_hits=%d candle_cache_misses=%d "
+                "discovery=%.2fs ticker=%.2fs fx=%.2fs OHLC=%.2fs total=%.2fs",
                 len(pairs), len(tickers), len(eligible), len(selected), analysis_limit,
-                ohlc_analyzed_count, priority_selected, discovery_seconds, ticker_seconds,
+                ohlc_analyzed_count, priority_selected, self._scan_candle_cache_hits,
+                self._scan_candle_cache_misses, discovery_seconds, ticker_seconds,
                 fx_seconds, ohlc_seconds, total_seconds,
             )
             return [results_by_symbol[pair["symbol"]] for pair in pairs if pair["symbol"] in results_by_symbol]
