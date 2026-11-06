@@ -873,9 +873,13 @@ class Engine:
                 )
             elif side == "Sell":
                 position_before = copy.deepcopy(self.paper.positions.get(symbol, {}))
-                fill = self.paper.sell(symbol, amount, price, persist=False)
+                sell_currency = str(position_before.get("quote_currency", currency)).upper()
+                sell_fx_rate = self._fresh_fx_rates(prices).get(sell_currency)
+                fill = self.paper.sell(
+                    symbol, amount, price, quote_to_eur_rate=sell_fx_rate, persist=False,
+                )
                 fee_eur, realized_pnl_eur = self._paper_trade_eur_values(
-                    position_before.get("quote_currency", currency), fill["fee"], prices,
+                    sell_currency, fill["fee"], prices,
                     position=position_before, qty=fill["qty"], exit_price=fill["price"],
                 )
             else:
