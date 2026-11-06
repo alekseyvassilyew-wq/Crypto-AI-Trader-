@@ -1293,6 +1293,14 @@ def build_app(s, engine, exchange):
                     f"   Комиссии: {metric(item, 'fees_paid', 4)} EUR",
                     f"   Buy & hold (с начала окна стратегии): {metric(item, 'buy_hold_return_pct', 2, '%')}",
                 ])
+            lines.extend(["", "🔬 ОТДЕЛЬНЫЕ СТРАТЕГИИ · SHADOW"])
+            for name, item in result.get("individual_strategies", {}).items():
+                lines.extend([
+                    f"• {name}",
+                    f"  Доходность: {metric(item, 'return_pct', 2, '%')} · P/L: {metric(item, 'net_pnl', 4)} EUR",
+                    f"  Сделок: {item['trades']} · Win rate: {metric(item, 'win_rate_pct', 1, '%')} · PF: {pf(item)}",
+                    f"  Просадка: {metric(item, 'max_drawdown_pct', 2, '%')} · Комиссии: {metric(item, 'fees_paid', 4)} EUR",
+                ])
             last_bar = meta.get("walk_forward", [])[-1] if meta.get("walk_forward") else {}
             final_regime = last_bar.get("regime", "UNKNOWN")
             final_weights = last_bar.get("weights", {})
