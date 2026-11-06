@@ -373,3 +373,29 @@ def test_strategy_shadow_predictions_wait_for_target_and_reject_invalid_inputs()
         fee_rate=0.01, slippage_bps=5, interval_seconds=60,
     ) == 0
     db.close()
+
+
+def test_strategy_shadow_regime_metrics_are_separated_by_regime_and_symbol():
+    from src.trader.db import record_strategy_shadow_prediction, get_strategy_shadow_regime_metrics
+
+    db = connect(":memory:")
+    record_strategy_shadow_prediction(
+        db, symbol="XBTEUR", strategy="trend_following",
+        signal_ts=100, target_ts=200, entry_price=100, regime="TREND_UP",
+    )
+    record_strategy_shadow_prediction(
+        db, symbol="XBTEUR", strategy="breakout",
+        signal_ts=300, target_ts=400, entry_price=100, regime="RANGE_OR_TRANSITION",
+    )
+    # Settle the first prediction at its target candle close.
+    from src.trader.db import settle_strategy_shadow_predictions
+    assert settle_strategy_shadow_predictions(
+        db, symbol="XBTEUR",
+        candles=[[100, 100, 103, 99, 102, 10], [200, 102, 104, 101, 103, 10]],
+        fee_rate=0.0, slippage_bps=0, interval_seconds=0,
+    ) == 1
+    metrics = get_strategy_shadow_regime_metrics(db, symbol="XBTEUR")
+    assert metrics["TREND_UP"]["trend_following"]["resolved"] == 1
+    assert "breakout" not in metrics.get("TREND_UP", {})
+    assert get_strategy_shadow_regime_metrics(db, symbol="OTHER") == {}
+    db.close()

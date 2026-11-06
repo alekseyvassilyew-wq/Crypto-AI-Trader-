@@ -7,7 +7,8 @@ from .risk import Limits, check_order
 from .indicators import analyze, confirm_multi_timeframe
 from .learning import extract_features, predict_probability
 from .strategy_ensemble import evaluate_strategy_ensemble
-from .db import audit, save_trade, save_paper_fill, get_state, set_state, save_paper_snapshot, record_shadow_prediction, settle_shadow_predictions, record_strategy_shadow_prediction, settle_strategy_shadow_predictions
+from .adaptive_strategy import evaluate_adaptive_strategy_weights
+from .db import audit, save_trade, save_paper_fill, get_state, set_state, save_paper_snapshot, record_shadow_prediction, settle_shadow_predictions, record_strategy_shadow_prediction, settle_strategy_shadow_predictions, get_strategy_shadow_regime_metrics
 
 
 log = logging.getLogger(__name__)
@@ -488,6 +489,11 @@ class Engine:
                     interval_seconds=3600,
                 )
                 shadow = result["strategy_ensemble_shadow"]
+                # Regime-aware weights are advisory shadow telemetry only.
+                shadow["adaptive_weights"] = evaluate_adaptive_strategy_weights(
+                    shadow.get("regime", "UNKNOWN"),
+                    get_strategy_shadow_regime_metrics(self.db, symbol=symbol),
+                )
                 if shadow.get("mode") == "SHADOW_ONLY" and len(base_candles) >= 60:
                     closed_candle_ts = float(base_candles[-1][0]) + 3600.0
                     for strategy_name, opinion in shadow.get("strategies", {}).items():
