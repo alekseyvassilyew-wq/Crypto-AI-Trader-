@@ -6,7 +6,49 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY, ts TEXT DEFAULT CURRENT_TIMESTAMP, event TEXT NOT NULL, details TEXT);
+CREATE TABLE IF NOT EXISTS kraken_fills(
+    trade_id TEXT PRIMARY KEY,
+    order_id TEXT,
+    pair TEXT NOT NULL,
+    time REAL NOT NULL,
+    side TEXT NOT NULL,
+    order_type TEXT,
+    price REAL NOT NULL,
+    cost REAL NOT NULL,
+    fee REAL NOT NULL,
+    volume REAL NOT NULL,
+    raw_json TEXT NOT NULL,
+    imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_kraken_fills_time ON kraken_fills(time);
+CREATE INDEX IF NOT EXISTS idx_kraken_fills_pair_time ON kraken_fills(pair,time);
+CREATE TABLE IF NOT EXISTS kraken_ledger_entries(
+    ledger_id TEXT PRIMARY KEY,
+    refid TEXT,
+    time REAL NOT NULL,
+    entry_type TEXT NOT NULL,
+    subtype TEXT,
+    asset TEXT NOT NULL,
+    amount REAL NOT NULL,
+    fee REAL NOT NULL,
+    balance REAL,
+    raw_json TEXT NOT NULL,
+    imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_kraken_ledger_time ON kraken_ledger_entries(time);
+CREATE TABLE IF NOT EXISTS kraken_account_sync(
+    id INTEGER PRIMARY KEY CHECK(id=1),
+    fetched_at TEXT NOT NULL,
+    fills_complete INTEGER NOT NULL,
+    ledger_complete INTEGER NOT NULL,
+    exchange_fill_count INTEGER NOT NULL,
+    imported_fill_count INTEGER NOT NULL,
+    exchange_ledger_count INTEGER NOT NULL,
+    imported_ledger_count INTEGER NOT NULL,
+    balance_json TEXT NOT NULL,
+    status TEXT NOT NULL
+);
+\nCREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY, ts TEXT DEFAULT CURRENT_TIMESTAMP, event TEXT NOT NULL, details TEXT);
 CREATE TABLE IF NOT EXISTS trades(id INTEGER PRIMARY KEY, ts TEXT DEFAULT CURRENT_TIMESTAMP, mode TEXT NOT NULL, symbol TEXT NOT NULL, side TEXT NOT NULL, qty REAL NOT NULL, quote REAL NOT NULL, fee REAL NOT NULL, price REAL NOT NULL, status TEXT NOT NULL, order_id TEXT, fee_eur REAL, realized_pnl_eur REAL);
 CREATE TABLE IF NOT EXISTS app_state(key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS telegram_report_pages(report_key TEXT PRIMARY KEY, pages_json TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
@@ -715,3 +757,150 @@ def save_paper_fill(db, *, cash_by_currency, positions, symbol, side, qty, quote
             (str(symbol), str(side), numeric[0], numeric[1], numeric[2], numeric[3],
              normalized_fee_eur, normalized_pnl_eur),
         )
+
+
+def _account_number(value, field, *, positive=False, non_negative=False):
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"Invalid Kraken {field}") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"Invalid Kraken {field}")
+    if positive and number <= 0:
+        raise ValueError(f"Kraken {field} must be positive")
+    if non_negative and number < 0:
+        raise ValueError(f"Kraken {field} must not be negative")
+    return number
+
+
+def import_kraken_account_history(
+    db, *, trades, ledgers, balances, fetched_at,
+    fills_complete, ledger_complete,
+):
+    """Idempotently import a fully fetched Kraken read-only account snapshot.
+
+    Raw exchange records are retained for audit. This does not calculate P/L:
+    cost-basis and EUR conversion must be independently established first.
+    """
+    if not isinstance(trades, (list, tuple)) or not isinstance(ledgers, (list, tuple)):
+        raise ValueError("Kraken histories must be lists")
+    if not isinstance(balances, dict):
+        raise ValueError("Kraken balances must be an object")
+    if not isinstance(fetched_at, str) or not fetched_at.strip():
+        raise ValueError("fetched_at must be a non-empty timestamp")
+    if not isinstance(fills_complete, bool) or not isinstance(ledger_complete, bool):
+        raise ValueError("History completeness flags must be booleans")
+
+    normalized_trades = []
+    for item in trades:
+        if not isinstance(item, dict):
+            raise ValueError("Malformed Kraken trade record")
+        trade_id = str(item.get("id") or "").strip()
+        pair = str(item.get("pair") or "").strip().upper()
+        side = str(item.get("type") or "").strip().lower()
+        if not trade_id or not pair or side not in {"buy", "sell"}:
+            raise ValueError("Kraken trade is missing id, pair, or valid side")
+        normalized_trades.append((
+            trade_id, str(item.get("ordertxid") or "") or None, pair,
+            _account_number(item.get("time"), "trade time", non_negative=True),
+            side, str(item.get("ordertype") or "") or None,
+            _account_number(item.get("price"), "trade price", positive=True),
+            _account_number(item.get("cost"), "trade cost", non_negative=True),
+            _account_number(item.get("fee"), "trade fee", non_negative=True),
+            _account_number(item.get("vol"), "trade volume", positive=True),
+            json.dumps(item, separators=(",", ":"), allow_nan=False, sort_keys=True),
+        ))
+
+    normalized_ledgers = []
+    for item in ledgers:
+        if not isinstance(item, dict):
+            raise ValueError("Malformed Kraken ledger record")
+        ledger_id = str(item.get("id") or "").strip()
+        asset = str(item.get("asset") or "").strip().upper()
+        entry_type = str(item.get("type") or "").strip().lower()
+        if not ledger_id or not asset or not entry_type:
+            raise ValueError("Kraken ledger record is missing id, asset, or type")
+        raw_balance = item.get("balance")
+        balance = None if raw_balance is None else _account_number(
+            raw_balance, "ledger balance", non_negative=True
+        )
+        normalized_ledgers.append((
+            ledger_id, str(item.get("refid") or "") or None,
+            _account_number(item.get("time"), "ledger time", non_negative=True),
+            entry_type, str(item.get("subtype") or "") or None, asset,
+            _account_number(item.get("amount"), "ledger amount"),
+            _account_number(item.get("fee", 0), "ledger fee", non_negative=True),
+            balance,
+            json.dumps(item, separators=(",", ":"), allow_nan=False, sort_keys=True),
+        ))
+
+    normalized_balances = {}
+    for currency, amount in balances.items():
+        code = str(currency or "").strip().upper()
+        if not code:
+            raise ValueError("Kraken balance currency is empty")
+        normalized_balances[code] = _account_number(
+            amount, f"{code} balance", non_negative=True
+        )
+    balance_json = json.dumps(normalized_balances, separators=(",", ":"), allow_nan=False, sort_keys=True)
+
+    with db:
+        before_fills = db.execute("SELECT COUNT(*) FROM kraken_fills").fetchone()[0]
+        before_ledgers = db.execute("SELECT COUNT(*) FROM kraken_ledger_entries").fetchone()[0]
+        db.executemany(
+            "INSERT OR IGNORE INTO kraken_fills"
+            "(trade_id,order_id,pair,time,side,order_type,price,cost,fee,volume,raw_json) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            normalized_trades,
+        )
+        db.executemany(
+            "INSERT OR IGNORE INTO kraken_ledger_entries"
+            "(ledger_id,refid,time,entry_type,subtype,asset,amount,fee,balance,raw_json) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            normalized_ledgers,
+        )
+        after_fills = db.execute("SELECT COUNT(*) FROM kraken_fills").fetchone()[0]
+        after_ledgers = db.execute("SELECT COUNT(*) FROM kraken_ledger_entries").fetchone()[0]
+        imported_fills = after_fills - before_fills
+        imported_ledgers = after_ledgers - before_ledgers
+        status = "COMPLETE" if fills_complete and ledger_complete else "INCOMPLETE"
+        db.execute(
+            "INSERT INTO kraken_account_sync"
+            "(id,fetched_at,fills_complete,ledger_complete,exchange_fill_count,imported_fill_count,"
+            "exchange_ledger_count,imported_ledger_count,balance_json,status) "
+            "VALUES(1,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(id) DO UPDATE SET fetched_at=excluded.fetched_at,"
+            "fills_complete=excluded.fills_complete,ledger_complete=excluded.ledger_complete,"
+            "exchange_fill_count=excluded.exchange_fill_count,imported_fill_count=excluded.imported_fill_count,"
+            "exchange_ledger_count=excluded.exchange_ledger_count,imported_ledger_count=excluded.imported_ledger_count,"
+            "balance_json=excluded.balance_json,status=excluded.status",
+            (fetched_at, int(fills_complete), int(ledger_complete), len(trades),
+             imported_fills, len(ledgers), imported_ledgers, balance_json, status),
+        )
+    return {
+        "status": status,
+        "exchange_fill_count": len(trades),
+        "new_fills_imported": imported_fills,
+        "exchange_ledger_count": len(ledgers),
+        "new_ledger_entries_imported": imported_ledgers,
+        "balance": normalized_balances,
+    }
+
+
+def get_kraken_account_sync(db):
+    """Return last raw account import status; never label missing data as zero P/L."""
+    row = db.execute("SELECT * FROM kraken_account_sync WHERE id=1").fetchone()
+    if row is None:
+        return {"status": "UNKNOWN", "reason": "No Kraken account history has been imported"}
+    return {
+        "status": row["status"],
+        "fetched_at": row["fetched_at"],
+        "fills_complete": bool(row["fills_complete"]),
+        "ledger_complete": bool(row["ledger_complete"]),
+        "exchange_fill_count": int(row["exchange_fill_count"]),
+        "exchange_ledger_count": int(row["exchange_ledger_count"]),
+        "balance": json.loads(row["balance_json"]),
+        "realized_pnl_eur": None,
+        "unrealized_pnl_eur": None,
+        "pnl_status": "NOT_CALCULATED",
+    }

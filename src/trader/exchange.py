@@ -371,3 +371,91 @@ class KrakenSpot:
     def balance(self):
         """Read account balances only; requires Query Funds permission."""
         return self._request("/0/private/Balance", private=True)
+
+    @staticmethod
+    def _history_time_bounds(start=None, end=None):
+        bounds = {}
+        for name, value in (("start", start), ("end", end)):
+            if value is None:
+                continue
+            if isinstance(value, bool):
+                raise ValueError(f"{name} must be a non-negative Unix timestamp")
+            try:
+                number = int(value)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError(f"{name} must be a non-negative Unix timestamp") from exc
+            if number < 0 or str(number) != str(value).strip():
+                raise ValueError(f"{name} must be a non-negative integer Unix timestamp")
+            bounds[name] = number
+        if "start" in bounds and "end" in bounds and bounds["start"] > bounds["end"]:
+            raise ValueError("start must not be later than end")
+        return bounds
+
+    def _private_history(self, endpoint, collection_key, *, start=None, end=None, max_pages=100):
+        """Read and paginate Kraken account history without mutating the account.
+
+        Kraken's TradesHistory and Ledgers endpoints require their respective
+        read-only query permissions. Raw exchange fields are preserved.
+        """
+        if isinstance(max_pages, bool) or not isinstance(max_pages, int) or not 1 <= max_pages <= 1000:
+            raise ValueError("max_pages must be an integer between 1 and 1000")
+        params = self._history_time_bounds(start, end)
+        offset = 0
+        items = []
+        seen_ids = set()
+        expected_count = None
+        for _ in range(max_pages):
+            page = self._request(endpoint, {**params, "ofs": offset}, private=True)
+            records = page.get(collection_key)
+            if not isinstance(records, dict):
+                raise RuntimeError(f"Kraken returned invalid {collection_key} history")
+            try:
+                count = int(page.get("count", len(records)))
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise RuntimeError("Kraken returned invalid history count") from exc
+            if count < 0:
+                raise RuntimeError("Kraken returned negative history count")
+            if expected_count is None:
+                expected_count = count
+            elif count != expected_count:
+                # Account history can change while pages are fetched. Fail
+                # closed instead of silently presenting a partial snapshot.
+                raise RuntimeError("Kraken history changed during pagination; retry reconciliation")
+            if not records:
+                break
+            for record_id, record in records.items():
+                if not isinstance(record, dict):
+                    raise RuntimeError("Kraken returned malformed history record")
+                normalized_id = str(record_id)
+                if not normalized_id or normalized_id in seen_ids:
+                    raise RuntimeError("Kraken returned incomplete history: duplicate record id")
+                seen_ids.add(normalized_id)
+                items.append({**record, "id": normalized_id})
+            offset += len(records)
+            if offset >= expected_count:
+                break
+        else:
+            raise RuntimeError("Kraken history pagination exceeded max_pages; result may be incomplete")
+        if expected_count is not None and len(items) < expected_count:
+            raise RuntimeError("Kraken returned incomplete account history")
+        return items
+
+    def trades_history(self, *, start=None, end=None, max_pages=100):
+        """Return all available Kraken spot trade fills (read-only).
+
+        Requires Kraken's Query Closed Orders & Trades permission.
+        """
+        return self._private_history(
+            "/0/private/TradesHistory", "trades",
+            start=start, end=end, max_pages=max_pages,
+        )
+
+    def ledger_history(self, *, start=None, end=None, max_pages=100):
+        """Return all available Kraken ledger entries (read-only).
+
+        Requires Kraken's Query Ledger Entries permission.
+        """
+        return self._private_history(
+            "/0/private/Ledgers", "ledger",
+            start=start, end=end, max_pages=max_pages,
+        )
