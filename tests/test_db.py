@@ -333,7 +333,7 @@ def test_strategy_shadow_predictions_settle_at_target_candle_close_and_track_net
 
     candles = [
         [60, 100, 101, 99, 100, 10],
-        [120, 101, 103, 100, 102, 12],
+        [120, 101, 105, 100, 104, 12],
         [180, 102, 104, 101, 103, 11],
     ]
     assert settle_strategy_shadow_predictions(
