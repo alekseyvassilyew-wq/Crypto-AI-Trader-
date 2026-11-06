@@ -245,12 +245,24 @@ class PaperBroker:
         if fx_rates:
             rates.update({str(k).upper(): _finite_number(v, f"{k} FX rate", minimum=0, strict_minimum=True)
                           for k, v in fx_rates.items()})
-        total = sum(amount * rates.get(currency, 0.0) for currency, amount in self.cash_by_currency.items())
+        total = 0.0
+        for currency, amount in self.cash_by_currency.items():
+            if amount <= 0:
+                continue
+            rate = rates.get(currency)
+            if rate is None:
+                raise ValueError(f"Missing FX valuation rate for PAPER cash {currency}")
+            total += amount * rate
         for symbol, position in self.positions.items():
-            price = _finite_number(prices.get(symbol, position["avg_price"]),
-                                   f"{symbol} mark price", minimum=0, strict_minimum=True)
-            quote_currency = position.get("quote_currency", "EUR")
-            total += position["qty"] * price * rates.get(quote_currency, 0.0)
+            if symbol not in prices:
+                raise ValueError(f"Missing current PAPER mark price for {symbol}")
+            price = _finite_number(prices[symbol], f"{symbol} mark price",
+                                   minimum=0, strict_minimum=True)
+            quote_currency = str(position.get("quote_currency", "EUR")).upper()
+            rate = rates.get(quote_currency)
+            if rate is None:
+                raise ValueError(f"Missing FX valuation rate for PAPER position {symbol} ({quote_currency})")
+            total += position["qty"] * price * rate
         if not math.isfinite(total):
             raise ValueError("Paper equity is not finite")
         return total
