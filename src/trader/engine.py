@@ -9,7 +9,7 @@ from .learning import extract_features, predict_probability
 from .strategy_ensemble import evaluate_strategy_ensemble
 from .adaptive_strategy import evaluate_adaptive_strategy_weights
 from .paper import estimate_book_vwap
-from .db import audit, save_trade, save_paper_fill, save_paper_fx_conversion, get_state, set_state, save_paper_snapshot, record_shadow_prediction, settle_shadow_predictions, record_strategy_shadow_prediction, settle_strategy_shadow_predictions, get_strategy_shadow_regime_metrics
+from .db import audit, save_trade, save_paper_fill, save_paper_fx_conversion, backfill_paper_seed_fx_ledger, get_state, set_state, save_paper_snapshot, record_shadow_prediction, settle_shadow_predictions, record_strategy_shadow_prediction, settle_strategy_shadow_predictions, get_strategy_shadow_regime_metrics
 
 
 log = logging.getLogger(__name__)
@@ -134,6 +134,19 @@ def fresh_fx_rates_from_market(settings, market_pairs, ticker_data, prices):
 class Engine:
     def __init__(self, settings, db, exchange, paper):
         self.s, self.db, self.exchange, self.paper = settings, db, exchange, paper
+        seed_backfill = backfill_paper_seed_fx_ledger(db)
+        if seed_backfill.get("unparsed", 0):
+            log.warning(
+                "PAPER seed FX ledger backfill incomplete: backfilled=%d already_present=%d unparsed=%d",
+                seed_backfill.get("backfilled", 0),
+                seed_backfill.get("already_present", 0),
+                seed_backfill.get("unparsed", 0),
+            )
+        elif seed_backfill.get("backfilled", 0):
+            log.info(
+                "Recovered %d legacy PAPER seed FX conversion fee records from audit history",
+                seed_backfill["backfilled"],
+            )
         # Fresh installs auto-run PAPER; deliberate and safety pauses survive restarts.
         self.paused = bool(get_state(db, "paper_paused", False))
         self.scan_interval_seconds = settings.scan_interval
