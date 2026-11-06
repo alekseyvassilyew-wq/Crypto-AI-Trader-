@@ -723,3 +723,39 @@ def test_backfill_keeps_malformed_seed_audit_unresolved_for_retry():
     assert get_state(db, "paper_seed_fx_backfill_done", False) is False
     assert db.execute("SELECT COUNT(*) FROM paper_fx_conversions").fetchone()[0] == 0
     db.close()
+
+
+def test_paper_fx_seed_audit_failure_rolls_back_wallet_and_fee_ledger():
+    import sqlite3
+    from src.trader.db import get_state, save_paper_fx_conversion, set_state
+
+    db = connect(":memory:")
+    previous = {
+        "cash": 20.0,
+        "cash_by_currency": {"EUR": 20.0},
+        "cash_cost_basis_eur": {"EUR": 20.0},
+        "positions": {},
+    }
+    set_state(db, "paper_broker", previous)
+    db.execute(
+        "CREATE TRIGGER reject_seed_audit BEFORE INSERT ON audit "
+        "WHEN NEW.event='PAPER_WALLET_SEED' "
+        "BEGIN SELECT RAISE(ABORT, 'forced seed audit failure'); END"
+    )
+    db.commit()
+
+    with pytest.raises(sqlite3.IntegrityError, match="forced seed audit failure"):
+        save_paper_fx_conversion(
+            db, from_currency="EUR", to_currency="USD",
+            spent=5.0, received=4.995, fee_amount=0.005,
+            fee_currency="USD", fee_eur=0.005, legs=1,
+            cash_by_currency={"EUR": 15.0, "USD": 4.995},
+            cash_cost_basis_eur={"EUR": 15.0, "USD": 5.0},
+            positions={}, audit_event="PAPER_WALLET_SEED",
+            audit_details="EUR->USD spent=5.00000000 received=4.99500000 fee=0.00500000",
+        )
+
+    assert get_state(db, "paper_broker") == previous
+    assert db.execute("SELECT COUNT(*) FROM paper_fx_conversions").fetchone()[0] == 0
+    assert db.execute("SELECT COUNT(*) FROM audit WHERE event='PAPER_WALLET_SEED'").fetchone()[0] == 0
+    db.close()
