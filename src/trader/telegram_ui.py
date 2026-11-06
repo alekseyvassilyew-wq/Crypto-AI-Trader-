@@ -354,10 +354,11 @@ def _format_paper_forward_report(metrics, hours, by_symbol_text, span_text, cove
         f"Рынков в анализе за цикл (среднее): {value('avg_analyzed_markets', 1)}",
         "",
         "📊 ЗАКРЫТЫЕ СДЕЛКИ",
-        f"Всего: {metrics.get('closed_trades', 0)}",
+        f"Всего закрытий: {metrics.get('closed_trades', 0)}",
+        f"С P/L в EUR: {metrics.get('closed_trades_with_eur_valuation', metrics.get('closed_trades', 0))} / {metrics.get('closed_trades', 0)}",
         f"🟢 Прибыльных: {metrics.get('winning_trades', 0)}  •  🔴 Убыточных: {metrics.get('losing_trades', 0)}",
         f"Win rate: {value('win_rate_pct', 1, suffix='%')}  •  Profit factor: {profit_factor()}",
-        f"Реализованный P/L: {value('realized_pnl_eur', 4, True)} EUR",
+        f"Реализованный P/L оценённых сделок: {value('realized_pnl_eur', 4, True)} EUR",
         "",
         "💸 КОМИССИИ И ОЦЕНКА",
         f"Комиссии исполнений: {value('total_fees_eur', 4)} EUR",
@@ -1812,10 +1813,12 @@ def build_app(s, engine, exchange):
                     )
                 return await send_report(update, context,
                     f"📊 PAPER СДЕЛКИ — {hours} ч.\n"
-                    f"Закрытых сделок: {metrics['closed_trades']}\n"
+                    f"Всего закрытий: {metrics['closed_trades']}\n"
+                    f"С P/L в EUR: {metrics.get('closed_trades_with_eur_valuation', metrics['closed_trades'])} / {metrics['closed_trades']}\n"
+                    f"Без EUR-оценки P/L: {metrics.get('closed_trades_without_eur_valuation', 0)}\n"
                     f"Прибыльных: {metrics['winning_trades']} | убыточных: {metrics['losing_trades']}\n"
-                    f"Win rate: {metrics['win_rate_pct']:.1f}% | Profit factor: {metrics['profit_factor']}\n"
-                    f"Реализованный P/L: {metrics['realized_pnl_eur']:+.4f} EUR\n"
+                    f"Win rate среди оценённых: {metrics['win_rate_pct']:.1f}% | Profit factor: {metrics['profit_factor']}\n"
+                    f"Реализованный P/L оценённых сделок: {metrics['realized_pnl_eur']:+.4f} EUR\n"
                     f"Комиссии: {metrics['total_fees_eur']:.4f} EUR"
                 )
             by_symbol_text = ", ".join(
