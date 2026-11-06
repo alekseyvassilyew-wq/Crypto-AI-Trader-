@@ -79,8 +79,15 @@ def test_paper_trade_accounting_metrics_include_realized_pnl_fees_and_symbol_bre
         db, "PAPER", "ETHEUR", "Sell", 0.1, 20.0, 0.052, 200.0, "FILLED",
         fee_eur=0.052, realized_pnl_eur=-1.052,
     )
+    # A real closed fill without a reliable EUR conversion still counts as a close.
+    save_trade(
+        db, "PAPER", "SOLEUR", "Sell", 1.0, 10.0, 0.01, 10.0, "FILLED",
+        fee_eur=None, realized_pnl_eur=None,
+    )
     metrics = get_paper_metrics(db, 24)
-    assert metrics["closed_trades"] == 2
+    assert metrics["closed_trades"] == 3
+    assert metrics["closed_trades_with_eur_valuation"] == 2
+    assert metrics["closed_trades_without_eur_valuation"] == 1
     assert metrics["winning_trades"] == 1
     assert metrics["losing_trades"] == 1
     assert metrics["win_rate_pct"] == 50.0
