@@ -1821,8 +1821,8 @@ def build_app(s, engine, exchange):
                     f"Прибыльных: {metrics['winning_trades']} | убыточных: {metrics['losing_trades']}\n"
                     f"Win rate среди оценённых: {metrics['win_rate_pct']:.1f}% | Profit factor: {metrics['profit_factor']}\n"
                     f"Реализованный P/L оценённых сделок: {metrics['realized_pnl_eur']:+.4f} EUR\n"
-                    f"Комиссии исполнений: {metrics['total_fees_eur']:.4f} EUR\\n"
-                    f"Комиссии конвертации отдельно: {metrics.get('total_fx_conversion_fees_eur', 0.0):.4f} EUR\\n"
+                    f"Комиссии исполнений: {metrics['total_fees_eur']:.4f} EUR\n"
+                    f"Комиссии конвертации отдельно: {metrics.get('total_fx_conversion_fees_eur', 0.0):.4f} EUR\n"
                     f"Конвертаций без EUR-оценки: {metrics.get('fx_conversions_without_eur_fee_valuation', 0)} / {metrics.get('fx_conversions', 0)}"
                 )
             by_symbol_text = ", ".join(
