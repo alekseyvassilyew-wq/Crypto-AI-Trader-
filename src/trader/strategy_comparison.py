@@ -79,6 +79,7 @@ def _walk_forward_signals(candles, *, fee_rate, slippage_bps):
     settled = []
     equal_signals = {}
     adaptive_signals = {}
+    individual_signals = {name: {} for name in STRATEGY_NAMES}
     diagnostics = []
 
     for index, row in enumerate(candles):
@@ -110,6 +111,12 @@ def _walk_forward_signals(candles, *, fee_rate, slippage_bps):
         regime = ensemble.get("regime", "UNKNOWN")
         adaptive = evaluate_adaptive_strategy_weights(regime, current_metrics)
         strategies = ensemble.get("strategies", {})
+        for name in STRATEGY_NAMES:
+            opinion = strategies.get(name, {})
+            individual_signals[name][ts] = {
+                "signal": "BUY" if opinion.get("signal") == "BUY" else "HOLD",
+                "atr_percent": ensemble.get("atr_percent", 0.0),
+            }
         votes = sum(
             1 for name in STRATEGY_NAMES
             if strategies.get(name, {}).get("signal") == "BUY"
@@ -168,6 +175,7 @@ def _walk_forward_signals(candles, *, fee_rate, slippage_bps):
         "settled_forecasts_detail": settled,
         "walk_forward": diagnostics,
         "final_metrics_by_regime": _metrics_by_regime(settled),
+        "individual_signals": individual_signals,
         "execution_effect": "NONE",
         "lookahead": False,
     }
@@ -197,6 +205,7 @@ def run_strategy_comparison(
     equal, adaptive, metadata = _walk_forward_signals(
         candles, fee_rate=fee_rate, slippage_bps=slippage_bps
     )
+    individual_signals = metadata.pop("individual_signals")
 
     def lookup_signal(signal_map, history):
         return signal_map.get(float(history[-1][0]), {"signal": "HOLD", "atr_percent": 0.0})
@@ -215,6 +224,13 @@ def run_strategy_comparison(
         "equal_weight_ensemble": equal_result,
         "adaptive_ensemble": adaptive_result,
         "metadata": metadata,
+        "individual_strategies": {
+            name: run_backtest(
+                candles, **common,
+                signal_fn=lambda history, signals=signal_map: lookup_signal(signals, history),
+            )
+            for name, signal_map in individual_signals.items()
+        },
         "comparison": {
             "same_candles": True,
             "same_costs": True,

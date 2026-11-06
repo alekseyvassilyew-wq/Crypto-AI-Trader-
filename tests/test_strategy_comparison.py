@@ -109,6 +109,12 @@ def test_comparison_runs_all_three_modes_with_identical_cost_assumptions():
         "baseline", "equal_weight_ensemble", "adaptive_ensemble",
         "metadata", "comparison",
     }
+    assert set(result["individual_strategies"]) == {
+        "trend_following", "mean_reversion", "breakout", "momentum", "volatility_expansion",
+    }
+    for item in result["individual_strategies"].values():
+        assert item["fee_rate"] == 0.003
+        assert item["assumptions"]["slippage_bps_per_side"] == 8
     for name in ("baseline", "equal_weight_ensemble", "adaptive_ensemble"):
         assert result[name]["fee_rate"] == 0.003
         assert result[name]["assumptions"]["slippage_bps_per_side"] == 8
