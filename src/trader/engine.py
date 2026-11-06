@@ -1151,48 +1151,60 @@ class Engine:
                         source_amount = min(self.paper.balance(source_currency), source_needed)
                         if source_amount <= 1e-12:
                             continue
-                        if fee_legs == 2:
-                            # Compute the second leg from the first leg's actual
-                            # post-fee proceeds, then commit both legs together.
-                            first_amount = source_amount
-                            first_gross = first_amount * source_to_eur
-                            first_received = first_gross * (1.0 - self.paper.fee_rate)
-                            first_leg, second_leg = self.paper.convert_route([
-                                (source_currency, "EUR", source_amount, source_to_eur),
-                                ("EUR", quote_currency, first_received, quote_units_per_eur),
-                            ])
-                            conversion = {
-                                "from": source_currency, "to": quote_currency,
-                                "spent": source_amount, "received": second_leg["received"],
-                                "fee": first_leg["fee"] + second_leg["fee"], "legs": 2,
-                            }
-                        elif source_currency == "EUR":
-                            (conversion,) = self.paper.convert_route([
-                                ("EUR", quote_currency, source_amount, quote_units_per_eur),
-                            ])
-                        else:
-                            (conversion,) = self.paper.convert_route([
-                                (source_currency, "EUR", source_amount, source_to_eur),
-                            ])
-                        if fee_legs == 2:
-                            fx_fee_eur = first_leg["fee"] + second_leg["fee"] / quote_units_per_eur
-                            fx_fee_amount = None
-                            fx_fee_currency = "MULTI"
-                        elif source_currency == "EUR":
-                            fx_fee_eur = conversion["fee"] / quote_units_per_eur
-                            fx_fee_amount = conversion["fee"]
-                            fx_fee_currency = quote_currency
-                        else:
-                            fx_fee_eur = conversion["fee"]
-                            fx_fee_amount = conversion["fee"]
-                            fx_fee_currency = "EUR"
-                        save_paper_fx_conversion(
-                            self.db,
-                            from_currency=conversion["from"], to_currency=conversion["to"],
-                            spent=conversion["spent"], received=conversion["received"],
-                            fee_amount=fx_fee_amount, fee_currency=fx_fee_currency,
-                            fee_eur=fx_fee_eur, legs=fee_legs,
-                        )
+                        cash_before = dict(self.paper.cash_by_currency)
+                        basis_before = dict(self.paper.cash_cost_basis_eur)
+                        try:
+                            if fee_legs == 2:
+                                # Compute the second leg from the first leg's actual
+                                # post-fee proceeds. Defer persistence until the
+                                # wallet and aggregate fee ledger can commit atomically.
+                                first_amount = source_amount
+                                first_gross = first_amount * source_to_eur
+                                first_received = first_gross * (1.0 - self.paper.fee_rate)
+                                first_leg, second_leg = self.paper.convert_route([
+                                    (source_currency, "EUR", source_amount, source_to_eur),
+                                    ("EUR", quote_currency, first_received, quote_units_per_eur),
+                                ], persist=False)
+                                conversion = {
+                                    "from": source_currency, "to": quote_currency,
+                                    "spent": source_amount, "received": second_leg["received"],
+                                    "fee": first_leg["fee"] + second_leg["fee"], "legs": 2,
+                                }
+                            elif source_currency == "EUR":
+                                (conversion,) = self.paper.convert_route([
+                                    ("EUR", quote_currency, source_amount, quote_units_per_eur),
+                                ], persist=False)
+                            else:
+                                (conversion,) = self.paper.convert_route([
+                                    (source_currency, "EUR", source_amount, source_to_eur),
+                                ], persist=False)
+                            if fee_legs == 2:
+                                fx_fee_eur = first_leg["fee"] + second_leg["fee"] / quote_units_per_eur
+                                fx_fee_amount = None
+                                fx_fee_currency = "MULTI"
+                            elif source_currency == "EUR":
+                                fx_fee_eur = conversion["fee"] / quote_units_per_eur
+                                fx_fee_amount = conversion["fee"]
+                                fx_fee_currency = quote_currency
+                            else:
+                                fx_fee_eur = conversion["fee"]
+                                fx_fee_amount = conversion["fee"]
+                                fx_fee_currency = "EUR"
+                            save_paper_fx_conversion(
+                                self.db,
+                                from_currency=conversion["from"], to_currency=conversion["to"],
+                                spent=conversion["spent"], received=conversion["received"],
+                                fee_amount=fx_fee_amount, fee_currency=fx_fee_currency,
+                                fee_eur=fx_fee_eur, legs=fee_legs,
+                                cash_by_currency=self.paper.cash_by_currency,
+                                cash_cost_basis_eur=self.paper.cash_cost_basis_eur,
+                                positions=self.paper.positions,
+                            )
+                        except Exception:
+                            self.paper.cash_by_currency = cash_before
+                            self.paper.cash_cost_basis_eur = basis_before
+                            self.paper._sync_cash()
+                            raise
                         audit(
                             self.db, "PAPER_FX_CONVERSION",
                             f"{conversion['from']}->{conversion['to']} legs={fee_legs} "
