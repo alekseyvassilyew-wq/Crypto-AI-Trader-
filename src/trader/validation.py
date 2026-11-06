@@ -5,14 +5,21 @@ from its out-of-sample test window so labels/forecasts cannot straddle the
 boundary. This module only partitions data; it never changes trading settings.
 """
 
+
 def build_walk_forward_folds(
     candles, *, min_train_candles=240, test_candles=120,
     step_candles=None, embargo_candles=3, max_folds=None,
+    embargo_seconds=None, interval_seconds=None, timestamp_index=0,
 ):
     """Build expanding-window folds with disjoint chronological test windows.
 
+    By default, embargo_candles preserves the original row-count behavior.
+    When embargo_seconds is supplied, test_start is the first candle whose
+    timestamp is at least the final training candle's close time plus the
+    requested embargo duration. This prevents missing/irregular bars from
+    silently shortening a time-based forecast embargo.
+
     Returns dictionaries containing half-open train and test index ranges.
-    Embargo bars are intentionally unused between training and testing.
     Only complete test windows are returned.
     """
     if not isinstance(candles, (list, tuple)):
@@ -37,19 +44,61 @@ def build_walk_forward_folds(
         if isinstance(max_folds, bool) or not isinstance(max_folds, int) or max_folds < 1:
             raise ValueError("max_folds must be a positive integer")
 
+    time_based = embargo_seconds is not None
+    if time_based:
+        if isinstance(embargo_seconds, bool) or not isinstance(embargo_seconds, (int, float)):
+            raise ValueError("embargo_seconds must be a non-negative number")
+        if embargo_seconds < 0:
+            raise ValueError("embargo_seconds must be non-negative")
+        if isinstance(interval_seconds, bool) or not isinstance(interval_seconds, (int, float)) or interval_seconds <= 0:
+            raise ValueError("interval_seconds must be a positive number")
+        if isinstance(timestamp_index, bool) or not isinstance(timestamp_index, int) or timestamp_index < 0:
+            raise ValueError("timestamp_index must be a non-negative integer")
+        timestamps = []
+        for row in candles:
+            try:
+                timestamps.append(float(row[timestamp_index]))
+            except (IndexError, TypeError, ValueError) as exc:
+                raise ValueError("candles must contain numeric timestamps") from exc
+        if any(current <= previous for previous, current in zip(timestamps, timestamps[1:])):
+            raise ValueError("candle timestamps must be strictly increasing")
+    else:
+        timestamps = None
+
     folds = []
     train_end = min_train_candles
     while True:
-        test_start = train_end + embargo_candles
+        if train_end > len(candles):
+            break
+        if time_based:
+            cutoff = timestamps[train_end - 1] + float(interval_seconds) + float(embargo_seconds)
+            test_start = train_end
+            while test_start < len(candles) and timestamps[test_start] < cutoff:
+                test_start += 1
+            actual_embargo_candles = test_start - train_end
+        else:
+            test_start = train_end + embargo_candles
+            actual_embargo_candles = embargo_candles
         test_end = test_start + test_candles
         if test_end > len(candles):
             break
-        folds.append({
+        fold = {
             "train_start": 0, "train_end": train_end,
             "embargo_start": train_end, "embargo_end": test_start,
             "test_start": test_start, "test_end": test_end,
-        })
+        }
+        if time_based:
+            fold["embargo_candles"] = actual_embargo_candles
+            fold["embargo_seconds"] = float(embargo_seconds)
+        folds.append(fold)
         if max_folds is not None and len(folds) >= max_folds:
             break
-        train_end += step
+        if time_based:
+            # A larger time-based embargo can consume more rows than the
+            # nominal step. Advance training at least to the previous test
+            # end so later out-of-sample windows can never overlap.
+            train_end = max(train_end + step, test_end)
+        else:
+            # Preserve the established row-based expanding-window schedule.
+            train_end += step
     return folds
