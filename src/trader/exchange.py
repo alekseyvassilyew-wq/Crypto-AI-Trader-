@@ -409,10 +409,13 @@ class KrakenSpot:
             records = page.get(collection_key)
             if not isinstance(records, dict):
                 raise RuntimeError(f"Kraken returned invalid {collection_key} history")
-            try:
-                count = int(page.get("count", len(records)))
-            except (TypeError, ValueError, OverflowError) as exc:
-                raise RuntimeError("Kraken returned invalid history count") from exc
+            raw_count = page.get("count")
+            if isinstance(raw_count, bool) or not (
+                isinstance(raw_count, int)
+                or (isinstance(raw_count, str) and raw_count.strip().isdigit())
+            ):
+                raise RuntimeError("Kraken returned missing or invalid history count")
+            count = int(raw_count)
             if count < 0:
                 raise RuntimeError("Kraken returned negative history count")
             if expected_count is None:
