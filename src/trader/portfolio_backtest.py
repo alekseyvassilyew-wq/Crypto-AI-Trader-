@@ -519,6 +519,8 @@ def run_portfolio_backtest(
             "candle_interval_seconds": expected_interval,
             "candle_interval_inferred": inferred_interval,
             "intrabar_priority": "low before high; existing stops before take-profit; new trailing peaks activate next candle",
+            "daily_loss_trigger_valuation": "net liquidation value at closed-candle marks after configured exit slippage and fee",
+            "daily_loss_liquidation_price_model": "closed-candle close adjusted by configured exit slippage and fee; no order-book depth simulation",
             "buy_hold": "equal-weight same markets from first strategy entry (or first executable candle if no trades) through final close; includes conversion and two-sided fees/slippage",
             "fx_rates_fallback": rates,
             "fx_buy_rates": buy_rates,
