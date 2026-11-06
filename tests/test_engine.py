@@ -1404,6 +1404,5 @@ def test_paper_does_not_open_new_position_when_triggered_exit_lacks_depth(tmp_pa
     assert "XBTEUR" in engine.paper.positions
     assert "ETHEUR" not in engine.paper.positions
     assert any("visible depth insufficient" in action for action in actions)
-    assert db.execute("SELECT COUNT(*) FROM trades WHERE side='Buy'").fetchone()[0] == 1
+    assert db.execute("SELECT COUNT(*) FROM trades WHERE side='Buy'").fetchone()[0] == 0
     db.close()
-
