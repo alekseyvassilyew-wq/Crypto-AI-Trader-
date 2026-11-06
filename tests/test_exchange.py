@@ -371,3 +371,36 @@ def test_ticker_includes_utc_day_open_and_percent_change_when_available():
     ticker = client.tickers(["XBTEUR"])[0]
     assert ticker["dayOpenUtc"] == 100.0
     assert ticker["dayChangePct"] == pytest.approx(10.0)
+
+
+def test_resolve_eur_pair_accepts_base_asset_shortcut_and_full_pair():
+    from src.trader.exchange import resolve_eur_pair
+
+    markets = [
+        {"symbol": "TONUSD", "base": "TON", "quote": "USD"},
+        {"symbol": "TONEUR", "base": "TON", "quote": "EUR"},
+        {"symbol": "XBTEUR", "base": "XBT", "quote": "EUR"},
+    ]
+    assert resolve_eur_pair(markets, "TON")["symbol"] == "TONEUR"
+    assert resolve_eur_pair(markets, "TON/EUR")["symbol"] == "TONEUR"
+    assert resolve_eur_pair(markets, "XBTEUR")["symbol"] == "XBTEUR"
+
+
+def test_resolve_eur_pair_rejects_non_eur_market_with_actionable_hint():
+    from src.trader.exchange import MarketPairInputError, resolve_eur_pair
+
+    markets = [
+        {"symbol": "TONUSD", "base": "TON", "quote": "USD"},
+        {"symbol": "TONBTC", "base": "TON", "quote": "XBT"},
+    ]
+    with pytest.raises(MarketPairInputError, match="нет доступной EUR-пары"):
+        resolve_eur_pair(markets, "TON")
+    with pytest.raises(MarketPairInputError, match="только EUR-пары"):
+        resolve_eur_pair(markets, "TONUSD")
+
+
+def test_resolve_eur_pair_unknown_asset_returns_user_friendly_error():
+    from src.trader.exchange import MarketPairInputError, resolve_eur_pair
+
+    with pytest.raises(MarketPairInputError, match="не найдены"):
+        resolve_eur_pair([], "NOTACOIN")

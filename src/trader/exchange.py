@@ -30,6 +30,74 @@ def _finite_number(value, field, *, positive=False, non_negative=False):
     return number
 
 
+class MarketPairInputError(ValueError):
+    """A user-supplied market symbol cannot resolve to an online EUR spot pair."""
+
+
+def resolve_eur_pair(pairs, requested):
+    """Resolve either a full Kraken pair or a base-asset shortcut to an EUR pair.
+
+    Examples: XBTEUR, XBT/EUR, or XBT. A base-asset shortcut is accepted only
+    when Kraken currently exposes that asset against EUR.
+    """
+    raw = str(requested or "").strip().upper()
+    normalized = raw.replace("/", "").replace("-", "").replace("_", "")
+    if not normalized:
+        raise MarketPairInputError(
+            "Укажите тикер монеты или EUR-пару, например: /dipbacktest TON или /dipbacktest TONEUR."
+        )
+
+    markets = [item for item in (pairs or ()) if isinstance(item, dict)]
+    exact = [
+        item for item in markets
+        if str(item.get("symbol") or "").upper().replace("/", "") == normalized
+    ]
+    if exact:
+        pair = exact[0]
+        if str(pair.get("quote") or "").upper() == "EUR":
+            return pair
+        base = str(pair.get("base") or "").upper()
+        eur_symbol = next((
+            str(item.get("symbol") or "") for item in markets
+            if str(item.get("base") or "").upper() == base
+            and str(item.get("quote") or "").upper() == "EUR"
+        ), None)
+        suggestion = f" Используйте {eur_symbol}." if eur_symbol else ""
+        raise MarketPairInputError(
+            f"Пара {pair.get('symbol')} котируется не в EUR. "
+            f"Историческая проверка поддерживает только EUR-пары.{suggestion}"
+        )
+
+    by_base = [
+        item for item in markets
+        if str(item.get("base") or "").upper() == normalized
+    ]
+    eur_matches = [
+        item for item in by_base
+        if str(item.get("quote") or "").upper() == "EUR"
+    ]
+    if len(eur_matches) == 1:
+        return eur_matches[0]
+    if len(eur_matches) > 1:
+        eur_matches.sort(key=lambda item: str(item.get("symbol") or ""))
+        return eur_matches[0]
+    if by_base:
+        available = ", ".join(
+            str(item.get("symbol") or "")
+            for item in sorted(by_base, key=lambda item: str(item.get("symbol") or ""))[:5]
+            if item.get("symbol")
+        )
+        detail = f" Доступные рынки: {available}." if available else ""
+        raise MarketPairInputError(
+            f"Для {normalized} сейчас нет доступной EUR-пары Kraken. "
+            f"Проверка поддерживает только EUR-пары.{detail}"
+        )
+    raise MarketPairInputError(
+        f"Актив или пара {normalized} не найдены среди онлайн Spot-рынков Kraken. "
+        "Проверьте тикер монеты или укажите полную EUR-пару, например XBTEUR."
+    )
+
+
 class KrakenSpot:
     def __init__(self, api_key="", api_secret="", timeout=15):
         self.api_key = api_key
