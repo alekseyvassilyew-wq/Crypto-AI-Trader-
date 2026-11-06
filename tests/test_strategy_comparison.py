@@ -182,6 +182,7 @@ def test_walk_forward_fold_backtests_are_out_of_sample_and_disjoint():
     summary = result["walk_forward_summary"]
     assert set(summary) == {
         "baseline", "equal_weight_ensemble", "adaptive_ensemble",
+        "frozen_adaptive_ensemble",
         "trend_following", "mean_reversion", "breakout", "momentum",
         "volatility_expansion",
     }
@@ -202,6 +203,12 @@ def test_walk_forward_fold_backtests_are_out_of_sample_and_disjoint():
             "trend_following", "mean_reversion", "breakout",
             "momentum", "volatility_expansion",
         }
-        for result_name in ("baseline", "equal_weight_ensemble", "adaptive_ensemble"):
+        assert fold["adaptive_protocol"] == "prequential_online"
+        assert fold["frozen_adaptive_protocol"]["mode"] == "FROZEN_TRAINING_ONLY"
+        assert fold["frozen_adaptive_protocol"]["test_forecasts_used_for_weights"] == 0
+        for result_name in (
+            "baseline", "equal_weight_ensemble", "adaptive_ensemble",
+            "frozen_adaptive_ensemble",
+        ):
             assert "return_pct" in fold[result_name]
         assert all("return_pct" in item for item in fold["individual_strategies"].values())
