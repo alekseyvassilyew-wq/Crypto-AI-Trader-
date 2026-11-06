@@ -63,6 +63,29 @@ def test_backtest_rejects_unsorted_or_invalid_candles():
         run_backtest(rows)
 
 
+def test_backtest_rejects_missing_candles():
+    rows = candles()
+    del rows[20]
+    with pytest.raises(ValueError, match="history has a gap"):
+        run_backtest(rows)
+
+
+def test_backtest_accepts_and_reports_explicit_interval():
+    rows = [[float(i * 60), 100.0, 101.0, 99.0, 100.0, 1000.0] for i in range(70)]
+    result = run_backtest(
+        rows,
+        interval_seconds=60,
+        signal_fn=lambda history: {"signal": "HOLD"},
+    )
+    assert result["assumptions"]["candle_interval_seconds"] == 60
+    assert result["assumptions"]["candle_interval_inferred"] is False
+
+
+def test_backtest_rejects_invalid_explicit_interval():
+    with pytest.raises(ValueError, match="interval_seconds"):
+        run_backtest(candles(), interval_seconds=0)
+
+
 @pytest.mark.parametrize("fee,slippage", [(-0.1, 0), (0, -1), (float("nan"), 0), (0, 1000)])
 def test_backtest_rejects_invalid_cost_assumptions(fee, slippage):
     with pytest.raises(ValueError):
