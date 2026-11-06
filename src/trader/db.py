@@ -1006,7 +1006,8 @@ def ensure_paper_account_baseline(db, *, cash_by_currency, positions, cash_cost_
 
 
 def save_paper_fill(db, *, cash_by_currency, positions, symbol, side, qty, quote, fee, price,
-                    fee_eur=None, realized_pnl_eur=None, cash_cost_basis_eur=None):
+                    fee_eur=None, realized_pnl_eur=None, cash_cost_basis_eur=None,
+                    quote_currency=None, wallet_before=None):
     """Atomically persist a PAPER wallet mutation and its corresponding trade fill."""
     if not isinstance(cash_by_currency, dict) or not isinstance(positions, dict):
         raise ValueError("PAPER wallet state must contain currency balances and positions")
@@ -1033,7 +1034,21 @@ def save_paper_fill(db, *, cash_by_currency, positions, symbol, side, qty, quote
                 raise ValueError("PAPER cash EUR cost basis must be finite and non-negative")
             normalized_basis[currency.strip().upper()] = value
         wallet["cash_cost_basis_eur"] = normalized_basis
+    if cash_cost_basis_eur is None:
+        wallet["cash_cost_basis_eur"] = {}
     payload = json.dumps(wallet, separators=(",", ":"), allow_nan=False)
+    before_payload = None
+    if wallet_before is not None:
+        if not isinstance(wallet_before, dict):
+            raise ValueError("PAPER pre-fill wallet snapshot must be a mapping")
+        before_payload = json.dumps(wallet_before, separators=(",", ":"), allow_nan=False)
+        _paper_wallet_financial_projection(json.loads(before_payload))
+    _paper_wallet_financial_projection(json.loads(payload))
+    normalized_quote_currency = (
+        None if quote_currency is None else str(quote_currency).strip().upper()
+    )
+    if normalized_quote_currency == "":
+        raise ValueError("PAPER quote currency must not be empty")
     numeric = (float(qty), float(quote), float(fee), float(price))
     if not all(math.isfinite(value) for value in numeric):
         raise ValueError("PAPER fill values must be finite")
@@ -1046,10 +1061,19 @@ def save_paper_fill(db, *, cash_by_currency, positions, symbol, side, qty, quote
             (payload,),
         )
         db.execute(
-            "INSERT INTO trades(mode,symbol,side,qty,quote,fee,price,status,fee_eur,realized_pnl_eur) "
-            "VALUES('PAPER',?,?,?,?,?,?, 'FILLED',?,?)",
+            "INSERT INTO trades(mode,symbol,side,qty,quote,fee,price,status,fee_eur,realized_pnl_eur,quote_currency) "
+            "VALUES('PAPER',?,?,?,?,?,?, 'FILLED',?,?,?)",
             (str(symbol), str(side), numeric[0], numeric[1], numeric[2], numeric[3],
-             normalized_fee_eur, normalized_pnl_eur),
+             normalized_fee_eur, normalized_pnl_eur, normalized_quote_currency),
+        )
+        db.execute(
+            "INSERT INTO paper_account_events"
+            "(event_type,symbol,side,quote_currency,qty,quote,fee,fee_currency,fee_eur,"
+            "realized_pnl_eur,wallet_before_json,wallet_after_json,details_json) "
+            "VALUES('FILL',?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (str(symbol).upper(), str(side).upper(), normalized_quote_currency,
+             numeric[0], numeric[1], numeric[2], normalized_quote_currency,
+             normalized_fee_eur, normalized_pnl_eur, before_payload, payload, "{}"),
         )
 
 
