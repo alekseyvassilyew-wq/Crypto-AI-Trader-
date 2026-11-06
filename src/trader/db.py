@@ -6,7 +6,49 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY, ts TEXT DEFAULT CURRENT_TIMESTAMP, event TEXT NOT NULL, details TEXT);
+CREATE TABLE IF NOT EXISTS kraken_fills(
+    trade_id TEXT PRIMARY KEY,
+    order_id TEXT,
+    pair TEXT NOT NULL,
+    time REAL NOT NULL,
+    side TEXT NOT NULL,
+    order_type TEXT,
+    price REAL NOT NULL,
+    cost REAL NOT NULL,
+    fee REAL NOT NULL,
+    volume REAL NOT NULL,
+    raw_json TEXT NOT NULL,
+    imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_kraken_fills_time ON kraken_fills(time);
+CREATE INDEX IF NOT EXISTS idx_kraken_fills_pair_time ON kraken_fills(pair,time);
+CREATE TABLE IF NOT EXISTS kraken_ledger_entries(
+    ledger_id TEXT PRIMARY KEY,
+    refid TEXT,
+    time REAL NOT NULL,
+    entry_type TEXT NOT NULL,
+    subtype TEXT,
+    asset TEXT NOT NULL,
+    amount REAL NOT NULL,
+    fee REAL NOT NULL,
+    balance REAL,
+    raw_json TEXT NOT NULL,
+    imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_kraken_ledger_time ON kraken_ledger_entries(time);
+CREATE TABLE IF NOT EXISTS kraken_account_sync(
+    id INTEGER PRIMARY KEY CHECK(id=1),
+    fetched_at TEXT NOT NULL,
+    fills_complete INTEGER NOT NULL,
+    ledger_complete INTEGER NOT NULL,
+    exchange_fill_count INTEGER NOT NULL,
+    imported_fill_count INTEGER NOT NULL,
+    exchange_ledger_count INTEGER NOT NULL,
+    imported_ledger_count INTEGER NOT NULL,
+    balance_json TEXT NOT NULL,
+    status TEXT NOT NULL
+);
+\nCREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY, ts TEXT DEFAULT CURRENT_TIMESTAMP, event TEXT NOT NULL, details TEXT);
 CREATE TABLE IF NOT EXISTS trades(id INTEGER PRIMARY KEY, ts TEXT DEFAULT CURRENT_TIMESTAMP, mode TEXT NOT NULL, symbol TEXT NOT NULL, side TEXT NOT NULL, qty REAL NOT NULL, quote REAL NOT NULL, fee REAL NOT NULL, price REAL NOT NULL, status TEXT NOT NULL, order_id TEXT, fee_eur REAL, realized_pnl_eur REAL);
 CREATE TABLE IF NOT EXISTS app_state(key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS telegram_report_pages(report_key TEXT PRIMARY KEY, pages_json TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
