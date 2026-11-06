@@ -24,7 +24,7 @@ def _number(value, name, *, minimum=0.0, strict=False):
 def run_backtest(
     candles, *, initial_cash=1000.0, max_trade=100.0, fee_rate=0.0026,
     slippage_bps=5.0, stop_loss_pct=2.0, take_profit_pct=4.0,
-    trailing_stop_pct=1.5, risk_per_trade_pct=0.5, signal_fn=None,
+    trailing_stop_pct=1.5, risk_per_trade_pct=0.5, interval_seconds=None, signal_fn=None,
 ):
     """Simulate long-only spot trading on [timestamp, open, high, low, close, volume].
 
@@ -66,6 +66,31 @@ def run_backtest(
             raise ValueError("Candles must be strictly chronological")
         previous_ts = ts
         rows.append((ts, op, high, low, close, volume))
+
+    # Chronological timestamps alone are insufficient: a missing candle can
+    # be misread as a large one-period price move and distort indicators,
+    # stops, and forward returns.
+    inferred_interval = interval_seconds is None
+    if interval_seconds is None:
+        expected_interval = min(
+            later[0] - earlier[0] for earlier, later in zip(rows, rows[1:])
+        )
+    else:
+        expected_interval = _number(interval_seconds, "interval_seconds", strict=True)
+    tolerance = min(1.0, expected_interval * 0.001)
+    for index, (earlier, later) in enumerate(zip(rows, rows[1:]), start=1):
+        delta = later[0] - earlier[0]
+        if abs(delta - expected_interval) > tolerance:
+            if delta > expected_interval:
+                missing = max(1, round(delta / expected_interval) - 1)
+                raise ValueError(
+                    f"Candle history has a gap before index {index}: "
+                    f"{missing} expected candle(s) missing"
+                )
+            raise ValueError(
+                f"Candle timestamps are misaligned before index {index}: "
+                f"expected {expected_interval:g}s, got {delta:.6f}s"
+            )
 
     signal_fn = signal_fn or analyze
     cash, qty, entry, entry_notional, peak, entry_fee, entry_time = cash0, 0.0, 0.0, 0.0, 0.0, 0.0, None
@@ -229,6 +254,8 @@ def run_backtest(
             "fee_rate_pct_per_side": fee * 100.0,
             "slippage_bps_per_side": slip_bps,
             "execution": "next candle open",
+            "candle_interval_seconds": expected_interval,
+            "candle_interval_inferred": inferred_interval,
             "intrabar_priority": "low before high; existing stops before take-profit; new trailing peaks activate next candle",
             "risk_per_trade_pct": risk_pct,
             "buy_hold_window": "first strategy entry (or first executable candle if no trades) through final close",
