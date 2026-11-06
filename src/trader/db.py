@@ -220,7 +220,7 @@ def audit(db, event, details=""):
 
 
 def save_paper_fx_conversion(db, *, from_currency, to_currency, spent, received,
-                             fee_amount=None, fee_currency=None, fee_eur=None, legs=1,
+                             fee_amount=None, fee_currency=None, fee_eur=None, legs=1, ts=None,
                              cash_by_currency=None, cash_cost_basis_eur=None, positions=None):
     """Persist a PAPER FX fee ledger row, optionally atomically with its wallet."""
     source = str(from_currency or "").strip().upper()
@@ -241,6 +241,9 @@ def save_paper_fx_conversion(db, *, from_currency, to_currency, spent, received,
             raise ValueError("PAPER FX EUR fee must be finite and non-negative")
     if isinstance(legs, bool) or not isinstance(legs, int) or legs < 1:
         raise ValueError("PAPER FX conversion legs must be a positive integer")
+    timestamp = None if ts is None else str(ts).strip()
+    if timestamp == "":
+        raise ValueError("PAPER FX conversion timestamp must not be empty")
 
     wallet_payload = None
     wallet_args = (cash_by_currency, cash_cost_basis_eur, positions)
@@ -262,12 +265,20 @@ def save_paper_fx_conversion(db, *, from_currency, to_currency, spent, received,
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP",
                 (wallet_payload,),
             )
-        db.execute(
-            "INSERT INTO paper_fx_conversions"
-            "(from_currency,to_currency,spent,received,fee_amount,fee_currency,fee_eur,legs) "
-            "VALUES(?,?,?,?,?,?,?,?)",
-            (source, target, values[0], values[1], fee_amount, currency, fee_eur, legs),
-        )
+        if timestamp is None:
+            db.execute(
+                "INSERT INTO paper_fx_conversions"
+                "(from_currency,to_currency,spent,received,fee_amount,fee_currency,fee_eur,legs) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (source, target, values[0], values[1], fee_amount, currency, fee_eur, legs),
+            )
+        else:
+            db.execute(
+                "INSERT INTO paper_fx_conversions"
+                "(ts,from_currency,to_currency,spent,received,fee_amount,fee_currency,fee_eur,legs) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
+                (timestamp, source, target, values[0], values[1], fee_amount, currency, fee_eur, legs),
+            )
 
 def save_trade(db, mode, symbol, side, qty, quote, fee, price, status, order_id=None, *, fee_eur=None, realized_pnl_eur=None):
     """Persist a PAPER fill with optional EUR-denominated accounting fields."""
@@ -317,7 +328,7 @@ def backfill_paper_seed_fx_ledger(db):
         r"fee=(?P<fee>[0-9.eE+-]+)$"
     )
     rows = db.execute(
-        "SELECT id,details FROM audit WHERE event='PAPER_WALLET_SEED' ORDER BY id"
+        "SELECT id,ts,details FROM audit WHERE event='PAPER_WALLET_SEED' ORDER BY id"
     ).fetchall()
     backfilled = 0
     already_present = 0
@@ -352,9 +363,10 @@ def backfill_paper_seed_fx_ledger(db):
             "WHERE from_currency=? AND to_currency=? AND fee_currency=? AND legs=1 "
             "AND ABS(spent-?) < 0.0000001 "
             "AND ABS(received-?) < 0.0000001 "
+            "AND ABS(julianday(ts)-julianday(?)) < 0.00002 "
             "AND fee_amount IS NOT NULL AND ABS(fee_amount-?) < 0.0000001 "
             "LIMIT 1",
-            (source, target, target, spent, received, fee),
+            (source, target, target, spent, received, row["ts"], fee),
         ).fetchone()
         if existing is not None:
             already_present += 1
@@ -372,6 +384,7 @@ def backfill_paper_seed_fx_ledger(db):
             fee_currency=target,
             fee_eur=fee_eur,
             legs=1,
+            ts=row["ts"],
         )
         backfilled += 1
 
