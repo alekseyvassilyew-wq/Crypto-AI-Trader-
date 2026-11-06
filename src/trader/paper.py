@@ -90,14 +90,14 @@ class PaperBroker:
                     raw_amount, f"{currency} cash", minimum=0
                 )
             self.cash_by_currency.setdefault("EUR", 0.0)
-            raw_basis = saved.get("cash_cost_basis_eur")
-            if raw_basis is None:
+            if "cash_cost_basis_eur" not in saved:
                 # Legacy non-EUR balances have no trustworthy acquisition history.
                 self.cash_cost_basis_eur = {
                     currency: (amount if currency == "EUR" else None)
                     for currency, amount in self.cash_by_currency.items()
                 }
             else:
+                raw_basis = saved["cash_cost_basis_eur"]
                 if not isinstance(raw_basis, dict):
                     raise ValueError("Invalid saved PAPER cash EUR cost basis")
                 self.cash_cost_basis_eur = {}
