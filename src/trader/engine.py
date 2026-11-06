@@ -943,6 +943,7 @@ class Engine:
         if not missing_fx:
             self._ensure_day(prices)
         actions = []
+        exit_blocked = False
         # Risk exits are checked before new entries.
         for symbol, pos in list(self.paper.positions.items()):
             price = prices.get(symbol)
@@ -973,6 +974,7 @@ class Engine:
                 except ValueError as exc:
                     audit(self.db, "PAPER_EXIT_SKIPPED", f"{symbol}: {exc}")
                     actions.append(f"{symbol} HOLD — exit not simulated; visible depth insufficient or unavailable")
+                    exit_blocked = True
                     continue
                 if depth_fill is not None:
                     exit_price = depth_fill["vwap"]
@@ -1059,6 +1061,12 @@ class Engine:
             self._save_cycle_snapshot(results, prices)
             self.stop("Daily loss limit reached; remaining PAPER positions liquidated")
             return actions + ["DAILY LOSS LIMIT — paused"]
+        if exit_blocked:
+            # Do not add exposure while a triggered exit could not be represented
+            # by executable visible depth. Keep the existing position open and
+            # retry its exit on the next market cycle.
+            self._save_cycle_snapshot(results, prices)
+            return actions
         # Rank BUY candidates by strategy score first, then liquidity in EUR.
         # This prevents exchange pair ordering from deciding capital allocation.
         buy_candidates = sorted(
