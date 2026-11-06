@@ -399,3 +399,84 @@ def test_strategy_shadow_regime_metrics_are_separated_by_regime_and_symbol():
     assert "breakout" not in metrics.get("TREND_UP", {})
     assert get_strategy_shadow_regime_metrics(db, symbol="OTHER") == {}
     db.close()
+
+
+def test_kraken_history_import_is_idempotent_and_separate_from_paper(tmp_path):
+    from src.trader.db import import_kraken_account_history, get_kraken_account_sync, save_trade
+
+    db = connect(tmp_path / "account.sqlite3")
+    trade = {
+        "id": "TX-001", "ordertxid": "ORDER-1", "pair": "XBTEUR",
+        "time": "1794000000.0", "type": "buy", "ordertype": "limit",
+        "price": "50000", "cost": "100", "fee": "0.26", "vol": "0.002",
+    }
+    ledger = {
+        "id": "LEDGER-001", "refid": "ORDER-1", "time": "1794000000.0",
+        "type": "trade", "subtype": "", "asset": "ZEUR",
+        "amount": "-100", "fee": "0.26", "balance": "900",
+    }
+    first = import_kraken_account_history(
+        db, trades=[trade], ledgers=[ledger], balances={"ZEUR": "900"},
+        fetched_at="2026-11-06T20:00:00Z", fills_complete=True, ledger_complete=True,
+    )
+    second = import_kraken_account_history(
+        db, trades=[trade], ledgers=[ledger], balances={"ZEUR": "900"},
+        fetched_at="2026-11-06T20:01:00Z", fills_complete=True, ledger_complete=True,
+    )
+    assert first["status"] == "COMPLETE"
+    assert first["new_fills_imported"] == 1
+    assert first["new_ledger_entries_imported"] == 1
+    assert second["new_fills_imported"] == 0
+    assert second["new_ledger_entries_imported"] == 0
+    assert db.execute("SELECT COUNT(*) FROM kraken_fills").fetchone()[0] == 1
+    assert db.execute("SELECT COUNT(*) FROM kraken_ledger_entries").fetchone()[0] == 1
+    assert db.execute("SELECT COUNT(*) FROM trades WHERE mode='PAPER'").fetchone()[0] == 0
+    sync = get_kraken_account_sync(db)
+    assert sync["status"] == "COMPLETE"
+    assert sync["realized_pnl_eur"] is None
+    assert sync["pnl_status"] == "NOT_CALCULATED"
+    db.close()
+
+
+def test_kraken_history_import_marks_incomplete_history_and_does_not_claim_pnl():
+    from src.trader.db import import_kraken_account_history, get_kraken_account_sync
+
+    db = connect(":memory:")
+    result = import_kraken_account_history(
+        db, trades=[], ledgers=[], balances={"ZEUR": "10"},
+        fetched_at="2026-11-06T20:00:00Z", fills_complete=False, ledger_complete=True,
+    )
+    assert result["status"] == "INCOMPLETE"
+    sync = get_kraken_account_sync(db)
+    assert sync["status"] == "INCOMPLETE"
+    assert sync["realized_pnl_eur"] is None
+    assert sync["unrealized_pnl_eur"] is None
+    db.close()
+
+
+def test_kraken_history_import_rejects_malformed_fill_atomically():
+    from src.trader.db import import_kraken_account_history
+
+    db = connect(":memory:")
+    malformed = {
+        "id": "TX-BAD", "pair": "XBTEUR", "time": "1", "type": "buy",
+        "price": "NaN", "cost": "1", "fee": "0", "vol": "1",
+    }
+    with pytest.raises(ValueError, match="price"):
+        import_kraken_account_history(
+            db, trades=[malformed], ledgers=[], balances={"ZEUR": "10"},
+            fetched_at="2026-11-06T20:00:00Z", fills_complete=True, ledger_complete=True,
+        )
+    assert db.execute("SELECT COUNT(*) FROM kraken_fills").fetchone()[0] == 0
+    db.close()
+
+
+def test_kraken_sync_status_unknown_before_first_import():
+    from src.trader.db import get_kraken_account_sync
+
+    db = connect(":memory:")
+    assert get_kraken_account_sync(db) == {
+        "status": "UNKNOWN",
+        "reason": "No Kraken account history has been imported",
+    }
+    db.close()
