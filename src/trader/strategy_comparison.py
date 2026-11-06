@@ -274,11 +274,12 @@ def _evaluate_out_of_sample_folds(
     """Score strategies only inside disjoint, embargoed chronological test windows."""
     from .indicators import analyze
 
-    embargo = max(1, (HORIZON_SECONDS + int(interval_seconds) - 1) // int(interval_seconds))
     folds = build_walk_forward_folds(
         candles, min_train_candles=min_train_candles,
         test_candles=test_candles, step_candles=test_candles,
-        embargo_candles=embargo, max_folds=max_folds,
+        embargo_seconds=HORIZON_SECONDS,
+        interval_seconds=interval_seconds,
+        max_folds=max_folds,
     )
     scored = []
     for number, bounds in enumerate(folds, 1):
@@ -335,7 +336,8 @@ def _evaluate_out_of_sample_folds(
         scored.append({
             "fold": number,
             "train_candles": bounds["train_end"],
-            "embargo_candles": embargo,
+            "embargo_candles": bounds["embargo_candles"],
+            "embargo_seconds": bounds["embargo_seconds"],
             "test_candles": bounds["test_end"] - bounds["test_start"],
             "test_start_timestamp": test_start_ts,
             "test_end_timestamp": float(candles[bounds["test_end"] - 1][0]),
