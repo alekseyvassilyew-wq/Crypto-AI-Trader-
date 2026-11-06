@@ -658,7 +658,7 @@ def test_paper_fx_conversion_ledger_failure_rolls_back_wallet_atomically():
 
 def test_backfill_legacy_paper_seed_fx_ledger_is_idempotent_and_does_not_touch_wallet():
     from src.trader.db import (
-        audit, backfill_paper_seed_fx_ledger, get_state, save_paper_fx_conversion,
+        audit, backfill_paper_seed_fx_ledger, get_state, save_paper_fx_conversion, set_state,
     )
 
     db = connect(":memory:")
