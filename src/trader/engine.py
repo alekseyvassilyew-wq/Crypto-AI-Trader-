@@ -507,7 +507,31 @@ class Engine:
             amount_eur = min(base_eur * 0.25, self.paper.balance("EUR"))
             if amount_eur <= 0:
                 continue
-            conversion = self.paper.convert("EUR", currency, amount_eur, currency_per_eur)
+            cash_before = dict(self.paper.cash_by_currency)
+            basis_before = dict(self.paper.cash_cost_basis_eur)
+            try:
+                conversion = self.paper.convert(
+                    "EUR", currency, amount_eur, currency_per_eur, persist=False,
+                )
+                # Seed conversions are part of the same accounting ledger as
+                # later trade-driven conversions. The fee is charged in the
+                # destination currency, so value it back to EUR at this exact
+                # executable conversion rate.
+                save_paper_fx_conversion(
+                    self.db,
+                    from_currency=conversion["from"], to_currency=conversion["to"],
+                    spent=conversion["spent"], received=conversion["received"],
+                    fee_amount=conversion["fee"], fee_currency=currency,
+                    fee_eur=conversion["fee"] / currency_per_eur, legs=1,
+                    cash_by_currency=self.paper.cash_by_currency,
+                    cash_cost_basis_eur=self.paper.cash_cost_basis_eur,
+                    positions=self.paper.positions,
+                )
+            except Exception:
+                self.paper.cash_by_currency = cash_before
+                self.paper.cash_cost_basis_eur = basis_before
+                self.paper._sync_cash()
+                raise
             audit(self.db, "PAPER_WALLET_SEED",
                   f"{conversion['from']}->{conversion['to']} spent={conversion['spent']:.8f} "
                   f"received={conversion['received']:.8f} fee={conversion['fee']:.8f}")
