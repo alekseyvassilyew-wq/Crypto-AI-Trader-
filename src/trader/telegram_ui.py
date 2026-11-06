@@ -1317,6 +1317,7 @@ def build_app(s, engine, exchange):
                         f"net={metric({'value': stats.get('net_return_pct', 0.0)}, 'value', 2, '%')} · "
                         f"PF={pf_text} · WR={metric({'value': stats.get('win_rate_pct', 0.0)}, 'value', 1, '%')}"
                     )
+            lines.extend([
                 "",
                 "⚙️ ОДИНАКОВЫЕ УСЛОВИЯ",
                 f"Комиссия: {s.fee_rate * 100:.3f}% на сторону  ·  Проскальзывание: 5 bps на сторону",
