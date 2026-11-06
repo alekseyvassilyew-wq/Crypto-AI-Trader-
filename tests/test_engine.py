@@ -275,10 +275,15 @@ def test_wallet_seeds_usd_and_usdt_from_starting_eur_once(tmp_path):
     rows = db.execute("SELECT COUNT(*) AS n FROM audit WHERE event='PAPER_WALLET_SEED'").fetchone()
     assert rows["n"] == 2
     conversions = db.execute(
-        "SELECT from_currency,to_currency,spent,received,fee_amount,fee_currency,fee_eur,legs "
+        "SELECT ts,from_currency,to_currency,spent,received,fee_amount,fee_currency,fee_eur,legs "
         "FROM paper_fx_conversions ORDER BY id"
     ).fetchall()
     assert len(conversions) == 2
+    seed_audit = db.execute(
+        "SELECT ts,details FROM audit WHERE event='PAPER_WALLET_SEED' ORDER BY id"
+    ).fetchall()
+    assert len(seed_audit) == 2
+    assert [row["ts"] for row in conversions] == [row["ts"] for row in seed_audit]
     assert [(row["from_currency"], row["to_currency"]) for row in conversions] == [
         ("EUR", "USD"), ("EUR", "USDT"),
     ]
