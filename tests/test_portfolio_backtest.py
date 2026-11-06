@@ -110,6 +110,34 @@ def test_portfolio_backtest_rejects_unknown_quote_fx_rate():
 
 
 
+def test_daily_loss_limit_liquidates_remaining_positions_and_halts_entries():
+    candles = flat_candles(count=66)
+    candles[62] = [62.0, 100.0, 100.0, 90.0, 95.0, 1000.0]
+
+    result = run_portfolio_backtest(
+        {"BTCEUR": candles},
+        quote_currencies={"BTCEUR": "EUR"},
+        fx_rates={"EUR": 1.0},
+        initial_cash_eur=100,
+        max_trade_eur=50,
+        max_positions=1,
+        risk_per_trade_pct=1.0,
+        max_daily_loss_eur=1.0,
+        fee_rate=0,
+        slippage_bps=0,
+        signal_fn=buy_on_first_eligible_close,
+    )
+
+    assert result["trades"] == 1
+    trade = result["trades_detail"][0]
+    assert trade["reason"] == "DAILY_LOSS_LIMIT"
+    assert trade["exit_price"] == pytest.approx(90.0)
+    assert result["final_equity_eur"] == pytest.approx(95.0)
+    assert result["assumptions"]["daily_loss_execution"].startswith(
+        "remaining positions liquidated at trigger candle low"
+    )
+
+
 def test_portfolio_backtest_uses_entry_and_exit_fx_rates():
     candles = [[float(i), 100.0, 100.0, 100.0, 100.0, 1000.0] for i in range(64)]
     result = run_portfolio_backtest(

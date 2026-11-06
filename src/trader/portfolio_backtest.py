@@ -257,6 +257,13 @@ def run_portfolio_backtest(
             max_drawdown = max(max_drawdown, (max_equity - intrabar_low_equity) / max_equity)
         if daily_limit is not None and intrabar_low_equity - daily_start <= -daily_limit:
             trading_halted = True
+            # OHLC data cannot identify the exact moment the daily threshold
+            # was crossed or provide executable order-book depth. Liquidate
+            # remaining long positions at this candle's low, then apply the
+            # configured adverse slippage and fees in close().
+            for symbol in list(positions):
+                low_price = markets[symbol]["rows"][index][3]
+                close(symbol, low_price, timestamp, "DAILY_LOSS_LIMIT")
 
         # Manage all existing positions before considering new entries.
         for symbol in list(positions):
@@ -496,6 +503,7 @@ def run_portfolio_backtest(
             "execution": "next candle open",
             "candle_interval_seconds": expected_interval,
             "candle_interval_inferred": inferred_interval,
+            "daily_loss_execution": "remaining positions liquidated at trigger candle low plus configured slippage and fees; OHLC approximation, not order-book execution",
             "intrabar_priority": "low before high; existing stops before take-profit; new trailing peaks activate next candle",
             "buy_hold": "equal-weight same markets from first strategy entry (or first executable candle if no trades) through final close; includes conversion and two-sided fees/slippage",
             "fx_rates_fallback": rates,
