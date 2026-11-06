@@ -303,3 +303,73 @@ def test_paper_fill_rolls_back_wallet_if_trade_insert_fails(tmp_path):
     assert get_state(db, "paper_broker") == original
     assert db.execute("SELECT COUNT(*) FROM trades").fetchone()[0] == 0
     db.close()
+
+
+def test_strategy_shadow_predictions_settle_at_target_candle_close_and_track_net_metrics():
+    from src.trader.db import (
+        record_strategy_shadow_prediction,
+        settle_strategy_shadow_predictions,
+        get_strategy_shadow_metrics,
+    )
+
+    db = connect(":memory:")
+    assert record_strategy_shadow_prediction(
+        db, symbol="XBTEUR", strategy="trend_following",
+        signal_ts=100, target_ts=125, entry_price=100, regime="TREND_UP",
+    )
+    assert not record_strategy_shadow_prediction(
+        db, symbol="XBTEUR", strategy="trend_following",
+        signal_ts=100, target_ts=125, entry_price=100, regime="TREND_UP",
+    )
+    # A second signal before the prior three-hour outcome resolves is skipped.
+    assert not record_strategy_shadow_prediction(
+        db, symbol="XBTEUR", strategy="trend_following",
+        signal_ts=101, target_ts=126, entry_price=101, regime="TREND_UP",
+    )
+    assert record_strategy_shadow_prediction(
+        db, symbol="XBTEUR", strategy="breakout",
+        signal_ts=100, target_ts=125, entry_price=110, regime="TREND_UP",
+    )
+
+    candles = [
+        [60, 100, 101, 99, 100, 10],
+        [120, 101, 105, 100, 104, 12],
+        [180, 102, 104, 101, 103, 11],
+    ]
+    assert settle_strategy_shadow_predictions(
+        db, symbol="XBTEUR", candles=candles,
+        fee_rate=0.01, slippage_bps=0, interval_seconds=60,
+    ) == 2
+
+    metrics = get_strategy_shadow_metrics(db, "XBTEUR")
+    assert metrics["trend_following"]["resolved"] == 1
+    assert metrics["trend_following"]["wins"] == 1
+    assert metrics["trend_following"]["net_return_pct"] > 0
+    assert metrics["breakout"]["resolved"] == 1
+    assert metrics["breakout"]["wins"] == 0
+    assert metrics["breakout"]["net_return_pct"] < 0
+    db.close()
+
+
+def test_strategy_shadow_predictions_wait_for_target_and_reject_invalid_inputs():
+    from src.trader.db import (
+        record_strategy_shadow_prediction,
+        settle_strategy_shadow_predictions,
+    )
+
+    db = connect(":memory:")
+    with pytest.raises(ValueError):
+        record_strategy_shadow_prediction(
+            db, symbol="XBTEUR", strategy="trend_following",
+            signal_ts=10, target_ts=10, entry_price=100,
+        )
+    record_strategy_shadow_prediction(
+        db, symbol="XBTEUR", strategy="trend_following",
+        signal_ts=10, target_ts=1000, entry_price=100,
+    )
+    candles = [[60, 100, 101, 99, 100, 10]]
+    assert settle_strategy_shadow_predictions(
+        db, symbol="XBTEUR", candles=candles,
+        fee_rate=0.01, slippage_bps=5, interval_seconds=60,
+    ) == 0
+    db.close()

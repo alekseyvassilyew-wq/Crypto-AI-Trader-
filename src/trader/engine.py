@@ -7,7 +7,7 @@ from .risk import Limits, check_order
 from .indicators import analyze, confirm_multi_timeframe
 from .learning import extract_features, predict_probability
 from .strategy_ensemble import evaluate_strategy_ensemble
-from .db import audit, save_trade, save_paper_fill, get_state, set_state, save_paper_snapshot, record_shadow_prediction, settle_shadow_predictions
+from .db import audit, save_trade, save_paper_fill, get_state, set_state, save_paper_snapshot, record_shadow_prediction, settle_shadow_predictions, record_strategy_shadow_prediction, settle_strategy_shadow_predictions
 
 
 log = logging.getLogger(__name__)
@@ -480,6 +480,29 @@ class Engine:
             # Independent strategy opinions are collected in shadow mode only.
             # The existing production BUY/HOLD decision remains unchanged.
             result["strategy_ensemble_shadow"] = evaluate_strategy_ensemble(base_candles)
+            # Track BUY opinions independently; this ledger is observational only.
+            try:
+                settle_strategy_shadow_predictions(
+                    self.db, symbol=symbol, candles=base_candles,
+                    fee_rate=self.s.fee_rate, slippage_bps=self._slippage_rate() * 10000.0,
+                    interval_seconds=3600,
+                )
+                shadow = result["strategy_ensemble_shadow"]
+                if shadow.get("mode") == "SHADOW_ONLY" and len(base_candles) >= 60:
+                    closed_candle_ts = float(base_candles[-1][0]) + 3600.0
+                    for strategy_name, opinion in shadow.get("strategies", {}).items():
+                        if opinion.get("signal") == "BUY" and (ask or last) > 0:
+                            record_strategy_shadow_prediction(
+                                self.db, symbol=symbol, strategy=strategy_name,
+                                signal_ts=closed_candle_ts,
+                                target_ts=closed_candle_ts + 3 * 3600.0,
+                                entry_price=ask or last, regime=shadow.get("regime", ""),
+                            )
+            except Exception as strategy_shadow_exc:
+                audit(
+                    self.db, "STRATEGY_SHADOW_ERROR",
+                    f"{symbol}: {type(strategy_shadow_exc).__name__}: {strategy_shadow_exc}",
+                )
             # Higher-timeframe requests are made only for potential entries,
             # limiting Kraken REST load while refusing unconfirmed BUY signals.
             if result.get("signal") == "BUY" and getattr(self.s, "enable_multi_timeframe", False):

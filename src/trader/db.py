@@ -36,6 +36,20 @@ CREATE TABLE IF NOT EXISTS ml_shadow_predictions(
     UNIQUE(symbol, signal_ts)
 );
 CREATE INDEX IF NOT EXISTS idx_ml_shadow_pending ON ml_shadow_predictions(symbol, target_ts, realized_return);
+CREATE TABLE IF NOT EXISTS strategy_shadow_predictions(
+    id INTEGER PRIMARY KEY,
+    symbol TEXT NOT NULL,
+    strategy TEXT NOT NULL,
+    signal_ts REAL NOT NULL,
+    target_ts REAL NOT NULL,
+    entry_price REAL NOT NULL,
+    regime TEXT NOT NULL DEFAULT '',
+    exit_price REAL,
+    realized_return REAL,
+    UNIQUE(symbol, strategy, signal_ts)
+);
+CREATE INDEX IF NOT EXISTS idx_strategy_shadow_pending
+ON strategy_shadow_predictions(symbol, target_ts, realized_return);
 """
 
 def connect(path):
@@ -444,6 +458,145 @@ def get_shadow_metrics(db, symbol, model_version=None):
             (str(symbol).upper(), str(model_version)) if model_version is not None else (str(symbol).upper(),),
         ).fetchone()["n"],
     }
+
+
+
+
+def record_strategy_shadow_prediction(db, *, symbol, strategy, signal_ts, target_ts, entry_price, regime=""):
+    """Persist one BUY opinion per strategy and closed-candle timestamp."""
+    if not isinstance(symbol, str) or not symbol.strip():
+        raise ValueError("Strategy shadow symbol must not be empty")
+    if not isinstance(strategy, str) or not strategy.strip() or len(strategy) > 64:
+        raise ValueError("Strategy shadow name must be a non-empty string of at most 64 characters")
+    if not isinstance(regime, str) or len(regime) > 64:
+        raise ValueError("Strategy shadow regime must be a string of at most 64 characters")
+    values = (signal_ts, target_ts, entry_price)
+    if any(isinstance(value, bool) for value in values):
+        raise ValueError("Strategy shadow values must be numeric, not booleans")
+    try:
+        signal_ts, target_ts, entry_price = (float(value) for value in values)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("Invalid strategy shadow values") from exc
+    if (not all(math.isfinite(value) for value in (signal_ts, target_ts, entry_price))
+            or signal_ts < 0 or target_ts <= signal_ts or entry_price <= 0):
+        raise ValueError("Invalid strategy shadow prediction values")
+    with db:
+        normalized_symbol = symbol.strip().upper()
+        normalized_strategy = strategy.strip().lower()
+        latest = db.execute(
+            "SELECT target_ts FROM strategy_shadow_predictions "
+            "WHERE symbol=? AND strategy=? ORDER BY signal_ts DESC LIMIT 1",
+            (normalized_symbol, normalized_strategy),
+        ).fetchone()
+        # Do not compound overlapping three-hour outcomes as if they were
+        # independent, fully reinvested trades.
+        if latest and signal_ts < float(latest["target_ts"]):
+            return False
+        cursor = db.execute(
+            "INSERT OR IGNORE INTO strategy_shadow_predictions"
+            "(symbol,strategy,signal_ts,target_ts,entry_price,regime) VALUES(?,?,?,?,?,?)",
+            (normalized_symbol, normalized_strategy, signal_ts, target_ts,
+             entry_price, regime),
+        )
+        db.execute(
+            "DELETE FROM strategy_shadow_predictions WHERE realized_return IS NOT NULL "
+            "AND signal_ts < CAST(strftime('%s','now') AS REAL) - 7776000"
+        )
+    return cursor.rowcount == 1
+
+
+def settle_strategy_shadow_predictions(db, *, symbol, candles, fee_rate, slippage_bps, interval_seconds=3600):
+    """Settle strategy shadow BUY opinions at the first due candle close, net of costs."""
+    if isinstance(interval_seconds, bool):
+        raise ValueError("Strategy shadow candle interval must be numeric")
+    try:
+        interval_seconds = float(interval_seconds)
+        fee, slip = float(fee_rate), float(slippage_bps) / 10000.0
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("Invalid strategy shadow settlement costs or interval") from exc
+    if (not math.isfinite(interval_seconds) or interval_seconds < 0
+            or not math.isfinite(fee) or not math.isfinite(slip)
+            or fee < 0 or fee >= 0.1 or slip < 0 or slip >= 0.1):
+        raise ValueError("Invalid strategy shadow settlement costs or interval")
+    if not isinstance(candles, (list, tuple)):
+        raise ValueError("Strategy shadow candles must be a sequence")
+    rows, previous_ts = [], None
+    for index, row in enumerate(candles):
+        if not isinstance(row, (list, tuple)) or len(row) < 6:
+            raise ValueError(f"Invalid strategy shadow candle at index {index}")
+        try:
+            timestamp, high, low, close = (float(row[j]) for j in (0, 2, 3, 4))
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(f"Invalid strategy shadow candle at index {index}") from exc
+        if (not all(math.isfinite(value) for value in (timestamp, high, low, close))
+                or timestamp < 0 or min(high, low, close) <= 0 or low > high
+                or (previous_ts is not None and timestamp <= previous_ts)):
+            raise ValueError(f"Invalid strategy shadow candle at index {index}")
+        previous_ts = timestamp
+        rows.append((timestamp, close))
+    if not rows:
+        return 0
+    settled = 0
+    with db:
+        pending = db.execute(
+            "SELECT id,target_ts,entry_price FROM strategy_shadow_predictions "
+            "WHERE symbol=? AND realized_return IS NULL AND target_ts<=? ORDER BY target_ts",
+            (str(symbol).upper(), rows[-1][0] + interval_seconds),
+        ).fetchall()
+        for prediction in pending:
+            target = float(prediction["target_ts"])
+            exit_row = next((row for row in rows if row[0] + interval_seconds >= target), None)
+            if exit_row is None:
+                continue
+            exit_price = exit_row[1]
+            entry_price = float(prediction["entry_price"])
+            net_return = (
+                exit_price * (1.0 - slip) * (1.0 - fee)
+                / (entry_price * (1.0 + slip) * (1.0 + fee))
+            ) - 1.0
+            db.execute(
+                "UPDATE strategy_shadow_predictions SET exit_price=?,realized_return=? "
+                "WHERE id=? AND realized_return IS NULL",
+                (exit_price, net_return, prediction["id"]),
+            )
+            settled += 1
+    return settled
+
+
+def get_strategy_shadow_metrics(db, symbol=None):
+    """Return net-of-cost performance independently for every shadow strategy."""
+    query = (
+        "SELECT strategy,realized_return FROM strategy_shadow_predictions "
+        "WHERE realized_return IS NOT NULL"
+    )
+    params = []
+    if symbol is not None:
+        query += " AND symbol=?"
+        params.append(str(symbol).upper())
+    query += " ORDER BY strategy,signal_ts"
+    rows = db.execute(query, tuple(params)).fetchall()
+    grouped = {}
+    for row in rows:
+        grouped.setdefault(row["strategy"], []).append(float(row["realized_return"]))
+    output = {}
+    for strategy, returns in grouped.items():
+        equity, peak, drawdown = 1.0, 1.0, 0.0
+        wins, losses = [], []
+        for value in returns:
+            equity *= 1.0 + value
+            peak = max(peak, equity)
+            drawdown = max(drawdown, (peak - equity) / peak if peak else 0.0)
+            (wins if value > 0 else losses).append(value)
+        gross_loss = abs(sum(losses))
+        output[strategy] = {
+            "resolved": len(returns),
+            "wins": len(wins),
+            "win_rate_pct": len(wins) / len(returns) * 100.0,
+            "net_return_pct": (equity - 1.0) * 100.0,
+            "profit_factor": sum(wins) / gross_loss if gross_loss else ("INF" if wins else 0.0),
+            "max_drawdown_pct": drawdown * 100.0,
+        }
+    return output
 
 
 def save_telegram_report_pages(db, report_key, pages, *, keep=100):
