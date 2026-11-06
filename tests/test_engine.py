@@ -1104,7 +1104,13 @@ def test_scan_candle_cache_reuses_closed_candles_until_timeframe_boundary(tmp_pa
     first[0][4] = 999
     assert engine._scan_candles("XBTEUR", interval="60", limit=120)[0][4] == 10.5
 
-    monkeypatch.setattr("src.trader.engine.time.time", lambda: 3600 * 101)
+    # Do not roll over immediately at the hour: Kraken may publish the
+    # final closed candle a few seconds after the boundary.
+    monkeypatch.setattr("src.trader.engine.time.time", lambda: 3600 * 101 + 9)
+    engine._scan_candles("XBTEUR", interval="60", limit=120)
+    assert len(exchange.calls) == 1
+
+    monkeypatch.setattr("src.trader.engine.time.time", lambda: 3600 * 101 + 10)
     engine._scan_candles("XBTEUR", interval="60", limit=120)
     assert len(exchange.calls) == 2
     db.close()
