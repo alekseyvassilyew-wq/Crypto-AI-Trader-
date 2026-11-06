@@ -1214,6 +1214,107 @@ def build_app(s, engine, exchange):
                 format_error(exc, f"/backtest {symbol}", update.effective_user)
             )
 
+    async def strategycompare(update, context):
+        if not await authorized(update): return await deny(update)
+        if len(context.args) != 1:
+            return await update.effective_message.reply_text(
+                "Использование: /strategycompare XBTEUR или /strategycompare TON\n"
+                "Сравнивает базовую PAPER-стратегию, ансамбль 5 стратегий и адаптивный ансамбль "
+                "на одинаковых закрытых часовых свечах. Только исследование: сделки не открываются."
+            )
+        requested_symbol = context.args[0].strip().upper().replace("/", "")
+        await update.effective_message.reply_text(
+            f"🧪 Сравнение стратегий для {html.escape(requested_symbol)}: "
+            "загружаю закрытые часовые свечи и выполняю три одинаково настроенные симуляции…",
+            parse_mode="HTML",
+        )
+        try:
+            def run_comparison():
+                from .exchange import resolve_eur_pair
+                from .strategy_comparison import run_strategy_comparison
+                pair = resolve_eur_pair(exchange.discover_pairs(), requested_symbol)
+                symbol = pair["symbol"]
+                rows = exchange.candles(symbol, interval="60", limit=720)
+                result = run_strategy_comparison(
+                    rows,
+                    initial_cash=s.paper_start,
+                    max_trade=s.max_trade,
+                    fee_rate=s.fee_rate,
+                    slippage_bps=5.0,
+                    stop_loss_pct=s.stop_loss_pct,
+                    take_profit_pct=s.take_profit_pct,
+                    trailing_stop_pct=s.trailing_stop_pct,
+                    risk_per_trade_pct=s.risk_per_trade_pct,
+                )
+                return symbol, result
+
+            symbol, result = await context.application.bot_data["run_blocking"].run(run_comparison)
+
+            def metric(item, key, digits=2, suffix=""):
+                try:
+                    value = float(item[key])
+                    if not math.isfinite(value):
+                        return "∞" if value > 0 else "н/д"
+                    return f"{value:+.{digits}f}{suffix}" if key in {"return_pct", "net_pnl"} else f"{value:.{digits}f}{suffix}"
+                except (KeyError, TypeError, ValueError, OverflowError):
+                    return "н/д"
+
+            def pf(item):
+                try:
+                    value = float(item["profit_factor"])
+                    return "∞" if math.isinf(value) and value > 0 else f"{value:.2f}"
+                except (KeyError, TypeError, ValueError, OverflowError):
+                    return "н/д"
+
+            baseline = result["baseline"]
+            equal = result["equal_weight_ensemble"]
+            adaptive = result["adaptive_ensemble"]
+            meta = result["metadata"]
+            lines = [
+                f"🧪 СРАВНЕНИЕ ТОРГОВЫХ СТРАТЕГИЙ · {symbol}",
+                "━━━━━━━━━━━━━━━━━━",
+                "🕯 История: закрытые часовые свечи Kraken",
+                f"📚 Свечей: {baseline['candles']:,}  ·  Горизонт shadow-прогнозов: {meta['horizon_seconds'] // 3600} ч.",
+                f"💼 Стартовый капитал: {baseline['initial_cash']:.2f} EUR",
+                "",
+                "📊 РЕЗУЛЬТАТЫ СИМУЛЯЦИИ",
+            ]
+            for title, item in (
+                ("1. БАЗОВАЯ PAPER-СТРАТЕГИЯ", baseline),
+                ("2. АНСАМБЛЬ · РАВНЫЕ ГОЛОСА", equal),
+                ("3. АНСАМБЛЬ · АДАПТИВНЫЕ ВЕСА", adaptive),
+            ):
+                lines.extend([
+                    "",
+                    title,
+                    f"   Доходность: {metric(item, 'return_pct', 2, '%')}  ·  P/L: {metric(item, 'net_pnl', 4)} EUR",
+                    f"   Сделок: {item['trades']}  ·  Win rate: {metric(item, 'win_rate_pct', 1, '%')}  ·  PF: {pf(item)}",
+                    f"   Макс. просадка: {metric(item, 'max_drawdown_pct', 2, '%')}",
+                    f"   Комиссии: {metric(item, 'fees_paid', 4)} EUR",
+                ])
+            lines.extend([
+                "",
+                "🧠 WALK-FORWARD · SHADOW",
+                f"Завершённых прогнозов: {meta['settled_forecasts']}  ·  Незавершённых: {meta['unresolved_forecasts']}",
+                "Адаптивные веса учитывают только прогнозы, завершившиеся до текущей свечи.",
+                "Пересекающиеся прогнозы одной стратегии исключены.",
+                "",
+                "⚙️ ОДИНАКОВЫЕ УСЛОВИЯ",
+                f"Комиссия: {s.fee_rate * 100:.3f}% на сторону  ·  Проскальзывание: 5 bps на сторону",
+                f"Stop-loss: {s.stop_loss_pct:.2f}%  ·  Take-profit: {s.take_profit_pct:.2f}%  ·  Trailing: {s.trailing_stop_pct:.2f}%",
+                f"Риск на сделку: {s.risk_per_trade_pct:.2f}%",
+                "━━━━━━━━━━━━━━━━━━",
+                "🛡 SHADOW ONLY · NONE",
+                "Это историческое сравнение, не прогноз доходности. Адаптивные оценки основаны на фиксированном трёхчасовом исходе BUY-прогнозов, а не на полном совпадении со стоп/тейк-исполнением каждой стратегии.",
+                "Ни реальные ордера, ни PAPER-баланс, ни параметры действующей торговли не изменяются.",
+            ])
+            await send_report(update, context, _format_report(lines[0], "\n".join(lines)))
+        except Exception as exc:
+            log.error("Strategy comparison failed for %s: %s", requested_symbol, type(exc).__name__)
+            await update.effective_message.reply_text(
+                format_error(exc, f"/strategycompare {requested_symbol}", update.effective_user)
+            )
+
     async def dipbacktest(update, context):
         if not await authorized(update): return await deny(update)
         if len(context.args) != 1:
@@ -2183,7 +2284,7 @@ def build_app(s, engine, exchange):
     app.bot_data["monitor_db"] = monitor_db
     app.bot_data["monitor_runner"] = monitor_runner
     app.bot_data["research_runner"] = research_runner
-    for name, fn in [("start", start), ("status", status), ("dbhealth", dbhealth), ("monitorstatus", monitorstatus), ("scan", scan), ("market", market), ("dips", dips), ("analyze", analyze_market), ("account", account), ("realbalance", realbalance), ("walletcheck", walletcheck), ("paperreport", paperreport), ("learn", learn), ("learning", learning), ("research", research_history_cmd), ("backtest", backtest), ("dipbacktest", dipbacktest), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
+    for name, fn in [("start", start), ("status", status), ("dbhealth", dbhealth), ("monitorstatus", monitorstatus), ("scan", scan), ("market", market), ("dips", dips), ("analyze", analyze_market), ("account", account), ("realbalance", realbalance), ("walletcheck", walletcheck), ("paperreport", paperreport), ("learn", learn), ("learning", learning), ("research", research_history_cmd), ("backtest", backtest), ("strategycompare", strategycompare), ("dipbacktest", dipbacktest), ("interval", interval), ("portfolio", portfolio), ("topicid", topicid), ("testtopics", testtopics),
                      ("run", run), ("pause", pause), ("stop", stop), ("help", help_cmd)]:
         app.add_handler(CommandHandler(name, fn))
     app.add_handler(CommandHandler("test_topics", testtopics))  # Backwards-compatible alias shown in /help.
