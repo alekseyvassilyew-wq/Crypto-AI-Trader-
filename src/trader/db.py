@@ -244,7 +244,7 @@ def audit(db, event, details=""):
 def save_paper_fx_conversion(db, *, from_currency, to_currency, spent, received,
                              fee_amount=None, fee_currency=None, fee_eur=None, legs=1, ts=None,
                              cash_by_currency=None, cash_cost_basis_eur=None, positions=None,
-                             audit_event=None, audit_details=None):
+                             wallet_before=None, audit_event=None, audit_details=None):
     """Persist a PAPER FX fee ledger row, optionally atomically with its wallet."""
     source = str(from_currency or "").strip().upper()
     target = str(to_currency or "").strip().upper()
@@ -284,6 +284,13 @@ def save_paper_fx_conversion(db, *, from_currency, to_currency, spent, received,
             "positions": positions,
         }
         wallet_payload = json.dumps(wallet, separators=(",", ":"), allow_nan=False)
+        _paper_wallet_financial_projection(json.loads(wallet_payload))
+    before_payload = None
+    if wallet_before is not None:
+        if not isinstance(wallet_before, dict):
+            raise ValueError("PAPER pre-conversion wallet snapshot must be a mapping")
+        before_payload = json.dumps(wallet_before, separators=(",", ":"), allow_nan=False)
+        _paper_wallet_financial_projection(json.loads(before_payload))
 
     with db:
         if wallet_payload is not None:
@@ -305,6 +312,16 @@ def save_paper_fx_conversion(db, *, from_currency, to_currency, spent, received,
                 "(ts,from_currency,to_currency,spent,received,fee_amount,fee_currency,fee_eur,legs) "
                 "VALUES(?,?,?,?,?,?,?,?,?)",
                 (timestamp, source, target, values[0], values[1], fee_amount, currency, fee_eur, legs),
+            )
+        if wallet_payload is not None:
+            db.execute(
+                "INSERT INTO paper_account_events"
+                "(event_type,from_currency,to_currency,quote,fee,fee_currency,fee_eur,"
+                "wallet_before_json,wallet_after_json,details_json) "
+                "VALUES('FX_CONVERSION',?,?,?,?,?,?,?,?,?)",
+                (source, target, values[0], fee_amount, currency, fee_eur,
+                 before_payload, wallet_payload,
+                 json.dumps({"received": values[1], "legs": legs}, separators=(",", ":"))),
             )
         if event is not None:
             db.execute(
