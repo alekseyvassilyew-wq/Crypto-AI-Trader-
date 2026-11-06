@@ -591,6 +591,147 @@ def get_paper_metrics(db, hours=24):
     }
 
 
+def get_paper_account_reconciliation(db):
+    """Read-only integrity and event-chain reconciliation from the recorded baseline."""
+    wallet = get_state(db, "paper_broker")
+    baseline = db.execute(
+        "SELECT id,ts,wallet_after_json FROM paper_account_events "
+        "WHERE event_type='BASELINE' ORDER BY id LIMIT 1"
+    ).fetchone()
+    if wallet is None:
+        return {"status": "NO_WALLET", "full_history_reconciled": False,
+                "blocking_reasons": ["Persisted PAPER wallet is missing"]}
+    if baseline is None:
+        return {"status": "NO_BASELINE", "full_history_reconciled": False,
+                "blocking_reasons": ["Immutable PAPER account baseline has not been recorded"]}
+
+    reasons = []
+    baseline_wallet = json.loads(baseline["wallet_after_json"])
+    previous_projection = _paper_wallet_financial_projection(baseline_wallet)
+    event_rows = db.execute(
+        "SELECT * FROM paper_account_events WHERE id>? ORDER BY id",
+        (int(baseline["id"]),),
+    ).fetchall()
+    chain_valid = True
+    realized_values, execution_fees, fx_fees = [], [], []
+    unvalued_sells = fill_events = fx_events = 0
+    for row in event_rows:
+        try:
+            after = _paper_wallet_financial_projection(json.loads(row["wallet_after_json"]))
+            if not row["wallet_before_json"]:
+                raise ValueError("event has no pre-operation wallet snapshot")
+            before = _paper_wallet_financial_projection(json.loads(row["wallet_before_json"]))
+            if before != previous_projection:
+                raise ValueError("event pre-operation wallet does not match prior event")
+            previous_projection = after
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            chain_valid = False
+            reasons.append(f"Event #{row['id']} snapshot chain: {exc}")
+            try:
+                previous_projection = _paper_wallet_financial_projection(
+                    json.loads(row["wallet_after_json"])
+                )
+            except (TypeError, ValueError, json.JSONDecodeError):
+                pass
+            continue
+
+        event_type = str(row["event_type"]).upper()
+        if event_type == "FILL":
+            fill_events += 1
+            if not row["quote_currency"]:
+                chain_valid = False
+                reasons.append(f"Fill event #{row['id']} has no quote currency")
+            execution_fees.append(None if row["fee_eur"] is None else float(row["fee_eur"]))
+            if str(row["side"] or "").upper() == "SELL":
+                if row["realized_pnl_eur"] is None:
+                    unvalued_sells += 1
+                else:
+                    realized_values.append(float(row["realized_pnl_eur"]))
+        elif event_type == "FX_CONVERSION":
+            fx_events += 1
+            fx_fees.append(None if row["fee_eur"] is None else float(row["fee_eur"]))
+        else:
+            chain_valid = False
+            reasons.append(f"Unknown account event type in row #{row['id']}")
+
+    try:
+        current_projection = _paper_wallet_financial_projection(wallet)
+    except (TypeError, ValueError) as exc:
+        current_projection = None
+        chain_valid = False
+        reasons.append(f"Current PAPER wallet invalid: {exc}")
+    current_matches = current_projection == previous_projection
+    if not current_matches:
+        chain_valid = False
+        reasons.append("Current persisted wallet does not match the latest journal snapshot")
+
+    unknown_cash_basis = []
+    for currency, amount in (current_projection or {}).get("cash_by_currency", {}).items():
+        if amount > 1e-12 and current_projection["cash_cost_basis_eur"].get(currency) is None:
+            unknown_cash_basis.append(currency)
+    if unknown_cash_basis:
+        reasons.append("Unknown historical EUR cost basis for cash: " + ", ".join(sorted(unknown_cash_basis)))
+
+    unknown_position_basis, position_rows = [], []
+    for symbol, position in (current_projection or {}).get("positions", {}).items():
+        if position["cost_basis_eur"] is None or position["entry_fees_eur"] is None:
+            unknown_position_basis.append(symbol)
+        position_rows.append({
+            "symbol": symbol, "qty": position["qty"],
+            "quote_currency": position["quote_currency"],
+            "cost_basis_eur": position["cost_basis_eur"],
+            "entry_fees_eur": position["entry_fees_eur"],
+        })
+    if unknown_position_basis:
+        reasons.append("Unknown historical EUR cost basis for positions: " + ", ".join(sorted(unknown_position_basis)))
+
+    old_trades = db.execute(
+        "SELECT COUNT(*) FROM trades WHERE mode='PAPER' AND status='FILLED' "
+        "AND julianday(ts) < julianday(?)", (baseline["ts"],)
+    ).fetchone()[0]
+    old_fx = db.execute(
+        "SELECT COUNT(*) FROM paper_fx_conversions WHERE julianday(ts) < julianday(?)",
+        (baseline["ts"],)
+    ).fetchone()[0]
+    if old_trades or old_fx:
+        reasons.append(f"Legacy history before baseline excluded: {old_trades} fills, {old_fx} FX conversions")
+
+    cash = (current_projection or {}).get("cash_by_currency", {})
+    basis = (current_projection or {}).get("cash_cost_basis_eur", {})
+    return {
+        "status": "CONSISTENT_SINCE_BASELINE" if chain_valid else "INCONSISTENT",
+        "full_history_reconciled": False,
+        "baseline_ts": baseline["ts"],
+        "baseline_event_id": int(baseline["id"]),
+        "journal_events": len(event_rows),
+        "fill_events": fill_events,
+        "fx_events": fx_events,
+        "journal_chain_valid": chain_valid,
+        "current_wallet_matches_journal": current_matches,
+        "cash_by_currency": cash,
+        "cash_cost_basis_eur": basis,
+        "unknown_cash_basis_currencies": sorted(unknown_cash_basis),
+        "open_positions": position_rows,
+        "unknown_position_basis_symbols": sorted(unknown_position_basis),
+        "realized_pnl_eur_since_baseline": sum(realized_values),
+        "valued_closed_fills_since_baseline": len(realized_values),
+        "unvalued_closed_fills_since_baseline": unvalued_sells,
+        "execution_fees_eur_since_baseline": sum(v for v in execution_fees if v is not None),
+        "execution_fills_without_eur_fee_since_baseline": sum(v is None for v in execution_fees),
+        "fx_conversion_fees_eur_since_baseline": sum(v for v in fx_fees if v is not None),
+        "fx_conversions_without_eur_fee_since_baseline": sum(v is None for v in fx_fees),
+        "legacy_fills_excluded": int(old_trades),
+        "legacy_fx_conversions_excluded": int(old_fx),
+        "unrealized_pnl_eur": None,
+        "blocking_reasons": reasons,
+        "limitation": (
+            "This is a wallet/event-chain integrity check since the baseline, not a full "
+            "economic P/L reconciliation. Unrealized P/L needs fresh marks and FX; "
+            "pre-baseline history is not replayable from legacy records."
+        ),
+    }
+
+
 
 def record_shadow_prediction(db, *, symbol, model_version='', signal_ts, target_ts, probability, threshold, entry_price):
     """Record one non-overlapping model prediction; never affects the trading engine."""
